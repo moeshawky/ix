@@ -84,16 +84,29 @@ impl Builder {
 
     fn discover_files(&mut self) -> Result<Vec<PathBuf>> {
         let mut paths = Vec::new();
+        
         let walker = WalkBuilder::new(&self.root)
             .hidden(false)
             .git_ignore(true)
+            .require_git(false)
+            .add_custom_ignore_filename(".ixignore")
+            .filter_entry(move |entry| {
+                let path = entry.path();
+                // Explicitly skip high-volume non-source directories
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if name == "target" || name == ".git" || name == "node_modules" || name == ".ix" {
+                        return false;
+                    }
+                }
+                true
+            })
             .build();
 
         for result in walker {
             let entry = result.map_err(|e| Error::Config(e.to_string()))?;
             if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
                 paths.push(entry.path().to_owned());
-                // Don't add to string_pool yet, only if not skipped
             }
         }
         Ok(paths)

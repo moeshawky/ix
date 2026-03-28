@@ -52,6 +52,14 @@ struct Cli {
     #[arg(short, long)]
     ignore_case: bool,
 
+    /// Output results as JSON Lines.
+    #[arg(long)]
+    json: bool,
+
+    /// Print search statistics to stderr.
+    #[arg(long)]
+    stats: bool,
+
     /// Force a full file-system scan, ignoring any existing .ix index.
     #[arg(long)]
     no_index: bool,
@@ -76,7 +84,14 @@ fn main() {
         }
     };
 
-    if let Err(e) = do_search(&pattern, &cli.path, cli.regex, cli.no_index) {
+    if let Err(e) = do_search(
+        &pattern,
+        &cli.path,
+        cli.regex,
+        cli.no_index,
+        cli.json,
+        cli.stats,
+    ) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
@@ -90,8 +105,16 @@ fn do_build(path: &Path) -> ix::error::Result<()> {
     Ok(())
 }
 
-fn do_search(pattern: &str, path: &Path, is_regex: bool, no_index: bool) -> ix::error::Result<()> {
+fn do_search(
+    pattern: &str,
+    path: &Path,
+    is_regex: bool,
+    no_index: bool,
+    json: bool,
+    stats_flag: bool,
+) -> ix::error::Result<()> {
     let index_path = path.join(".ix/shard.ix");
+    let start_time = std::time::Instant::now();
 
     if !no_index && index_path.exists() {
         let reader = Reader::open(&index_path)?;
@@ -101,30 +124,66 @@ fn do_search(pattern: &str, path: &Path, is_regex: bool, no_index: bool) -> ix::
         let (matches, stats) = executor.execute(&plan)?;
 
         for m in matches {
-            println!(
-                "{}:{}:{}:{}",
-                m.file_path.display(),
-                m.line_number,
-                m.byte_offset,
-                m.line_content
-            );
+            print_match(&m, json);
         }
 
-        tracing::debug!("Search stats: {:?}", stats);
+        if stats_flag {
+            print_stats(&stats, start_time.elapsed());
+        }
     } else {
         let scanner = Scanner::new(path);
         let matches = scanner.scan(pattern, is_regex)?;
 
-        for m in matches {
-            println!(
-                "{}:{}:{}:{}",
-                m.file_path.display(),
-                m.line_number,
-                m.byte_offset,
-                m.line_content
-            );
+        for m in &matches {
+            print_match(m, json);
+        }
+
+        if stats_flag {
+            // Scanner doesn't provide QueryStats, so we provide an empty one or dummy
+            let stats = ix::executor::QueryStats {
+                total_matches: matches.len() as u32,
+                ..Default::default()
+            };
+            print_stats(&stats, start_time.elapsed());
         }
     }
 
     Ok(())
+}
+
+fn print_match(m: &ix::executor::Match, json: bool) {
+    let mut content = m.line_content.clone();
+    if content.len() > 200 {
+        content.truncate(200);
+        content.push_str("...");
+    }
+
+    if json {
+        println!(
+            "{{\"file\":\"{}\",\"line\":{},\"content\":\"{}\",\"byte_offset\":{}}}",
+            m.file_path.display(),
+            m.line_number,
+            content.replace('"', "\\\"").replace('\n', "\\n"),
+            m.byte_offset
+        );
+    } else {
+        println!(
+            "{}:{}:{}:{}",
+            m.file_path.display(),
+            m.line_number,
+            m.byte_offset,
+            content
+        );
+    }
+}
+
+fn print_stats(stats: &ix::executor::QueryStats, elapsed: std::time::Duration) {
+    eprintln!("--- ix stats ---");
+    eprintln!("trigrams_queried: {}", stats.trigrams_queried);
+    eprintln!("posting_lists_decoded: {}", stats.posting_lists_decoded);
+    eprintln!("candidate_files: {}", stats.candidate_files);
+    eprintln!("files_verified: {}", stats.files_verified);
+    eprintln!("bytes_verified: {}", stats.bytes_verified);
+    eprintln!("total_matches: {}", stats.total_matches);
+    eprintln!("search_time_ms: {}", elapsed.as_millis());
 }
