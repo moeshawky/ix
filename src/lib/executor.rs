@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::collections::HashSet;
 use memmap2::Mmap;
 use regex::Regex;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::reader::{Reader, FileInfo};
 use crate::planner::QueryPlan;
 use crate::trigram::Trigram;
@@ -63,15 +63,31 @@ impl<'a> Executor<'a> {
         // Sort by doc_frequency (rarest first)
         infos.sort_by_key(|(_, info)| info.doc_frequency);
 
+        // ── Step 1: Decode rarest posting list ──
         let (_, rarest_info) = &infos[0];
         let postings = self.index.decode_postings(rarest_info)?;
         stats.posting_lists_decoded += 1;
 
         let mut candidates: HashSet<u32> = postings.entries.iter().map(|e| e.file_id).collect();
 
+        // ── Step 2: Intersect with next rarest lists if candidate set is large ──
+        // Only decode up to 3 lists to avoid excessive I/O
+        for i in 1..infos.len().min(3) {
+            if candidates.len() < 100 { break; }
+            
+            let (_, info) = &infos[i];
+            println!("ix-debug: Intersecting with next rarest trigram (freq: {}). Candidates before: {}", info.doc_frequency, candidates.len());
+            let next_postings = self.index.decode_postings(info)?;
+            stats.posting_lists_decoded += 1;
+            
+            let next_set: HashSet<u32> = next_postings.entries.iter().map(|e| e.file_id).collect();
+            candidates.retain(|fid| next_set.contains(fid));
+        }
+
+        // ── Step 3: Filter remaining using Bloom filters ──
         for &(tri, _) in &infos[1..] {
-            candidates.retain(|&fid| self.index.bloom_may_contain(fid, tri));
             if candidates.is_empty() { break; }
+            candidates.retain(|&fid| self.index.bloom_may_contain(fid, tri));
         }
 
         stats.candidate_files = candidates.len() as u32;
@@ -108,11 +124,22 @@ impl<'a> Executor<'a> {
             }
             
             infos.sort_by_key(|(_, info)| info.doc_frequency);
+            
+            // Intersection within fragment
             let (_, rarest_info) = &infos[0];
             let postings = self.index.decode_postings(rarest_info)?;
             stats.posting_lists_decoded += 1;
-            
             let mut set_candidates: HashSet<u32> = postings.entries.iter().map(|e| e.file_id).collect();
+            
+            // Intersect with up to 2 more lists if large
+            for i in 1..infos.len().min(3) {
+                if set_candidates.len() < 100 { break; }
+                let next_postings = self.index.decode_postings(&infos[i].1)?;
+                stats.posting_lists_decoded += 1;
+                let next_set: HashSet<u32> = next_postings.entries.iter().map(|e| e.file_id).collect();
+                set_candidates.retain(|fid| next_set.contains(fid));
+            }
+
             for &(tri, _) in &infos[1..] {
                 set_candidates.retain(|&fid| self.index.bloom_may_contain(fid, tri));
             }
@@ -120,7 +147,10 @@ impl<'a> Executor<'a> {
         }
 
         // Intersect candidates from all fragments
-        let mut final_candidates = fragment_candidates.pop().unwrap();
+        let mut final_candidates = match fragment_candidates.pop() {
+            Some(c) => c,
+            None => return Ok((vec![], stats)),
+        };
         for set in fragment_candidates {
             final_candidates.retain(|fid| set.contains(fid));
         }
@@ -162,7 +192,9 @@ impl<'a> Executor<'a> {
     fn verify_file(&self, info: &FileInfo, regex: &Regex) -> Result<Vec<Match>> {
         let file = File::open(&info.path)?;
         let mmap = unsafe { Mmap::map(&file)? };
-        let data = std::str::from_utf8(&mmap).map_err(|_| Error::Config("Binary file matched".into()))?;
+        
+        // Use lossy conversion to handle files with mixed encoding
+        let data = String::from_utf8_lossy(&mmap);
 
         let mut matches = Vec::new();
         for (i, line) in data.lines().enumerate() {
@@ -171,7 +203,7 @@ impl<'a> Executor<'a> {
                     file_path: info.path.clone(),
                     line_number: (i + 1) as u32,
                     line_content: line.to_string(),
-                    byte_offset: m.start() as u64, // offset within line, close enough for now
+                    byte_offset: m.start() as u64,
                 });
             }
         }

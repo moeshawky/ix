@@ -102,7 +102,7 @@ impl Builder {
     fn process_file(&mut self, file_id: u32, path: PathBuf) -> Result<bool> {
         let metadata = fs::metadata(&path)?;
         let size = metadata.len();
-        let mtime = metadata.modified()?.duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
+        let mtime = metadata.modified()?.duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
 
         if size > 100 * 1024 * 1024 { // 100MB limit
             self.stats.files_skipped_size += 1;

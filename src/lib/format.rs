@@ -83,12 +83,23 @@ impl Header {
             return Err(crate::error::Error::BadMagic);
         }
 
-        let r = |off: usize| -> u64 { u64::from_le_bytes(data[off..off + 8].try_into().unwrap()) };
+        let r = |off: usize| -> u64 {
+            data.get(off..off + 8)
+                .and_then(|s| s.try_into().ok())
+                .map(u64::from_le_bytes)
+                .unwrap_or(0)
+        };
         let r16 = |off: usize| -> u16 {
-            u16::from_le_bytes(data[off..off + 2].try_into().unwrap())
+            data.get(off..off + 2)
+                .and_then(|s| s.try_into().ok())
+                .map(u16::from_le_bytes)
+                .unwrap_or(0)
         };
         let r32 = |off: usize| -> u32 {
-            u32::from_le_bytes(data[off..off + 4].try_into().unwrap())
+            data.get(off..off + 4)
+                .and_then(|s| s.try_into().ok())
+                .map(u32::from_le_bytes)
+                .unwrap_or(0)
         };
 
         let major = r16(0x04);

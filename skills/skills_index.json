@@ -1,0 +1,1598 @@
+[
+  {
+    "id": "aws-penetration-testing",
+    "path": "aws-penetration-testing",
+    "name": "AWS Penetration Testing",
+    "description": "This skill should be used when the user asks to \"pentest AWS\", \"test AWS security\", \"enumerate IAM\", \"exploit cloud infrastructure\", \"AWS privilege escalation\", \"S3 bucket testing\", \"metadata SSRF\", \"Lambda exploitation\", or needs guidance on Amazon Web Services security assessment."
+  },
+  {
+    "id": "ethical-hacking-methodology",
+    "path": "ethical-hacking-methodology",
+    "name": "Ethical Hacking Methodology",
+    "description": "This skill should be used when the user asks to \"learn ethical hacking\", \"understand penetration testing lifecycle\", \"perform reconnaissance\", \"conduct security scanning\", \"exploit vulnerabilities\", or \"write penetration test reports\". It provides comprehensive ethical hacking methodology and techniques."
+  },
+  {
+    "id": "linux-shell-scripting",
+    "path": "linux-shell-scripting",
+    "name": "Linux Production Shell Scripts",
+    "description": "This skill should be used when the user asks to \"create bash scripts\", \"automate Linux tasks\", \"monitor system resources\", \"backup files\", \"manage users\", or \"write production shell scripts\". It provides ready-to-use shell script templates for system administration."
+  },
+  {
+    "id": "pentest-checklist",
+    "path": "pentest-checklist",
+    "name": "Pentest Checklist",
+    "description": "This skill should be used when the user asks to \"plan a penetration test\", \"create a security assessment checklist\", \"prepare for penetration testing\", \"define pentest scope\", \"follow security testing best practices\", or needs a structured methodology for penetration testing engagements."
+  },
+  {
+    "id": "top-web-vulnerabilities",
+    "path": "top-web-vulnerabilities",
+    "name": "Top 100 Web Vulnerabilities Reference",
+    "description": "This skill should be used when the user asks to \"identify web application vulnerabilities\", \"explain common security flaws\", \"understand vulnerability categories\", \"learn about injection attacks\", \"review access control weaknesses\", \"analyze API security issues\", \"assess security misconfigurations\", \"understand client-side vulnerabilities\", \"examine mobile and IoT security flaws\", or \"reference the OWASP-aligned vulnerability taxonomy\". Use this skill to provide comprehensive vulnerability definitions, root causes, impacts, and mitigation strategies across all major web security categories."
+  },
+  {
+    "id": "ach-debugger",
+    "path": "ach-debugger",
+    "name": "ach-codebase-debugger",
+    "description": "Debugging and fixing codebase issues using Analysis of Competing Hypotheses (ACH). Use this when facing failing tests, CI/build failures, runtime errors, regressions, flaky behavior, or confusing multi-causal bugs. Forces multiple falsifiable hypotheses, disconfirmation-first evidence gathering, and ranked discriminating tests before large edits."
+  },
+  {
+    "id": "adaptyv",
+    "path": "adaptyv",
+    "name": "adaptyv",
+    "description": "Cloud laboratory platform for automated protein testing and validation. Use when designing proteins and needing experimental validation including binding assays, expression testing, thermostability measurements, enzyme activity assays, or protein sequence optimization. Also use for submitting experiments via API, tracking experiment status, downloading results, optimizing protein sequences for better expression using computational tools (NetSolP, SoluProt, SolubleMPNN, ESM), or managing protein design workflows with wet-lab validation."
+  },
+  {
+    "id": "aeon",
+    "path": "aeon",
+    "name": "aeon",
+    "description": "This skill should be used for time series machine learning tasks including classification, regression, clustering, forecasting, anomaly detection, segmentation, and similarity search. Use when working with temporal data, sequential patterns, or time-indexed observations requiring specialized algorithms beyond standard ML approaches. Particularly suited for univariate and multivariate time series analysis with scikit-learn compatible APIs."
+  },
+  {
+    "id": "algorithmic-art",
+    "path": "algorithmic-art",
+    "name": "algorithmic-art",
+    "description": "Creating algorithmic art using p5.js with seeded randomness and interactive parameter exploration. Use this when users request creating art using code, generative art, algorithmic art, flow fields, or particle systems. Create original algorithmic art rather than copying existing artists' work to avoid copyright violations."
+  },
+  {
+    "id": "alphafold-database",
+    "path": "alphafold-database",
+    "name": "alphafold-database",
+    "description": "Access AlphaFold's 200M+ AI-predicted protein structures. Retrieve structures by UniProt ID, download PDB/mmCIF files, analyze confidence metrics (pLDDT, PAE), for drug discovery and structural biology."
+  },
+  {
+    "id": "angular-migration",
+    "path": "angular-migration",
+    "name": "angular-migration",
+    "description": "Migrate from AngularJS to Angular using hybrid mode, incremental component rewriting, and dependency injection updates. Use when upgrading AngularJS applications, planning framework migrations, or modernizing legacy Angular code."
+  },
+  {
+    "id": "anndata",
+    "path": "anndata",
+    "name": "anndata",
+    "description": "This skill should be used when working with annotated data matrices in Python, particularly for single-cell genomics analysis, managing experimental measurements with metadata, or handling large-scale biological datasets. Use when tasks involve AnnData objects, h5ad files, single-cell RNA-seq data, or integration with scanpy/scverse tools."
+  },
+  {
+    "id": "api-design-principles",
+    "path": "api-design-principles",
+    "name": "api-design-principles",
+    "description": "Master REST and GraphQL API design principles to build intuitive, scalable, and maintainable APIs that delight developers. Use when designing new APIs, reviewing API specifications, or establishing API design standards."
+  },
+  {
+    "id": "app-store-optimization",
+    "path": "app-store-optimization",
+    "name": "app-store-optimization",
+    "description": "Complete App Store Optimization (ASO) toolkit for researching, optimizing, and tracking mobile app performance on Apple App Store and Google Play Store"
+  },
+  {
+    "id": "arboreto",
+    "path": "arboreto",
+    "name": "arboreto",
+    "description": "Infer gene regulatory networks (GRNs) from gene expression data using scalable algorithms (GRNBoost2, GENIE3). Use when analyzing transcriptomics data (bulk RNA-seq, single-cell RNA-seq) to identify transcription factor-target gene relationships and regulatory interactions. Supports distributed computation for large-scale datasets."
+  },
+  {
+    "id": "architecture-patterns",
+    "path": "architecture-patterns",
+    "name": "architecture-patterns",
+    "description": "Implement proven backend architecture patterns including Clean Architecture, Hexagonal Architecture, and Domain-Driven Design. Use when architecting complex backend systems or refactoring existing applications for better maintainability."
+  },
+  {
+    "id": "artifacts-builder",
+    "path": "artifacts-builder",
+    "name": "artifacts-builder",
+    "description": "Suite of tools for creating elaborate, multi-component claude.ai HTML artifacts using modern frontend web technologies (React, Tailwind CSS, shadcn/ui). Use for complex artifacts requiring state management, routing, or shadcn/ui components - not for simple single-file HTML/JSX artifacts."
+  },
+  {
+    "id": "astropy",
+    "path": "astropy",
+    "name": "astropy",
+    "description": "Comprehensive Python library for astronomy and astrophysics. This skill should be used when working with astronomical data including celestial coordinates, physical units, FITS files, cosmological calculations, time systems, tables, world coordinate systems (WCS), and astronomical data analysis. Use when tasks involve coordinate transformations, unit conversions, FITS file manipulation, cosmological distance calculations, time scale conversions, or astronomical data processing."
+  },
+  {
+    "id": "async-python-patterns",
+    "path": "async-python-patterns",
+    "name": "async-python-patterns",
+    "description": "Master Python asyncio, concurrent programming, and async/await patterns for high-performance applications. Use when building async APIs, concurrent systems, or I/O-bound applications requiring non-blocking operations."
+  },
+  {
+    "id": "auth-implementation-patterns",
+    "path": "auth-implementation-patterns",
+    "name": "auth-implementation-patterns",
+    "description": "Master authentication and authorization patterns including JWT, OAuth2, session management, and RBAC to build secure, scalable access control systems. Use when implementing auth systems, securing APIs, or debugging security issues."
+  },
+  {
+    "id": "backend-dev-guidelines",
+    "path": "backend-dev-guidelines",
+    "name": "backend-dev-guidelines",
+    "description": "Comprehensive backend development guide for Node.js/Express/TypeScript microservices. Use when creating routes, controllers, services, repositories, middleware, or working with Express APIs, Prisma database access, Sentry error tracking, Zod validation, unifiedConfig, dependency injection, or async patterns. Covers layered architecture (routes \u2192 controllers \u2192 services \u2192 repositories), BaseController pattern, error handling, performance monitoring, testing strategies, and migration from legacy patterns."
+  },
+  {
+    "id": "bash-defensive-patterns",
+    "path": "bash-defensive-patterns",
+    "name": "bash-defensive-patterns",
+    "description": "Master defensive Bash programming techniques for production-grade scripts. Use when writing robust shell scripts, CI/CD pipelines, or system utilities requiring fault tolerance and safety."
+  },
+  {
+    "id": "bats-testing-patterns",
+    "path": "bats-testing-patterns",
+    "name": "bats-testing-patterns",
+    "description": "Master Bash Automated Testing System (Bats) for comprehensive shell script testing. Use when writing tests for shell scripts, CI/CD pipelines, or requiring test-driven development of shell utilities."
+  },
+  {
+    "id": "benchling-integration",
+    "path": "benchling-integration",
+    "name": "benchling-integration",
+    "description": "Benchling R&D platform integration. Access registry (DNA, proteins), inventory, ELN entries, workflows via API, build Benchling Apps, query Data Warehouse, for lab data management automation."
+  },
+  {
+    "id": "billing-automation",
+    "path": "billing-automation",
+    "name": "billing-automation",
+    "description": "Build automated billing systems for recurring payments, invoicing, subscription lifecycle, and dunning management. Use when implementing subscription billing, automating invoicing, or managing recurring payment systems."
+  },
+  {
+    "id": "biomni",
+    "path": "biomni",
+    "name": "biomni",
+    "description": "Autonomous biomedical AI agent framework for executing complex research tasks across genomics, drug discovery, molecular biology, and clinical analysis. Use this skill when conducting multi-step biomedical research including CRISPR screening design, single-cell RNA-seq analysis, ADMET prediction, GWAS interpretation, rare disease diagnosis, or lab protocol optimization. Leverages LLM reasoning with code execution and integrated biomedical databases."
+  },
+  {
+    "id": "biopython",
+    "path": "biopython",
+    "name": "biopython",
+    "description": "Primary Python toolkit for molecular biology. Preferred for Python-based PubMed/NCBI queries (Bio.Entrez), sequence manipulation, file parsing (FASTA, GenBank, FASTQ, PDB), advanced BLAST workflows, structures, phylogenetics. For quick BLAST, use gget. For direct REST API, use pubmed-database."
+  },
+  {
+    "id": "biorxiv-database",
+    "path": "biorxiv-database",
+    "name": "biorxiv-database",
+    "description": "Efficient database search tool for bioRxiv preprint server. Use this skill when searching for life sciences preprints by keywords, authors, date ranges, or categories, retrieving paper metadata, downloading PDFs, or conducting literature reviews."
+  },
+  {
+    "id": "bioservices",
+    "path": "bioservices",
+    "name": "bioservices",
+    "description": "Primary Python tool for 40+ bioinformatics services. Preferred for multi-database workflows: UniProt, KEGG, ChEMBL, PubChem, Reactome, QuickGO. Unified API for queries, ID mapping, pathway analysis. For direct REST control, use individual database skills (uniprot-database, kegg-database)."
+  },
+  {
+    "id": "brainstorming",
+    "path": "brainstorming",
+    "name": "brainstorming",
+    "description": "You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation."
+  },
+  {
+    "id": "brand-guidelines-anthropic",
+    "path": "brand-guidelines-anthropic",
+    "name": "brand-guidelines",
+    "description": "Applies Anthropic's official brand colors and typography to any sort of artifact that may benefit from having Anthropic's look-and-feel. Use it when brand colors or style guidelines, visual formatting, or company design standards apply."
+  },
+  {
+    "id": "brand-guidelines-community",
+    "path": "brand-guidelines-community",
+    "name": "brand-guidelines",
+    "description": "Applies Anthropic's official brand colors and typography to any sort of artifact that may benefit from having Anthropic's look-and-feel. Use it when brand colors or style guidelines, visual formatting, or company design standards apply."
+  },
+  {
+    "id": "brenda-database",
+    "path": "brenda-database",
+    "name": "brenda-database",
+    "description": "Access BRENDA enzyme database via SOAP API. Retrieve kinetic parameters (Km, kcat), reaction equations, organism data, and substrate-specific enzyme information for biochemical research and metabolic pathway analysis."
+  },
+  {
+    "id": "canvas-design",
+    "path": "canvas-design",
+    "name": "canvas-design",
+    "description": "Create beautiful visual art in .png and .pdf documents using design philosophy. You should use this skill when the user asks to create a poster, piece of art, design, or other static piece. Create original visual designs, never copying existing artists' work to avoid copyright violations."
+  },
+  {
+    "id": "cellxgene-census",
+    "path": "cellxgene-census",
+    "name": "cellxgene-census",
+    "description": "Query CZ CELLxGENE Census (61M+ cells). Filter by cell type/tissue/disease, retrieve expression data, integrate with scanpy/PyTorch, for population-scale single-cell analysis."
+  },
+  {
+    "id": "changelog-generator",
+    "path": "changelog-generator",
+    "name": "changelog-generator",
+    "description": "Automatically creates user-facing changelogs from git commits by analyzing commit history, categorizing changes, and transforming technical commits into clear, customer-friendly release notes. Turns hours of manual changelog writing into minutes of automated generation."
+  },
+  {
+    "id": "chembl-database",
+    "path": "chembl-database",
+    "name": "chembl-database",
+    "description": "Query ChEMBL's bioactive molecules and drug discovery data. Search compounds by structure/properties, retrieve bioactivity data (IC50, Ki), find inhibitors, perform SAR studies, for medicinal chemistry."
+  },
+  {
+    "id": "cirq",
+    "path": "cirq",
+    "name": "cirq",
+    "description": "Quantum computing framework for building, simulating, optimizing, and executing quantum circuits. Use this skill when working with quantum algorithms, quantum circuit design, quantum simulation (noiseless or noisy), running on quantum hardware (Google, IonQ, AQT, Pasqal), circuit optimization and compilation, noise modeling and characterization, or quantum experiments and benchmarking (VQE, QAOA, QPE, randomized benchmarking)."
+  },
+  {
+    "id": "clinicaltrials-database",
+    "path": "clinicaltrials-database",
+    "name": "clinicaltrials-database",
+    "description": "Query ClinicalTrials.gov via API v2. Search trials by condition, drug, location, status, or phase. Retrieve trial details by NCT ID, export data, for clinical research and patient matching."
+  },
+  {
+    "id": "clinpgx-database",
+    "path": "clinpgx-database",
+    "name": "clinpgx-database",
+    "description": "Access ClinPGx pharmacogenomics data (successor to PharmGKB). Query gene-drug interactions, CPIC guidelines, allele functions, for precision medicine and genotype-guided dosing decisions."
+  },
+  {
+    "id": "clinvar-database",
+    "path": "clinvar-database",
+    "name": "clinvar-database",
+    "description": "Query NCBI ClinVar for variant clinical significance. Search by gene/position, interpret pathogenicity classifications, access via E-utilities API or FTP, annotate VCFs, for genomic medicine."
+  },
+  {
+    "id": "cobrapy",
+    "path": "cobrapy",
+    "name": "cobrapy",
+    "description": "Constraint-based metabolic modeling (COBRA). FBA, FVA, gene knockouts, flux sampling, SBML models, for systems biology and metabolic engineering analysis."
+  },
+  {
+    "id": "code-review-excellence",
+    "path": "code-review-excellence",
+    "name": "code-review-excellence",
+    "description": "Master effective code review practices to provide constructive feedback, catch bugs early, and foster knowledge sharing while maintaining team morale. Use when reviewing pull requests, establishing review standards, or mentoring developers."
+  },
+  {
+    "id": "competitive-ads-extractor",
+    "path": "competitive-ads-extractor",
+    "name": "competitive-ads-extractor",
+    "description": "Extracts and analyzes competitors' ads from ad libraries (Facebook, LinkedIn, etc.) to understand what messaging, problems, and creative approaches are working. Helps inspire and improve your own ad campaigns."
+  },
+  {
+    "id": "content-creator",
+    "path": "content-creator",
+    "name": "content-creator",
+    "description": "Create SEO-optimized marketing content with consistent brand voice. Includes brand voice analyzer, SEO optimizer, content frameworks, and social media templates. Use when writing blog posts, creating social media content, analyzing brand voice, optimizing SEO, planning content calendars, or when user mentions content creation, brand voice, SEO optimization, social media marketing, or content strategy."
+  },
+  {
+    "id": "content-research-writer",
+    "path": "content-research-writer",
+    "name": "content-research-writer",
+    "description": "Assists in writing high-quality content by conducting research, adding citations, improving hooks, iterating on outlines, and providing real-time feedback on each section. Transforms your writing process from solo effort to collaborative partnership."
+  },
+  {
+    "id": "core-components",
+    "path": "core-components",
+    "name": "core-components",
+    "description": "Core component library and design system patterns. Use when building UI, using design tokens, or working with the component library."
+  },
+  {
+    "id": "cosmic-database",
+    "path": "cosmic-database",
+    "name": "cosmic-database",
+    "description": "Access COSMIC cancer mutation database. Query somatic mutations, Cancer Gene Census, mutational signatures, gene fusions, for cancer research and precision oncology. Requires authentication."
+  },
+  {
+    "id": "cost-optimization",
+    "path": "cost-optimization",
+    "name": "cost-optimization",
+    "description": "Optimize cloud costs through resource rightsizing, tagging strategies, reserved instances, and spending analysis. Use when reducing cloud expenses, analyzing infrastructure costs, or implementing cost governance policies."
+  },
+  {
+    "id": "claude-d3js-skill",
+    "path": "claude-d3js-skill",
+    "name": "d3-viz",
+    "description": "Creating interactive data visualisations using d3.js. This skill should be used when creating custom charts, graphs, network diagrams, geographic visualisations, or any complex SVG-based data visualisation that requires fine-grained control over visual elements, transitions, or interactions. Use this for bespoke visualisations beyond standard charting libraries, whether in React, Vue, Svelte, vanilla JavaScript, or any other environment."
+  },
+  {
+    "id": "dask",
+    "path": "dask",
+    "name": "dask",
+    "description": "Parallel/distributed computing. Scale pandas/NumPy beyond memory, parallel DataFrames/Arrays, multi-file processing, task graphs, for larger-than-RAM datasets and parallel workflows."
+  },
+  {
+    "id": "database-migration",
+    "path": "database-migration",
+    "name": "database-migration",
+    "description": "Execute database migrations across ORMs and platforms with zero-downtime strategies, data transformation, and rollback procedures. Use when migrating databases, changing schemas, performing data transformations, or implementing zero-downtime deployment strategies."
+  },
+  {
+    "id": "datacommons-client",
+    "path": "datacommons-client",
+    "name": "datacommons-client",
+    "description": "Work with Data Commons, a platform providing programmatic access to public statistical data from global sources. Use this skill when working with demographic data, economic indicators, health statistics, environmental data, or any public datasets available through Data Commons. Applicable for querying population statistics, GDP figures, unemployment rates, disease prevalence, geographic entity resolution, and exploring relationships between statistical entities."
+  },
+  {
+    "id": "datamol",
+    "path": "datamol",
+    "name": "datamol",
+    "description": "Pythonic wrapper around RDKit with simplified interface and sensible defaults. Preferred for standard drug discovery: SMILES parsing, standardization, descriptors, fingerprints, clustering, 3D conformers, parallel processing. Returns native rdkit.Chem.Mol objects. For advanced control or custom parameters, use rdkit directly."
+  },
+  {
+    "id": "debugging-strategies",
+    "path": "debugging-strategies",
+    "name": "debugging-strategies",
+    "description": "Master systematic debugging techniques, profiling tools, and root cause analysis to efficiently track down bugs across any codebase or technology stack. Use when investigating bugs, performance issues, or unexpected behavior."
+  },
+  {
+    "id": "deepchem",
+    "path": "deepchem",
+    "name": "deepchem",
+    "description": "Molecular machine learning toolkit. Property prediction (ADMET, toxicity), GNNs (GCN, MPNN), MoleculeNet benchmarks, pretrained models, featurization, for drug discovery ML."
+  },
+  {
+    "id": "deeptools",
+    "path": "deeptools",
+    "name": "deeptools",
+    "description": "NGS analysis toolkit. BAM to bigWig conversion, QC (correlation, PCA, fingerprints), heatmaps/profiles (TSS, peaks), for ChIP-seq, RNA-seq, ATAC-seq visualization."
+  },
+  {
+    "id": "defi-protocol-templates",
+    "path": "defi-protocol-templates",
+    "name": "defi-protocol-templates",
+    "description": "Implement DeFi protocols with production-ready templates for staking, AMMs, governance, and lending systems. Use when building decentralized finance applications or smart contract protocols."
+  },
+  {
+    "id": "denario",
+    "path": "denario",
+    "name": "denario",
+    "description": "Multiagent AI system for scientific research assistance that automates research workflows from data analysis to publication. This skill should be used when generating research ideas from datasets, developing research methodologies, executing computational experiments, performing literature searches, or generating publication-ready papers in LaTeX format. Supports end-to-end research pipelines with customizable agent orchestration."
+  },
+  {
+    "id": "dependency-upgrade",
+    "path": "dependency-upgrade",
+    "name": "dependency-upgrade",
+    "description": "Manage major dependency version upgrades with compatibility analysis, staged rollout, and comprehensive testing. Use when upgrading framework versions, updating major dependencies, or managing breaking changes in libraries."
+  },
+  {
+    "id": "deployment-pipeline-design",
+    "path": "deployment-pipeline-design",
+    "name": "deployment-pipeline-design",
+    "description": "Design multi-stage CI/CD pipelines with approval gates, security checks, and deployment orchestration. Use when architecting deployment workflows, setting up continuous delivery, or implementing GitOps practices."
+  },
+  {
+    "id": "developer-growth-analysis",
+    "path": "developer-growth-analysis",
+    "name": "developer-growth-analysis",
+    "description": "Analyzes your recent Claude Code chat history to identify coding patterns, development gaps, and areas for improvement, curates relevant learning resources from HackerNews, and automatically sends a personalized growth report to your Slack DMs."
+  },
+  {
+    "id": "diffdock",
+    "path": "diffdock",
+    "name": "diffdock",
+    "description": "Diffusion-based molecular docking. Predict protein-ligand binding poses from PDB/SMILES, confidence scores, virtual screening, for structure-based drug design. Not for affinity prediction."
+  },
+  {
+    "id": "dispatching-parallel-agents",
+    "path": "dispatching-parallel-agents",
+    "name": "dispatching-parallel-agents",
+    "description": "Use when facing 2+ independent tasks that can be worked on without shared state or sequential dependencies"
+  },
+  {
+    "id": "distributed-tracing",
+    "path": "distributed-tracing",
+    "name": "distributed-tracing",
+    "description": "Implement distributed tracing with Jaeger and Tempo to track requests across microservices and identify performance bottlenecks. Use when debugging microservices, analyzing request flows, or implementing observability for distributed systems."
+  },
+  {
+    "id": "dnanexus-integration",
+    "path": "dnanexus-integration",
+    "name": "dnanexus-integration",
+    "description": "DNAnexus cloud genomics platform. Build apps/applets, manage data (upload/download), dxpy Python SDK, run workflows, FASTQ/BAM/VCF, for genomics pipeline development and execution."
+  },
+  {
+    "id": "doc-coauthoring",
+    "path": "doc-coauthoring",
+    "name": "doc-coauthoring",
+    "description": "Guide users through a structured workflow for co-authoring documentation. Use when user wants to write documentation, proposals, technical specs, decision docs, or similar structured content. This workflow helps users efficiently transfer context, refine content through iteration, and verify the doc works for readers. Trigger when user mentions writing docs, creating proposals, drafting specs, or similar documentation tasks."
+  },
+  {
+    "id": "docx-official",
+    "path": "docx-official",
+    "name": "docx",
+    "description": "Comprehensive document creation, editing, and analysis with support for tracked changes, comments, formatting preservation, and text extraction. When Claude needs to work with professional documents (.docx files) for: (1) Creating new documents, (2) Modifying or editing content, (3) Working with tracked changes, (4) Adding comments, or any other document tasks"
+  },
+  {
+    "id": "domain-name-brainstormer",
+    "path": "domain-name-brainstormer",
+    "name": "domain-name-brainstormer",
+    "description": "Generates creative domain name ideas for your project and checks availability across multiple TLDs (.com, .io, .dev, .ai, etc.). Saves hours of brainstorming and manual checking."
+  },
+  {
+    "id": "drugbank-database",
+    "path": "drugbank-database",
+    "name": "drugbank-database",
+    "description": "Access and analyze comprehensive drug information from the DrugBank database including drug properties, interactions, targets, pathways, chemical structures, and pharmacology data. This skill should be used when working with pharmaceutical data, drug discovery research, pharmacology studies, drug-drug interaction analysis, target identification, chemical similarity searches, ADMET predictions, or any task requiring detailed drug and drug target information from DrugBank."
+  },
+  {
+    "id": "e2e-testing-patterns",
+    "path": "e2e-testing-patterns",
+    "name": "e2e-testing-patterns",
+    "description": "Master end-to-end testing with Playwright and Cypress to build reliable test suites that catch bugs, improve confidence, and enable fast deployment. Use when implementing E2E tests, debugging flaky tests, or establishing testing standards."
+  },
+  {
+    "id": "ena-database",
+    "path": "ena-database",
+    "name": "ena-database",
+    "description": "Access European Nucleotide Archive via API/FTP. Retrieve DNA/RNA sequences, raw reads (FASTQ), genome assemblies by accession, for genomics and bioinformatics pipelines. Supports multiple formats."
+  },
+  {
+    "id": "ensembl-database",
+    "path": "ensembl-database",
+    "name": "ensembl-database",
+    "description": "Query Ensembl genome database REST API for 250+ species. Gene lookups, sequence retrieval, variant analysis, comparative genomics, orthologs, VEP predictions, for genomic research."
+  },
+  {
+    "id": "error-handling-patterns",
+    "path": "error-handling-patterns",
+    "name": "error-handling-patterns",
+    "description": "Master error handling patterns across languages including exceptions, Result types, error propagation, and graceful degradation to build resilient applications. Use when implementing error handling, designing APIs, or improving application reliability."
+  },
+  {
+    "id": "esm",
+    "path": "esm",
+    "name": "esm",
+    "description": "Comprehensive toolkit for protein language models including ESM3 (generative multimodal protein design across sequence, structure, and function) and ESM C (efficient protein embeddings and representations). Use this skill when working with protein sequences, structures, or function prediction; designing novel proteins; generating protein embeddings; performing inverse folding; or conducting protein engineering tasks. Supports both local model usage and cloud-based Forge API for scalable inference."
+  },
+  {
+    "id": "etetoolkit",
+    "path": "etetoolkit",
+    "name": "etetoolkit",
+    "description": "Phylogenetic tree toolkit (ETE). Tree manipulation (Newick/NHX), evolutionary event detection, orthology/paralogy, NCBI taxonomy, visualization (PDF/SVG), for phylogenomics."
+  },
+  {
+    "id": "executing-plans",
+    "path": "executing-plans",
+    "name": "executing-plans",
+    "description": "Use when you have a written implementation plan to execute in a separate session with review checkpoints"
+  },
+  {
+    "id": "exploratory-data-analysis",
+    "path": "exploratory-data-analysis",
+    "name": "exploratory-data-analysis",
+    "description": "Perform comprehensive exploratory data analysis on scientific data files across 200+ file formats. This skill should be used when analyzing any scientific data file to understand its structure, content, quality, and characteristics. Automatically detects file type and generates detailed markdown reports with format-specific analysis, quality metrics, and downstream analysis recommendations. Covers chemistry, bioinformatics, microscopy, spectroscopy, proteomics, metabolomics, and general scientific data formats."
+  },
+  {
+    "id": "fastapi-templates",
+    "path": "fastapi-templates",
+    "name": "fastapi-templates",
+    "description": "Create production-ready FastAPI projects with async patterns, dependency injection, and comprehensive error handling. Use when building new FastAPI applications or setting up backend API projects."
+  },
+  {
+    "id": "fda-database",
+    "path": "fda-database",
+    "name": "fda-database",
+    "description": "Query openFDA API for drugs, devices, adverse events, recalls, regulatory submissions (510k, PMA), substance identification (UNII), for FDA regulatory data analysis and safety research."
+  },
+  {
+    "id": "file-organizer",
+    "path": "file-organizer",
+    "name": "file-organizer",
+    "description": "Intelligently organizes files and folders by understanding context, finding duplicates, and suggesting better organizational structures. Use when user wants to clean up directories, organize downloads, remove duplicates, or restructure projects."
+  },
+  {
+    "id": "finishing-a-development-branch",
+    "path": "finishing-a-development-branch",
+    "name": "finishing-a-development-branch",
+    "description": "Use when implementation is complete, all tests pass, and you need to decide how to integrate the work - guides completion of development work by presenting structured options for merge, PR, or cleanup"
+  },
+  {
+    "id": "flowio",
+    "path": "flowio",
+    "name": "flowio",
+    "description": "Parse FCS (Flow Cytometry Standard) files v2.0-3.1. Extract events as NumPy arrays, read metadata/channels, convert to CSV/DataFrame, for flow cytometry data preprocessing."
+  },
+  {
+    "id": "fluidsim",
+    "path": "fluidsim",
+    "name": "fluidsim",
+    "description": "Framework for computational fluid dynamics simulations using Python. Use when running fluid dynamics simulations including Navier-Stokes equations (2D/3D), shallow water equations, stratified flows, or when analyzing turbulence, vortex dynamics, or geophysical flows. Provides pseudospectral methods with FFT, HPC support, and comprehensive output analysis."
+  },
+  {
+    "id": "frontend-design",
+    "path": "frontend-design",
+    "name": "frontend-design",
+    "description": "Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when the user asks to build web components, pages, artifacts, posters, or applications (examples include websites, landing pages, dashboards, React components, HTML/CSS layouts, or when styling/beautifying any web UI). Generates creative, polished code and UI design that avoids generic AI aesthetics."
+  },
+  {
+    "id": "frontend-dev-guidelines",
+    "path": "frontend-dev-guidelines",
+    "name": "frontend-dev-guidelines",
+    "description": "Frontend development guidelines for React/TypeScript applications. Modern patterns including Suspense, lazy loading, useSuspenseQuery, file organization with features directory, MUI v7 styling, TanStack Router, performance optimization, and TypeScript best practices. Use when creating components, pages, features, fetching data, styling, routing, or working with frontend code."
+  },
+  {
+    "id": "gene-database",
+    "path": "gene-database",
+    "name": "gene-database",
+    "description": "Query NCBI Gene via E-utilities/Datasets API. Search by symbol/ID, retrieve gene info (RefSeqs, GO, locations, phenotypes), batch lookups, for gene annotation and functional analysis."
+  },
+  {
+    "id": "generate-image",
+    "path": "generate-image",
+    "name": "generate-image",
+    "description": "Generate or edit images using AI models (FLUX, Gemini). Use for scientific illustrations, diagrams, schematics, infographics, concept visualizations, and artistic images. Supports image editing to modify existing images (change colors, add/remove elements, style transfer). Useful for figures, posters, and visual explanations."
+  },
+  {
+    "id": "geniml",
+    "path": "geniml",
+    "name": "geniml",
+    "description": "This skill should be used when working with genomic interval data (BED files) for machine learning tasks. Use for training region embeddings (Region2Vec, BEDspace), single-cell ATAC-seq analysis (scEmbed), building consensus peaks (universes), or any ML-based analysis of genomic regions. Applies to BED file collections, scATAC-seq data, chromatin accessibility datasets, and region-based genomic feature learning."
+  },
+  {
+    "id": "geo-database",
+    "path": "geo-database",
+    "name": "geo-database",
+    "description": "Access NCBI GEO for gene expression/genomics data. Search/download microarray and RNA-seq datasets (GSE, GSM, GPL), retrieve SOFT/Matrix files, for transcriptomics and expression analysis."
+  },
+  {
+    "id": "geopandas",
+    "path": "geopandas",
+    "name": "geopandas",
+    "description": "Python library for working with geospatial vector data including shapefiles, GeoJSON, and GeoPackage files. Use when working with geographic data for spatial analysis, geometric operations, coordinate transformations, spatial joins, overlay operations, choropleth mapping, or any task involving reading/writing/analyzing vector geographic data. Supports PostGIS databases, interactive maps, and integration with matplotlib/folium/cartopy. Use for tasks like buffer analysis, spatial joins between datasets, dissolving boundaries, clipping data, calculating areas/distances, reprojecting coordinate systems, creating maps, or converting between spatial file formats."
+  },
+  {
+    "id": "get-available-resources",
+    "path": "get-available-resources",
+    "name": "get-available-resources",
+    "description": "This skill should be used at the start of any computationally intensive scientific task to detect and report available system resources (CPU cores, GPUs, memory, disk space). It creates a JSON file with resource information and strategic recommendations that inform computational approach decisions such as whether to use parallel processing (joblib, multiprocessing), out-of-core computing (Dask, Zarr), GPU acceleration (PyTorch, JAX), or memory-efficient strategies. Use this skill before running analyses, training models, processing large datasets, or any task where resource constraints matter."
+  },
+  {
+    "id": "gget",
+    "path": "gget",
+    "name": "gget",
+    "description": "CLI/Python toolkit for rapid bioinformatics queries. Preferred for quick BLAST searches. Access to 20+ databases: gene info (Ensembl/UniProt), AlphaFold, ARCHS4, Enrichr, OpenTargets, COSMIC, genome downloads. For advanced BLAST/batch processing, use biopython. For multi-database integration, use bioservices."
+  },
+  {
+    "id": "git-advanced-workflows",
+    "path": "git-advanced-workflows",
+    "name": "git-advanced-workflows",
+    "description": "Master advanced Git workflows including rebasing, cherry-picking, bisect, worktrees, and reflog to maintain clean history and recover from any situation. Use when managing complex Git histories, collaborating on feature branches, or troubleshooting repository issues."
+  },
+  {
+    "id": "git-pushing",
+    "path": "git-pushing",
+    "name": "git-pushing",
+    "description": "Stage, commit, and push git changes with conventional commit messages. Use when user wants to commit and push changes, mentions pushing to remote, or asks to save and push their work. Also activates when user says \"push changes\", \"commit and push\", \"push this\", \"push to github\", or similar git workflow requests."
+  },
+  {
+    "id": "github-actions-templates",
+    "path": "github-actions-templates",
+    "name": "github-actions-templates",
+    "description": "Create production-ready GitHub Actions workflows for automated testing, building, and deploying applications. Use when setting up CI/CD with GitHub Actions, automating development workflows, or creating reusable workflow templates."
+  },
+  {
+    "id": "github-template-scaffolder",
+    "path": "github-template-scaffolder",
+    "name": "github-template-scaffolder",
+    "description": "Scaffolds a new project with a robust GitHub template structure including workflows, issue templates, and documentation."
+  },
+  {
+    "id": "gitlab-ci-patterns",
+    "path": "gitlab-ci-patterns",
+    "name": "gitlab-ci-patterns",
+    "description": "Build GitLab CI/CD pipelines with multi-stage workflows, caching, and distributed runners for scalable automation. Use when implementing GitLab CI/CD, optimizing pipeline performance, or setting up automated testing and deployment."
+  },
+  {
+    "id": "gitops-workflow",
+    "path": "gitops-workflow",
+    "name": "gitops-workflow",
+    "description": "Implement GitOps workflows with ArgoCD and Flux for automated, declarative Kubernetes deployments with continuous reconciliation. Use when implementing GitOps practices, automating Kubernetes deployments, or setting up declarative infrastructure management."
+  },
+  {
+    "id": "grafana-dashboards",
+    "path": "grafana-dashboards",
+    "name": "grafana-dashboards",
+    "description": "Create and manage production Grafana dashboards for real-time visualization of system and application metrics. Use when building monitoring dashboards, visualizing metrics, or creating operational observability interfaces."
+  },
+  {
+    "id": "gtars",
+    "path": "gtars",
+    "name": "gtars",
+    "description": "High-performance toolkit for genomic interval analysis in Rust with Python bindings. Use when working with genomic regions, BED files, coverage tracks, overlap detection, tokenization for ML models, or fragment analysis in computational genomics and machine learning applications."
+  },
+  {
+    "id": "gwas-database",
+    "path": "gwas-database",
+    "name": "gwas-database",
+    "description": "Query NHGRI-EBI GWAS Catalog for SNP-trait associations. Search variants by rs ID, disease/trait, gene, retrieve p-values and summary statistics, for genetic epidemiology and polygenic risk scores."
+  },
+  {
+    "id": "helm-chart-scaffolding",
+    "path": "helm-chart-scaffolding",
+    "name": "helm-chart-scaffolding",
+    "description": "Design, organize, and manage Helm charts for templating and packaging Kubernetes applications with reusable configurations. Use when creating Helm charts, packaging Kubernetes applications, or implementing templated deployments."
+  },
+  {
+    "id": "histolab",
+    "path": "histolab",
+    "name": "histolab",
+    "description": "Digital pathology image processing toolkit for whole slide images (WSI). Use this skill when working with histopathology slides, processing H&E or IHC stained tissue images, extracting tiles from gigapixel pathology images, detecting tissue regions, segmenting tissue masks, or preparing datasets for computational pathology deep learning pipelines. Applies to WSI formats (SVS, TIFF, NDPI), tile-based analysis, and histological image preprocessing workflows."
+  },
+  {
+    "id": "hmdb-database",
+    "path": "hmdb-database",
+    "name": "hmdb-database",
+    "description": "Access Human Metabolome Database (220K+ metabolites). Search by name/ID/structure, retrieve chemical properties, biomarker data, NMR/MS spectra, pathways, for metabolomics and identification."
+  },
+  {
+    "id": "hybrid-cloud-networking",
+    "path": "hybrid-cloud-networking",
+    "name": "hybrid-cloud-networking",
+    "description": "Configure secure, high-performance connectivity between on-premises infrastructure and cloud platforms using VPN and dedicated connections. Use when building hybrid cloud architectures, connecting data centers to cloud, or implementing secure cross-premises networking."
+  },
+  {
+    "id": "hypogenic",
+    "path": "hypogenic",
+    "name": "hypogenic",
+    "description": "Automated hypothesis generation and testing using large language models. Use this skill when generating scientific hypotheses from datasets, combining literature insights with empirical data, testing hypotheses against observational data, or conducting systematic hypothesis exploration for research discovery in domains like deception detection, AI content detection, mental health analysis, or other empirical research tasks."
+  },
+  {
+    "id": "hypothesis-generation",
+    "path": "hypothesis-generation",
+    "name": "hypothesis-generation",
+    "description": "Generate testable hypotheses. Formulate from observations, design experiments, explore competing explanations, develop predictions, propose mechanisms, for scientific inquiry across domains."
+  },
+  {
+    "id": "image-enhancer",
+    "path": "image-enhancer",
+    "name": "image-enhancer",
+    "description": "Improves the quality of images, especially screenshots, by enhancing resolution, sharpness, and clarity. Perfect for preparing images for presentations, documentation, or social media posts."
+  },
+  {
+    "id": "internal-comms-anthropic",
+    "path": "internal-comms-anthropic",
+    "name": "internal-comms",
+    "description": "A set of resources to help me write all kinds of internal communications, using the formats that my company likes to use. Claude should use this skill whenever asked to write some sort of internal communications (status reports, leadership updates, 3P updates, company newsletters, FAQs, incident reports, project updates, etc.)."
+  },
+  {
+    "id": "internal-comms-community",
+    "path": "internal-comms-community",
+    "name": "internal-comms",
+    "description": "A set of resources to help me write all kinds of internal communications, using the formats that my company likes to use. Claude should use this skill whenever asked to write some sort of internal communications (status reports, leadership updates, 3P updates, company newsletters, FAQs, incident reports, project updates, etc.)."
+  },
+  {
+    "id": "invoice-organizer",
+    "path": "invoice-organizer",
+    "name": "invoice-organizer",
+    "description": "Automatically organizes invoices and receipts for tax preparation by reading messy files, extracting key information, renaming them consistently, and sorting them into logical folders. Turns hours of manual bookkeeping into minutes of automated organization."
+  },
+  {
+    "id": "javascript-testing-patterns",
+    "path": "javascript-testing-patterns",
+    "name": "javascript-testing-patterns",
+    "description": "Implement comprehensive testing strategies using Jest, Vitest, and Testing Library for unit tests, integration tests, and end-to-end testing with mocking, fixtures, and test-driven development. Use when writing JavaScript/TypeScript tests, setting up test infrastructure, or implementing TDD/BDD workflows."
+  },
+  {
+    "id": "k8s-manifest-generator",
+    "path": "k8s-manifest-generator",
+    "name": "k8s-manifest-generator",
+    "description": "Create production-ready Kubernetes manifests for Deployments, Services, ConfigMaps, and Secrets following best practices and security standards. Use when generating Kubernetes YAML manifests, creating K8s resources, or implementing production-grade Kubernetes configurations."
+  },
+  {
+    "id": "k8s-security-policies",
+    "path": "k8s-security-policies",
+    "name": "k8s-security-policies",
+    "description": "Implement Kubernetes security policies including NetworkPolicy, PodSecurityPolicy, and RBAC for production-grade security. Use when securing Kubernetes clusters, implementing network isolation, or enforcing pod security standards."
+  },
+  {
+    "id": "kaizen",
+    "path": "kaizen",
+    "name": "kaizen",
+    "description": "Guide for continuous improvement, error proofing, and standardization. Use this skill when the user wants to improve code quality, refactor, or discuss process improvements."
+  },
+  {
+    "id": "kegg-database",
+    "path": "kegg-database",
+    "name": "kegg-database",
+    "description": "Direct REST API access to KEGG (academic use only). Pathway analysis, gene-pathway mapping, metabolic pathways, drug interactions, ID conversion. For Python workflows with multiple databases, prefer bioservices. Use this for direct HTTP/REST work or KEGG-specific control."
+  },
+  {
+    "id": "labarchive-integration",
+    "path": "labarchive-integration",
+    "name": "labarchive-integration",
+    "description": "Electronic lab notebook API integration. Access notebooks, manage entries/attachments, backup notebooks, integrate with Protocols.io/Jupyter/REDCap, for programmatic ELN workflows."
+  },
+  {
+    "id": "lamindb",
+    "path": "lamindb",
+    "name": "lamindb",
+    "description": "This skill should be used when working with LaminDB, an open-source data framework for biology that makes data queryable, traceable, reproducible, and FAIR. Use when managing biological datasets (scRNA-seq, spatial, flow cytometry, etc.), tracking computational workflows, curating and validating data with biological ontologies, building data lakehouses, or ensuring data lineage and reproducibility in biological research. Covers data management, annotation, ontologies (genes, cell types, diseases, tissues), schema validation, integrations with workflow managers (Nextflow, Snakemake) and MLOps platforms (W&B, MLflow), and deployment strategies."
+  },
+  {
+    "id": "langchain-architecture",
+    "path": "langchain-architecture",
+    "name": "langchain-architecture",
+    "description": "Design LLM applications using the LangChain framework with agents, memory, and tool integration patterns. Use when building LangChain applications, implementing AI agents, or creating complex LLM workflows."
+  },
+  {
+    "id": "latchbio-integration",
+    "path": "latchbio-integration",
+    "name": "latchbio-integration",
+    "description": "Latch platform for bioinformatics workflows. Build pipelines with Latch SDK, @workflow/@task decorators, deploy serverless workflows, LatchFile/LatchDir, Nextflow/Snakemake integration."
+  },
+  {
+    "id": "lead-research-assistant",
+    "path": "lead-research-assistant",
+    "name": "lead-research-assistant",
+    "description": "Identifies high-quality leads for your product or service by analyzing your business, searching for target companies, and providing actionable contact strategies. Perfect for sales, business development, and marketing professionals."
+  },
+  {
+    "id": "literature-review",
+    "path": "literature-review",
+    "name": "literature-review",
+    "description": "Conduct comprehensive, systematic literature reviews using multiple academic databases (PubMed, arXiv, bioRxiv, Semantic Scholar, etc.). This skill should be used when conducting systematic literature reviews, meta-analyses, research synthesis, or comprehensive literature searches across biomedical, scientific, and technical domains. Creates professionally formatted markdown documents and PDFs with verified citations in multiple citation styles (APA, Nature, Vancouver, etc.)."
+  },
+  {
+    "id": "llm-evaluation",
+    "path": "llm-evaluation",
+    "name": "llm-evaluation",
+    "description": "Implement comprehensive evaluation strategies for LLM applications using automated metrics, human feedback, and benchmarking. Use when testing LLM performance, measuring AI application quality, or establishing evaluation frameworks."
+  },
+  {
+    "id": "loki-mode",
+    "path": "loki-mode",
+    "name": "loki-mode",
+    "description": "Multi-agent autonomous startup system for Claude Code. Triggers on \"Loki Mode\". Orchestrates 100+ specialized agents across engineering, QA, DevOps, security, data/ML, business operations, marketing, HR, and customer success. Takes PRD to fully deployed, revenue-generating product with zero human intervention. Features Task tool for subagent dispatch, parallel code review with 3 specialized reviewers, severity-based issue triage, distributed task queue with dead letter handling, automatic deployment to cloud providers, A/B testing, customer feedback loops, incident response, circuit breakers, and self-healing. Handles rate limits via distributed state checkpoints and auto-resume with exponential backoff. Requires --dangerously-skip-permissions flag."
+  },
+  {
+    "id": "markitdown",
+    "path": "markitdown",
+    "name": "markitdown",
+    "description": "Convert various file formats (PDF, Office documents, images, audio, web content, structured data) to Markdown optimized for LLM processing. Use when converting documents to markdown, extracting text from PDFs/Office files, transcribing audio, performing OCR on images, extracting YouTube transcripts, or processing batches of files. Supports 20+ formats including DOCX, XLSX, PPTX, PDF, HTML, EPUB, CSV, JSON, images with OCR, and audio with transcription."
+  },
+  {
+    "id": "matchms",
+    "path": "matchms",
+    "name": "matchms",
+    "description": "Mass spectrometry analysis. Process mzML/MGF/MSP, spectral similarity (cosine, modified cosine), metadata harmonization, compound ID, for metabolomics and MS data processing."
+  },
+  {
+    "id": "matplotlib",
+    "path": "matplotlib",
+    "name": "matplotlib",
+    "description": "Foundational plotting library. Create line plots, scatter, bar, histograms, heatmaps, 3D, subplots, export PNG/PDF/SVG, for scientific visualization and publication figures."
+  },
+  {
+    "id": "mcp-builder",
+    "path": "mcp-builder",
+    "name": "mcp-builder",
+    "description": "Guide for creating high-quality MCP (Model Context Protocol) servers that enable LLMs to interact with external services through well-designed tools. Use when building MCP servers to integrate external APIs or services, whether in Python (FastMCP) or Node/TypeScript (MCP SDK)."
+  },
+  {
+    "id": "medchem",
+    "path": "medchem",
+    "name": "medchem",
+    "description": "Medicinal chemistry filters. Apply drug-likeness rules (Lipinski, Veber), PAINS filters, structural alerts, complexity metrics, for compound prioritization and library filtering."
+  },
+  {
+    "id": "meeting-insights-analyzer",
+    "path": "meeting-insights-analyzer",
+    "name": "meeting-insights-analyzer",
+    "description": "Analyzes meeting transcripts and recordings to uncover behavioral patterns, communication insights, and actionable feedback. Identifies when you avoid conflict, use filler words, dominate conversations, or miss opportunities to listen. Perfect for professionals seeking to improve their communication and leadership skills."
+  },
+  {
+    "id": "metabolomics-workbench-database",
+    "path": "metabolomics-workbench-database",
+    "name": "metabolomics-workbench-database",
+    "description": "Access NIH Metabolomics Workbench via REST API (4,200+ studies). Query metabolites, RefMet nomenclature, MS/NMR data, m/z searches, study metadata, for metabolomics and biomarker discovery."
+  },
+  {
+    "id": "microservices-patterns",
+    "path": "microservices-patterns",
+    "name": "microservices-patterns",
+    "description": "Design microservices architectures with service boundaries, event-driven communication, and resilience patterns. Use when building distributed systems, decomposing monoliths, or implementing microservices."
+  },
+  {
+    "id": "ml-pipeline-workflow",
+    "path": "ml-pipeline-workflow",
+    "name": "ml-pipeline-workflow",
+    "description": "Build end-to-end MLOps pipelines from data preparation through model training, validation, and production deployment. Use when creating ML pipelines, implementing MLOps practices, or automating model training and deployment workflows."
+  },
+  {
+    "id": "modal",
+    "path": "modal",
+    "name": "modal",
+    "description": "Run Python code in the cloud with serverless containers, GPUs, and autoscaling. Use when deploying ML models, running batch processing jobs, scheduling compute-intensive tasks, or serving APIs that require GPU acceleration or dynamic scaling."
+  },
+  {
+    "id": "morph-editor",
+    "path": "morph-editor",
+    "name": "morph-editor",
+    "description": "Guide for using the morph_edit tool correctly with proper syntax and markers. Use when editing large files (500+ lines), making multiple scattered changes, or performing complex refactoring."
+  },
+  {
+    "id": "modern-javascript-patterns",
+    "path": "modern-javascript-patterns",
+    "name": "modern-javascript-patterns",
+    "description": "Master ES6+ features including async/await, destructuring, spread operators, arrow functions, promises, modules, iterators, generators, and functional programming patterns for writing clean, efficient JavaScript code. Use when refactoring legacy code, implementing modern patterns, or optimizing JavaScript applications."
+  },
+  {
+    "id": "molfeat",
+    "path": "molfeat",
+    "name": "molfeat",
+    "description": "Molecular featurization for ML (100+ featurizers). ECFP, MACCS, descriptors, pretrained models (ChemBERTa), convert SMILES to features, for QSAR and molecular ML."
+  },
+  {
+    "id": "monorepo-management",
+    "path": "monorepo-management",
+    "name": "monorepo-management",
+    "description": "Master monorepo management with Turborepo, Nx, and pnpm workspaces to build efficient, scalable multi-package repositories with optimized builds and dependency management. Use when setting up monorepos, optimizing builds, or managing shared dependencies."
+  },
+  {
+    "id": "multi-cloud-architecture",
+    "path": "multi-cloud-architecture",
+    "name": "multi-cloud-architecture",
+    "description": "Design multi-cloud architectures using a decision framework to select and integrate services across AWS, Azure, and GCP. Use when building multi-cloud systems, avoiding vendor lock-in, or leveraging best-of-breed services from multiple providers."
+  },
+  {
+    "id": "networkx",
+    "path": "networkx",
+    "name": "networkx",
+    "description": "Comprehensive toolkit for creating, analyzing, and visualizing complex networks and graphs in Python. Use when working with network/graph data structures, analyzing relationships between entities, computing graph algorithms (shortest paths, centrality, clustering), detecting communities, generating synthetic networks, or visualizing network topologies. Applicable to social networks, biological networks, transportation systems, citation networks, and any domain involving pairwise relationships."
+  },
+  {
+    "id": "neurokit2",
+    "path": "neurokit2",
+    "name": "neurokit2",
+    "description": "Comprehensive biosignal processing toolkit for analyzing physiological data including ECG, EEG, EDA, RSP, PPG, EMG, and EOG signals. Use this skill when processing cardiovascular signals, brain activity, electrodermal responses, respiratory patterns, muscle activity, or eye movements. Applicable for heart rate variability analysis, event-related potentials, complexity measures, autonomic nervous system assessment, psychophysiology research, and multi-modal physiological signal integration."
+  },
+  {
+    "id": "nft-standards",
+    "path": "nft-standards",
+    "name": "nft-standards",
+    "description": "Implement NFT standards (ERC-721, ERC-1155) with proper metadata handling, minting strategies, and marketplace integration. Use when creating NFT contracts, building NFT marketplaces, or implementing digital asset systems."
+  },
+  {
+    "id": "nodejs-backend-patterns",
+    "path": "nodejs-backend-patterns",
+    "name": "nodejs-backend-patterns",
+    "description": "Build production-ready Node.js backend services with Express/Fastify, implementing middleware patterns, error handling, authentication, database integration, and API design best practices. Use when creating Node.js servers, REST APIs, GraphQL backends, or microservices architectures."
+  },
+  {
+    "id": "notebooklm",
+    "path": "notebooklm",
+    "name": "notebooklm",
+    "description": "Use this skill to query your Google NotebookLM notebooks directly from Claude Code for source-grounded, citation-backed answers from Gemini. Browser automation, library management, persistent auth. Drastically reduced hallucinations through document-only responses."
+  },
+  {
+    "id": "omero-integration",
+    "path": "omero-integration",
+    "name": "omero-integration",
+    "description": "Microscopy data management platform. Access images via Python, retrieve datasets, analyze pixels, manage ROIs/annotations, batch processing, for high-content screening and microscopy workflows."
+  },
+  {
+    "id": "openalex-database",
+    "path": "openalex-database",
+    "name": "openalex-database",
+    "description": "Query and analyze scholarly literature using the OpenAlex database. This skill should be used when searching for academic papers, analyzing research trends, finding works by authors or institutions, tracking citations, discovering open access publications, or conducting bibliometric analysis across 240M+ scholarly works. Use for literature searches, research output analysis, citation analysis, and academic database queries."
+  },
+  {
+    "id": "opentargets-database",
+    "path": "opentargets-database",
+    "name": "opentargets-database",
+    "description": "Query Open Targets Platform for target-disease associations, drug target discovery, tractability/safety data, genetics/omics evidence, known drugs, for therapeutic target identification."
+  },
+  {
+    "id": "opentrons-integration",
+    "path": "opentrons-integration",
+    "name": "opentrons-integration",
+    "description": "Lab automation platform for Flex/OT-2 robots. Write Protocol API v2 protocols, liquid handling, hardware modules (heater-shaker, thermocycler), labware management, for automated pipetting workflows."
+  },
+  {
+    "id": "paper-2-web",
+    "path": "paper-2-web",
+    "name": "paper-2-web",
+    "description": "This skill should be used when converting academic papers into promotional and presentation formats including interactive websites (Paper2Web), presentation videos (Paper2Video), and conference posters (Paper2Poster). Use this skill for tasks involving paper dissemination, conference preparation, creating explorable academic homepages, generating video abstracts, or producing print-ready posters from LaTeX or PDF sources."
+  },
+  {
+    "id": "pathml",
+    "path": "pathml",
+    "name": "pathml",
+    "description": "Computational pathology toolkit for analyzing whole-slide images (WSI) and multiparametric imaging data. Use this skill when working with histopathology slides, H&E stained images, multiplex immunofluorescence (CODEX, Vectra), spatial proteomics, nucleus detection/segmentation, tissue graph construction, or training ML models on pathology data. Supports 160+ slide formats including Aperio SVS, NDPI, DICOM, OME-TIFF for digital pathology workflows."
+  },
+  {
+    "id": "paypal-integration",
+    "path": "paypal-integration",
+    "name": "paypal-integration",
+    "description": "Integrate PayPal payment processing with support for express checkout, subscriptions, and refund management. Use when implementing PayPal payments, processing online transactions, or building e-commerce checkout flows."
+  },
+  {
+    "id": "pci-compliance",
+    "path": "pci-compliance",
+    "name": "pci-compliance",
+    "description": "Implement PCI DSS compliance requirements for secure handling of payment card data and payment systems. Use when securing payment processing, achieving PCI compliance, or implementing payment card security measures."
+  },
+  {
+    "id": "pdb-database",
+    "path": "pdb-database",
+    "name": "pdb-database",
+    "description": "Access RCSB PDB for 3D protein/nucleic acid structures. Search by text/sequence/structure, download coordinates (PDB/mmCIF), retrieve metadata, for structural biology and drug discovery."
+  },
+  {
+    "id": "pdf-official",
+    "path": "pdf-official",
+    "name": "pdf",
+    "description": "Comprehensive PDF manipulation toolkit for extracting text and tables, creating new PDFs, merging/splitting documents, and handling forms. When Claude needs to fill in a PDF form or programmatically process, generate, or analyze PDF documents at scale."
+  },
+  {
+    "id": "peer-review",
+    "path": "peer-review",
+    "name": "peer-review",
+    "description": "Systematic peer review toolkit. Evaluate methodology, statistics, design, reproducibility, ethics, figure integrity, reporting standards, for manuscript and grant review across disciplines."
+  },
+  {
+    "id": "pennylane",
+    "path": "pennylane",
+    "name": "pennylane",
+    "description": "Cross-platform Python library for quantum computing, quantum machine learning, and quantum chemistry. Enables building and training quantum circuits with automatic differentiation, seamless integration with PyTorch/JAX/TensorFlow, and device-independent execution across simulators and quantum hardware (IBM, Amazon Braket, Google, Rigetti, IonQ, etc.). Use when working with quantum circuits, variational quantum algorithms (VQE, QAOA), quantum neural networks, hybrid quantum-classical models, molecular simulations, quantum chemistry calculations, or any quantum computing tasks requiring gradient-based optimization, hardware-agnostic programming, or quantum machine learning workflows."
+  },
+  {
+    "id": "perplexity-search",
+    "path": "perplexity-search",
+    "name": "perplexity-search",
+    "description": "Perform AI-powered web searches with real-time information using Perplexity models via LiteLLM and OpenRouter. This skill should be used when conducting web searches for current information, finding recent scientific literature, getting grounded answers with source citations, or accessing information beyond the model's knowledge cutoff. Provides access to multiple Perplexity models including Sonar Pro, Sonar Pro Search (advanced agentic search), and Sonar Reasoning Pro through a single OpenRouter API key."
+  },
+  {
+    "id": "planning-with-files",
+    "path": "planning-with-files",
+    "name": "planning-with-files",
+    "description": "Implements Manus-style file-based planning for complex tasks. Creates task_plan.md, findings.md, and progress.md. Use when starting complex multi-step tasks, research projects, or any task requiring >5 tool calls."
+  },
+  {
+    "id": "playwright-skill",
+    "path": "playwright-skill",
+    "name": "playwright-skill",
+    "description": "Complete browser automation with Playwright. Auto-detects dev servers, writes clean test scripts to /tmp. Test pages, fill forms, take screenshots, check responsive design, validate UX, test login flows, check links, automate any browser task. Use when user wants to test websites, automate browser interactions, validate web functionality, or perform any browser-based testing."
+  },
+  {
+    "id": "plotly",
+    "path": "plotly",
+    "name": "plotly",
+    "description": "Interactive scientific and statistical data visualization library for Python. Use when creating charts, plots, or visualizations including scatter plots, line charts, bar charts, heatmaps, 3D plots, geographic maps, statistical distributions, financial charts, and dashboards. Supports both quick visualizations (Plotly Express) and fine-grained customization (graph objects). Outputs interactive HTML or static images (PNG, PDF, SVG)."
+  },
+  {
+    "id": "polars",
+    "path": "polars",
+    "name": "polars",
+    "description": "Fast DataFrame library (Apache Arrow). Select, filter, group_by, joins, lazy evaluation, CSV/Parquet I/O, expression API, for high-performance data analysis workflows."
+  },
+  {
+    "id": "postgresql",
+    "path": "postgresql",
+    "name": "postgresql-table-design",
+    "description": "Design a PostgreSQL-specific schema. Covers best-practices, data types, indexing, constraints, performance patterns, and advanced features"
+  },
+  {
+    "id": "pptx-official",
+    "path": "pptx-official",
+    "name": "pptx",
+    "description": "Presentation creation, editing, and analysis. When Claude needs to work with presentations (.pptx files) for: (1) Creating new presentations, (2) Modifying or editing content, (3) Working with layouts, (4) Adding comments or speaker notes, or any other presentation tasks"
+  },
+  {
+    "id": "product-manager-toolkit",
+    "path": "product-manager-toolkit",
+    "name": "product-manager-toolkit",
+    "description": "Comprehensive toolkit for product managers including RICE prioritization, customer interview analysis, PRD templates, discovery frameworks, and go-to-market strategies. Use for feature prioritization, user research synthesis, requirement documentation, and product strategy development."
+  },
+  {
+    "id": "prometheus-configuration",
+    "path": "prometheus-configuration",
+    "name": "prometheus-configuration",
+    "description": "Set up Prometheus for comprehensive metric collection, storage, and monitoring of infrastructure and applications. Use when implementing metrics collection, setting up monitoring infrastructure, or configuring alerting systems."
+  },
+  {
+    "id": "prompt-engineering",
+    "path": "prompt-engineering",
+    "name": "prompt-engineering",
+    "description": "Expert guide on prompt engineering patterns, best practices, and optimization techniques. Use when user wants to improve prompts, learn prompting strategies, or debug agent behavior."
+  },
+  {
+    "id": "prompt-engineering-patterns",
+    "path": "prompt-engineering-patterns",
+    "name": "prompt-engineering-patterns",
+    "description": "Master advanced prompt engineering techniques to maximize LLM performance, reliability, and controllability in production. Use when optimizing prompts, improving LLM outputs, or designing production prompt templates."
+  },
+  {
+    "id": "protocolsio-integration",
+    "path": "protocolsio-integration",
+    "name": "protocolsio-integration",
+    "description": "Integration with protocols.io API for managing scientific protocols. This skill should be used when working with protocols.io to search, create, update, or publish protocols; manage protocol steps and materials; handle discussions and comments; organize workspaces; upload and manage files; or integrate protocols.io functionality into workflows. Applicable for protocol discovery, collaborative protocol development, experiment tracking, lab protocol management, and scientific documentation."
+  },
+  {
+    "id": "pubchem-database",
+    "path": "pubchem-database",
+    "name": "pubchem-database",
+    "description": "Query PubChem via PUG-REST API/PubChemPy (110M+ compounds). Search by name/CID/SMILES, retrieve properties, similarity/substructure searches, bioactivity, for cheminformatics."
+  },
+  {
+    "id": "pubmed-database",
+    "path": "pubmed-database",
+    "name": "pubmed-database",
+    "description": "Direct REST API access to PubMed. Advanced Boolean/MeSH queries, E-utilities API, batch processing, citation management. For Python workflows, prefer biopython (Bio.Entrez). Use this for direct HTTP/REST work or custom API implementations."
+  },
+  {
+    "id": "pufferlib",
+    "path": "pufferlib",
+    "name": "pufferlib",
+    "description": "This skill should be used when working with reinforcement learning tasks including high-performance RL training, custom environment development, vectorized parallel simulation, multi-agent systems, or integration with existing RL environments (Gymnasium, PettingZoo, Atari, Procgen, etc.). Use this skill for implementing PPO training, creating PufferEnv environments, optimizing RL performance, or developing policies with CNNs/LSTMs."
+  },
+  {
+    "id": "pydeseq2",
+    "path": "pydeseq2",
+    "name": "pydeseq2",
+    "description": "Differential gene expression analysis (Python DESeq2). Identify DE genes from bulk RNA-seq counts, Wald tests, FDR correction, volcano/MA plots, for RNA-seq analysis."
+  },
+  {
+    "id": "pydicom",
+    "path": "pydicom",
+    "name": "pydicom",
+    "description": "Python library for working with DICOM (Digital Imaging and Communications in Medicine) files. Use this skill when reading, writing, or modifying medical imaging data in DICOM format, extracting pixel data from medical images (CT, MRI, X-ray, ultrasound), anonymizing DICOM files, working with DICOM metadata and tags, converting DICOM images to other formats, handling compressed DICOM data, or processing medical imaging datasets. Applies to tasks involving medical image analysis, PACS systems, radiology workflows, and healthcare imaging applications."
+  },
+  {
+    "id": "pyhealth",
+    "path": "pyhealth",
+    "name": "pyhealth",
+    "description": "Comprehensive healthcare AI toolkit for developing, testing, and deploying machine learning models with clinical data. This skill should be used when working with electronic health records (EHR), clinical prediction tasks (mortality, readmission, drug recommendation), medical coding systems (ICD, NDC, ATC), physiological signals (EEG, ECG), healthcare datasets (MIMIC-III/IV, eICU, OMOP), or implementing deep learning models for healthcare applications (RETAIN, SafeDrug, Transformer, GNN)."
+  },
+  {
+    "id": "pylabrobot",
+    "path": "pylabrobot",
+    "name": "pylabrobot",
+    "description": "Laboratory automation toolkit for controlling liquid handlers, plate readers, pumps, heater shakers, incubators, centrifuges, and analytical equipment. Use this skill when automating laboratory workflows, programming liquid handling robots (Hamilton STAR, Opentrons OT-2, Tecan EVO), integrating lab equipment, managing deck layouts and resources (plates, tips, containers), reading plates, or creating reproducible laboratory protocols. Applicable for both simulated protocols and physical hardware control."
+  },
+  {
+    "id": "pymatgen",
+    "path": "pymatgen",
+    "name": "pymatgen",
+    "description": "Materials science toolkit. Crystal structures (CIF, POSCAR), phase diagrams, band structure, DOS, Materials Project integration, format conversion, for computational materials science."
+  },
+  {
+    "id": "pymc",
+    "path": "pymc",
+    "name": "pymc-bayesian-modeling",
+    "description": "Bayesian modeling with PyMC. Build hierarchical models, MCMC (NUTS), variational inference, LOO/WAIC comparison, posterior checks, for probabilistic programming and inference."
+  },
+  {
+    "id": "pymoo",
+    "path": "pymoo",
+    "name": "pymoo",
+    "description": "Multi-objective optimization framework. NSGA-II, NSGA-III, MOEA/D, Pareto fronts, constraint handling, benchmarks (ZDT, DTLZ), for engineering design and optimization problems."
+  },
+  {
+    "id": "pyopenms",
+    "path": "pyopenms",
+    "name": "pyopenms",
+    "description": "Python interface to OpenMS for mass spectrometry data analysis. Use for LC-MS/MS proteomics and metabolomics workflows including file handling (mzML, mzXML, mzTab, FASTA, pepXML, protXML, mzIdentML), signal processing, feature detection, peptide identification, and quantitative analysis. Apply when working with mass spectrometry data, analyzing proteomics experiments, or processing metabolomics datasets."
+  },
+  {
+    "id": "pysam",
+    "path": "pysam",
+    "name": "pysam",
+    "description": "Genomic file toolkit. Read/write SAM/BAM/CRAM alignments, VCF/BCF variants, FASTA/FASTQ sequences, extract regions, calculate coverage, for NGS data processing pipelines."
+  },
+  {
+    "id": "pytdc",
+    "path": "pytdc",
+    "name": "pytdc",
+    "description": "Therapeutics Data Commons. AI-ready drug discovery datasets (ADME, toxicity, DTI), benchmarks, scaffold splits, molecular oracles, for therapeutic ML and pharmacological prediction."
+  },
+  {
+    "id": "python-packaging",
+    "path": "python-packaging",
+    "name": "python-packaging",
+    "description": "Create distributable Python packages with proper project structure, setup.py/pyproject.toml, and publishing to PyPI. Use when packaging Python libraries, creating CLI tools, or distributing Python code."
+  },
+  {
+    "id": "python-performance-optimization",
+    "path": "python-performance-optimization",
+    "name": "python-performance-optimization",
+    "description": "Profile and optimize Python code using cProfile, memory profilers, and performance best practices. Use when debugging slow Python code, optimizing bottlenecks, or improving application performance."
+  },
+  {
+    "id": "python-testing-patterns",
+    "path": "python-testing-patterns",
+    "name": "python-testing-patterns",
+    "description": "Implement comprehensive testing strategies with pytest, fixtures, mocking, and test-driven development. Use when writing Python tests, setting up test suites, or implementing testing best practices."
+  },
+  {
+    "id": "pytorch-lightning",
+    "path": "pytorch-lightning",
+    "name": "pytorch-lightning",
+    "description": "Deep learning framework (PyTorch Lightning). Organize PyTorch code into LightningModules, configure Trainers for multi-GPU/TPU, implement data pipelines, callbacks, logging (W&B, TensorBoard), distributed training (DDP, FSDP, DeepSpeed), for scalable neural network training."
+  },
+  {
+    "id": "qiskit",
+    "path": "qiskit",
+    "name": "qiskit",
+    "description": "Comprehensive quantum computing toolkit for building, optimizing, and executing quantum circuits. Use when working with quantum algorithms, simulations, or quantum hardware including (1) Building quantum circuits with gates and measurements, (2) Running quantum algorithms (VQE, QAOA, Grover), (3) Transpiling/optimizing circuits for hardware, (4) Executing on IBM Quantum or other providers, (5) Quantum chemistry and materials science, (6) Quantum machine learning, (7) Visualizing circuits and results, or (8) Any quantum computing development task."
+  },
+  {
+    "id": "qutip",
+    "path": "qutip",
+    "name": "qutip",
+    "description": "Quantum mechanics simulations and analysis using QuTiP (Quantum Toolbox in Python). Use when working with quantum systems including: (1) quantum states (kets, bras, density matrices), (2) quantum operators and gates, (3) time evolution and dynamics (Schr\u00f6dinger, master equations, Monte Carlo), (4) open quantum systems with dissipation, (5) quantum measurements and entanglement, (6) visualization (Bloch sphere, Wigner functions), (7) steady states and correlation functions, or (8) advanced methods (Floquet theory, HEOM, stochastic solvers). Handles both closed and open quantum systems across various domains including quantum optics, quantum computing, and condensed matter physics."
+  },
+  {
+    "id": "raffle-winner-picker",
+    "path": "raffle-winner-picker",
+    "name": "raffle-winner-picker",
+    "description": "Picks random winners from lists, spreadsheets, or Google Sheets for giveaways, raffles, and contests. Ensures fair, unbiased selection with transparency."
+  },
+  {
+    "id": "rag-implementation",
+    "path": "rag-implementation",
+    "name": "rag-implementation",
+    "description": "Build Retrieval-Augmented Generation (RAG) systems for LLM applications with vector databases and semantic search. Use when implementing knowledge-grounded AI, building document Q&A systems, or integrating LLMs with external knowledge bases."
+  },
+  {
+    "id": "ralph-loop",
+    "path": "ralph-loop",
+    "name": "ralph-loop",
+    "description": "Iterative AI agent execution pattern for autonomous task completion. Use when running AI agents overnight, implementing self-correcting loops, defining completion criteria, setting up stop hooks, running parallel agent instances, or building autonomous development pipelines. Also known as Ralph Wiggum technique. Covers iteration limits, state persistence, fresh context, progress tracking, and sandboxed execution."
+  },
+  {
+    "id": "rdkit",
+    "path": "rdkit",
+    "name": "rdkit",
+    "description": "Cheminformatics toolkit for fine-grained molecular control. SMILES/SDF parsing, descriptors (MW, LogP, TPSA), fingerprints, substructure search, 2D/3D generation, similarity, reactions. For standard workflows with simpler interface, use datamol (wrapper around RDKit). Use rdkit for advanced control, custom sanitization, specialized algorithms."
+  },
+  {
+    "id": "react-modernization",
+    "path": "react-modernization",
+    "name": "react-modernization",
+    "description": "Upgrade React applications to latest versions, migrate from class components to hooks, and adopt concurrent features. Use when modernizing React codebases, migrating to React Hooks, or upgrading to latest React versions."
+  },
+  {
+    "id": "react-ui-patterns",
+    "path": "react-ui-patterns",
+    "name": "react-ui-patterns",
+    "description": "Modern React UI patterns for loading states, error handling, and data fetching. Use when building UI components, handling async data, or managing UI states."
+  },
+  {
+    "id": "reactome-database",
+    "path": "reactome-database",
+    "name": "reactome-database",
+    "description": "Query Reactome REST API for pathway analysis, enrichment, gene-pathway mapping, disease pathways, molecular interactions, expression analysis, for systems biology studies."
+  },
+  {
+    "id": "receiving-code-review",
+    "path": "receiving-code-review",
+    "name": "receiving-code-review",
+    "description": "Use when receiving code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable - requires technical rigor and verification, not performative agreement or blind implementation"
+  },
+  {
+    "id": "reportlab",
+    "path": "reportlab",
+    "name": "reportlab",
+    "description": "PDF generation toolkit. Create invoices, reports, certificates, forms, charts, tables, barcodes, QR codes, Canvas/Platypus APIs, for professional document automation."
+  },
+  {
+    "id": "requesting-code-review",
+    "path": "requesting-code-review",
+    "name": "requesting-code-review",
+    "description": "Use when completing tasks, implementing major features, or before merging to verify work meets requirements"
+  },
+  {
+    "id": "sast-configuration",
+    "path": "sast-configuration",
+    "name": "sast-configuration",
+    "description": "Configure Static Application Security Testing (SAST) tools for automated vulnerability detection in application code. Use when setting up security scanning, implementing DevSecOps practices, or automating code vulnerability detection."
+  },
+  {
+    "id": "scanpy",
+    "path": "scanpy",
+    "name": "scanpy",
+    "description": "Single-cell RNA-seq analysis. Load .h5ad/10X data, QC, normalization, PCA/UMAP/t-SNE, Leiden clustering, marker genes, cell type annotation, trajectory, for scRNA-seq analysis."
+  },
+  {
+    "id": "scholar-evaluation",
+    "path": "scholar-evaluation",
+    "name": "scholar-evaluation",
+    "description": "Systematic framework for evaluating scholarly and research work based on the ScholarEval methodology. This skill should be used when assessing research papers, evaluating literature reviews, scoring research methodologies, analyzing scientific writing quality, or applying structured evaluation criteria to academic work. Provides comprehensive assessment across multiple dimensions including problem formulation, literature review, methodology, data collection, analysis, results interpretation, and scholarly writing quality."
+  },
+  {
+    "id": "scientific-brainstorming",
+    "path": "scientific-brainstorming",
+    "name": "scientific-brainstorming",
+    "description": "Research ideation partner. Generate hypotheses, explore interdisciplinary connections, challenge assumptions, develop methodologies, identify research gaps, for creative scientific problem-solving."
+  },
+  {
+    "id": "scientific-critical-thinking",
+    "path": "scientific-critical-thinking",
+    "name": "scientific-critical-thinking",
+    "description": "Evaluate research rigor. Assess methodology, experimental design, statistical validity, biases, confounding, evidence quality (GRADE, Cochrane ROB), for critical analysis of scientific claims."
+  },
+  {
+    "id": "scientific-visualization",
+    "path": "scientific-visualization",
+    "name": "scientific-visualization",
+    "description": "Create publication figures with matplotlib/seaborn/plotly. Multi-panel layouts, error bars, significance markers, colorblind-safe, export PDF/EPS/TIFF, for journal-ready scientific plots."
+  },
+  {
+    "id": "scientific-writing",
+    "path": "scientific-writing",
+    "name": "scientific-writing",
+    "description": "Write scientific manuscripts. IMRAD structure, citations (APA/AMA/Vancouver), figures/tables, reporting guidelines (CONSORT/STROBE/PRISMA), abstracts, for research papers and journal submissions."
+  },
+  {
+    "id": "scikit-bio",
+    "path": "scikit-bio",
+    "name": "scikit-bio",
+    "description": "Biological data toolkit. Sequence analysis, alignments, phylogenetic trees, diversity metrics (alpha/beta, UniFrac), ordination (PCoA), PERMANOVA, FASTA/Newick I/O, for microbiome analysis."
+  },
+  {
+    "id": "scikit-learn",
+    "path": "scikit-learn",
+    "name": "scikit-learn",
+    "description": "Machine learning in Python with scikit-learn. Use when working with supervised learning (classification, regression), unsupervised learning (clustering, dimensionality reduction), model evaluation, hyperparameter tuning, preprocessing, or building ML pipelines. Provides comprehensive reference documentation for algorithms, preprocessing techniques, pipelines, and best practices."
+  },
+  {
+    "id": "scikit-survival",
+    "path": "scikit-survival",
+    "name": "scikit-survival",
+    "description": "Comprehensive toolkit for survival analysis and time-to-event modeling in Python using scikit-survival. Use this skill when working with censored survival data, performing time-to-event analysis, fitting Cox models, Random Survival Forests, Gradient Boosting models, or Survival SVMs, evaluating survival predictions with concordance index or Brier score, handling competing risks, or implementing any survival analysis workflow with the scikit-survival library."
+  },
+  {
+    "id": "scvi-tools",
+    "path": "scvi-tools",
+    "name": "scvi-tools",
+    "description": "This skill should be used when working with single-cell omics data analysis using scvi-tools, including scRNA-seq, scATAC-seq, CITE-seq, spatial transcriptomics, and other single-cell modalities. Use this skill for probabilistic modeling, batch correction, dimensionality reduction, differential expression, cell type annotation, multimodal integration, and spatial analysis tasks."
+  },
+  {
+    "id": "seaborn",
+    "path": "seaborn",
+    "name": "seaborn",
+    "description": "Statistical visualization. Scatter, box, violin, heatmaps, pair plots, regression, correlation matrices, KDE, faceted plots, for exploratory analysis and publication figures."
+  },
+  {
+    "id": "secrets-management",
+    "path": "secrets-management",
+    "name": "secrets-management",
+    "description": "Implement secure secrets management for CI/CD pipelines using Vault, AWS Secrets Manager, or native platform solutions. Use when handling sensitive credentials, rotating secrets, or securing CI/CD environments."
+  },
+  {
+    "id": "senior-architect",
+    "path": "senior-architect",
+    "name": "senior-architect",
+    "description": "Comprehensive software architecture skill for designing scalable, maintainable systems using ReactJS, NextJS, NodeJS, Express, React Native, Swift, Kotlin, Flutter, Postgres, GraphQL, Go, Python. Includes architecture diagram generation, system design patterns, tech stack decision frameworks, and dependency analysis. Use when designing system architecture, making technical decisions, creating architecture diagrams, evaluating trade-offs, or defining integration patterns."
+  },
+  {
+    "id": "senior-fullstack",
+    "path": "senior-fullstack",
+    "name": "senior-fullstack",
+    "description": "Comprehensive fullstack development skill for building complete web applications with React, Next.js, Node.js, GraphQL, and PostgreSQL. Includes project scaffolding, code quality analysis, architecture patterns, and complete tech stack guidance. Use when building new projects, analyzing code quality, implementing design patterns, or setting up development workflows."
+  },
+  {
+    "id": "shap",
+    "path": "shap",
+    "name": "shap",
+    "description": "Model interpretability and explainability using SHAP (SHapley Additive exPlanations). Use this skill when explaining machine learning model predictions, computing feature importance, generating SHAP plots (waterfall, beeswarm, bar, scatter, force, heatmap), debugging models, analyzing model bias or fairness, comparing models, or implementing explainable AI. Works with tree-based models (XGBoost, LightGBM, Random Forest), deep learning (TensorFlow, PyTorch), linear models, and any black-box model."
+  },
+  {
+    "id": "shellcheck-configuration",
+    "path": "shellcheck-configuration",
+    "name": "shellcheck-configuration",
+    "description": "Master ShellCheck static analysis configuration and usage for shell script quality. Use when setting up linting infrastructure, fixing code issues, or ensuring script portability."
+  },
+  {
+    "id": "simpy",
+    "path": "simpy",
+    "name": "simpy",
+    "description": "Process-based discrete-event simulation framework in Python. Use this skill when building simulations of systems with processes, queues, resources, and time-based events such as manufacturing systems, service operations, network traffic, logistics, or any system where entities interact with shared resources over time."
+  },
+  {
+    "id": "skill-creator",
+    "path": "skill-creator",
+    "name": "skill-creator",
+    "description": "Guide for creating effective skills. This skill should be used when users want to create a new skill (or update an existing skill) that extends Claude's capabilities with specialized knowledge, workflows, or tool integrations."
+  },
+  {
+    "id": "skill-developer",
+    "path": "skill-developer",
+    "name": "skill-developer",
+    "description": "Create and manage Claude Code skills following Anthropic best practices. Use when creating new skills, modifying skill-rules.json, understanding trigger patterns, working with hooks, debugging skill activation, or implementing progressive disclosure. Covers skill structure, YAML frontmatter, trigger types (keywords, intent patterns, file paths, content patterns), enforcement levels (block, suggest, warn), hook mechanisms (UserPromptSubmit, PreToolUse), session tracking, and the 500-line rule."
+  },
+  {
+    "id": "skill-share",
+    "path": "skill-share",
+    "name": "skill-share",
+    "description": "A skill that creates new Claude skills and automatically shares them on Slack using Rube for seamless team collaboration and skill discovery."
+  },
+  {
+    "id": "slack-gif-creator",
+    "path": "slack-gif-creator",
+    "name": "slack-gif-creator",
+    "description": "Knowledge and utilities for creating animated GIFs optimized for Slack. Provides constraints, validation tools, and animation concepts. Use when users request animated GIFs for Slack like \"make me a GIF of X doing Y for Slack."
+  },
+  {
+    "id": "slo-implementation",
+    "path": "slo-implementation",
+    "name": "slo-implementation",
+    "description": "Define and implement Service Level Indicators (SLIs) and Service Level Objectives (SLOs) with error budgets and alerting. Use when establishing reliability targets, implementing SRE practices, or measuring service performance."
+  },
+  {
+    "id": "software-architecture",
+    "path": "software-architecture",
+    "name": "software-architecture",
+    "description": "Guide for quality focused software architecture. This skill should be used when users want to write code, design architecture, analyze code, in any case that relates to software development."
+  },
+  {
+    "id": "solidity-security",
+    "path": "solidity-security",
+    "name": "solidity-security",
+    "description": "Master smart contract security best practices to prevent common vulnerabilities and implement secure Solidity patterns. Use when writing smart contracts, auditing existing contracts, or implementing security measures for blockchain applications."
+  },
+  {
+    "id": "sql-optimization-patterns",
+    "path": "sql-optimization-patterns",
+    "name": "sql-optimization-patterns",
+    "description": "Master SQL query optimization, indexing strategies, and EXPLAIN analysis to dramatically improve database performance and eliminate slow queries. Use when debugging slow queries, designing database schemas, or optimizing application performance."
+  },
+  {
+    "id": "stable-baselines3",
+    "path": "stable-baselines3",
+    "name": "stable-baselines3",
+    "description": "Use this skill for reinforcement learning tasks including training RL agents (PPO, SAC, DQN, TD3, DDPG, A2C, etc.), creating custom Gym environments, implementing callbacks for monitoring and control, using vectorized environments for parallel training, and integrating with deep RL workflows. This skill should be used when users request RL algorithm implementation, agent training, environment design, or RL experimentation."
+  },
+  {
+    "id": "statistical-analysis",
+    "path": "statistical-analysis",
+    "name": "statistical-analysis",
+    "description": "Statistical analysis toolkit. Hypothesis tests (t-test, ANOVA, chi-square), regression, correlation, Bayesian stats, power analysis, assumption checks, APA reporting, for academic research."
+  },
+  {
+    "id": "statsmodels",
+    "path": "statsmodels",
+    "name": "statsmodels",
+    "description": "Statistical modeling toolkit. OLS, GLM, logistic, ARIMA, time series, hypothesis tests, diagnostics, AIC/BIC, for rigorous statistical inference and econometric analysis."
+  },
+  {
+    "id": "string-database",
+    "path": "string-database",
+    "name": "string-database",
+    "description": "Query STRING API for protein-protein interactions (59M proteins, 20B interactions). Network analysis, GO/KEGG enrichment, interaction discovery, 5000+ species, for systems biology."
+  },
+  {
+    "id": "stripe-integration",
+    "path": "stripe-integration",
+    "name": "stripe-integration",
+    "description": "Implement Stripe payment processing for robust, PCI-compliant payment flows including checkout, subscriptions, and webhooks. Use when integrating Stripe payments, building subscription systems, or implementing secure checkout flows."
+  },
+  {
+    "id": "subagent-driven-development",
+    "path": "subagent-driven-development",
+    "name": "subagent-driven-development",
+    "description": "Use when executing implementation plans with independent tasks in the current session"
+  },
+  {
+    "id": "sympy",
+    "path": "sympy",
+    "name": "sympy",
+    "description": "Use this skill when working with symbolic mathematics in Python. This skill should be used for symbolic computation tasks including solving equations algebraically, performing calculus operations (derivatives, integrals, limits), manipulating algebraic expressions, working with matrices symbolically, physics calculations, number theory problems, geometry computations, and generating executable code from mathematical expressions. Apply this skill when the user needs exact symbolic results rather than numerical approximations, or when working with mathematical formulas that contain variables and parameters."
+  },
+  {
+    "id": "systematic-debugging",
+    "path": "systematic-debugging",
+    "name": "systematic-debugging",
+    "description": "Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes"
+  },
+  {
+    "id": "template",
+    "path": "template",
+    "name": "template-skill",
+    "description": "Replace with description of the skill and when Claude should use it."
+  },
+  {
+    "id": "template-skill",
+    "path": "template-skill",
+    "name": "template-skill",
+    "description": "Replace with description of the skill and when Claude should use it."
+  },
+  {
+    "id": "temporal-python-testing",
+    "path": "temporal-python-testing",
+    "name": "temporal-python-testing",
+    "description": "Test Temporal workflows with pytest, time-skipping, and mocking strategies. Covers unit testing, integration testing, replay testing, and local development setup. Use when implementing Temporal workflow tests or debugging test failures."
+  },
+  {
+    "id": "terraform-module-library",
+    "path": "terraform-module-library",
+    "name": "terraform-module-library",
+    "description": "Build reusable Terraform modules for AWS, Azure, and GCP infrastructure following infrastructure-as-code best practices. Use when creating infrastructure modules, standardizing cloud provisioning, or implementing reusable IaC components."
+  },
+  {
+    "id": "test-driven-development",
+    "path": "test-driven-development",
+    "name": "test-driven-development",
+    "description": "Use when implementing any feature or bugfix, before writing implementation code"
+  },
+  {
+    "id": "test-fixing",
+    "path": "test-fixing",
+    "name": "test-fixing",
+    "description": "Run tests and systematically fix all failing tests using smart error grouping. Use when user asks to fix failing tests, mentions test failures, runs test suite and failures occur, or requests to make tests pass."
+  },
+  {
+    "id": "testing-patterns",
+    "path": "testing-patterns",
+    "name": "testing-patterns",
+    "description": "Jest testing patterns, factory functions, mocking strategies, and TDD workflow. Use when writing unit tests, creating test factories, or following TDD red-green-refactor cycle."
+  },
+  {
+    "id": "theme-factory",
+    "path": "theme-factory",
+    "name": "theme-factory",
+    "description": "Toolkit for styling artifacts with a theme. These artifacts can be slides, docs, reportings, HTML landing pages, etc. There are 10 pre-set themes with colors/fonts that you can apply to any artifact that has been creating, or can generate a new theme on-the-fly."
+  },
+  {
+    "id": "tooluniverse",
+    "path": "tooluniverse",
+    "name": "tooluniverse",
+    "description": "Use this skill when working with scientific research tools and workflows across bioinformatics, cheminformatics, genomics, structural biology, proteomics, and drug discovery. This skill provides access to 600+ scientific tools including machine learning models, datasets, APIs, and analysis packages. Use when searching for scientific tools, executing computational biology workflows, composing multi-step research pipelines, accessing databases like OpenTargets/PubChem/UniProt/PDB/ChEMBL, performing tool discovery for research tasks, or integrating scientific computational resources into LLM workflows."
+  },
+  {
+    "id": "torch_geometric",
+    "path": "torch_geometric",
+    "name": "torch-geometric",
+    "description": "Graph Neural Networks (PyG). Node/graph classification, link prediction, GCN, GAT, GraphSAGE, heterogeneous graphs, molecular property prediction, for geometric deep learning."
+  },
+  {
+    "id": "torchdrug",
+    "path": "torchdrug",
+    "name": "torchdrug",
+    "description": "Graph-based drug discovery toolkit. Molecular property prediction (ADMET), protein modeling, knowledge graph reasoning, molecular generation, retrosynthesis, GNNs (GIN, GAT, SchNet), 40+ datasets, for PyTorch-based ML on molecules, proteins, and biomedical graphs."
+  },
+  {
+    "id": "transformers",
+    "path": "transformers",
+    "name": "transformers",
+    "description": "This skill should be used when working with pre-trained transformer models for natural language processing, computer vision, audio, or multimodal tasks. Use for text generation, classification, question answering, translation, summarization, image classification, object detection, speech recognition, and fine-tuning models on custom datasets."
+  },
+  {
+    "id": "typescript-advanced-types",
+    "path": "typescript-advanced-types",
+    "name": "typescript-advanced-types",
+    "description": "Master TypeScript's advanced type system including generics, conditional types, mapped types, template literals, and utility types for building type-safe applications. Use when implementing complex type logic, creating reusable type utilities, or ensuring compile-time type safety in TypeScript projects."
+  },
+  {
+    "id": "ui-ux-pro-max",
+    "path": "ui-ux-pro-max",
+    "name": "ui-ux-pro-max",
+    "description": "UI/UX design intelligence. 50 styles, 21 palettes, 50 font pairings, 20 charts, 8 stacks (React, Next.js, Vue, Svelte, SwiftUI, React Native, Flutter, Tailwind). Actions: plan, build, create, design, implement, review, fix, improve, optimize, enhance, refactor, check UI/UX code. Projects: website, landing page, dashboard, admin panel, e-commerce, SaaS, portfolio, blog, mobile app, .html, .tsx, .vue, .svelte. Elements: button, modal, navbar, sidebar, card, table, form, chart. Styles: glassmorphism, claymorphism, minimalism, brutalism, neumorphism, bento grid, dark mode, responsive, skeuomorphism, flat design. Topics: color palette, accessibility, animation, layout, typography, font pairing, spacing, hover, shadow, gradient."
+  },
+  {
+    "id": "umap-learn",
+    "path": "umap-learn",
+    "name": "umap-learn",
+    "description": "UMAP dimensionality reduction. Fast nonlinear manifold learning for 2D/3D visualization, clustering preprocessing (HDBSCAN), supervised/parametric UMAP, for high-dimensional data."
+  },
+  {
+    "id": "uniprot-database",
+    "path": "uniprot-database",
+    "name": "uniprot-database",
+    "description": "Direct REST API access to UniProt. Protein searches, FASTA retrieval, ID mapping, Swiss-Prot/TrEMBL. For Python workflows with multiple databases, prefer bioservices (unified interface to 40+ services). Use this for direct HTTP/REST work or UniProt-specific control."
+  },
+  {
+    "id": "using-git-worktrees",
+    "path": "using-git-worktrees",
+    "name": "using-git-worktrees",
+    "description": "Use when starting feature work that needs isolation from current workspace or before executing implementation plans - creates isolated git worktrees with smart directory selection and safety verification"
+  },
+  {
+    "id": "using-superpowers",
+    "path": "using-superpowers",
+    "name": "using-superpowers",
+    "description": "Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions"
+  },
+  {
+    "id": "uspto-database",
+    "path": "uspto-database",
+    "name": "uspto-database",
+    "description": "Access USPTO APIs for patent/trademark searches, examination history (PEDS), assignments, citations, office actions, TSDR, for IP analysis and prior art searches."
+  },
+  {
+    "id": "uv-package-manager",
+    "path": "uv-package-manager",
+    "name": "uv-package-manager",
+    "description": "Master the uv package manager for fast Python dependency management, virtual environments, and modern Python project workflows. Use when setting up Python projects, managing dependencies, or optimizing Python development workflows with uv."
+  },
+  {
+    "id": "vaex",
+    "path": "vaex",
+    "name": "vaex",
+    "description": "Use this skill for processing and analyzing large tabular datasets (billions of rows) that exceed available RAM. Vaex excels at out-of-core DataFrame operations, lazy evaluation, fast aggregations, efficient visualization of big data, and machine learning on large datasets. Apply when users need to work with large CSV/HDF5/Arrow/Parquet files, perform fast statistics on massive datasets, create visualizations of big data, or build ML pipelines that don't fit in memory."
+  },
+  {
+    "id": "react-best-practices",
+    "path": "react-best-practices",
+    "name": "vercel-react-best-practices",
+    "description": "React and Next.js performance optimization guidelines from Vercel Engineering. This skill should be used when writing, reviewing, or refactoring React/Next.js code to ensure optimal performance patterns. Triggers on tasks involving React components, Next.js pages, data fetching, bundle optimization, or performance improvements."
+  },
+  {
+    "id": "verification-before-completion",
+    "path": "verification-before-completion",
+    "name": "verification-before-completion",
+    "description": "Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertions always"
+  },
+  {
+    "id": "video-downloader",
+    "path": "video-downloader",
+    "name": "video-downloader",
+    "description": "Downloads videos from YouTube and other platforms for offline viewing, editing, or archival. Handles various formats and quality options."
+  },
+  {
+    "id": "web-artifacts-builder",
+    "path": "web-artifacts-builder",
+    "name": "web-artifacts-builder",
+    "description": "Suite of tools for creating elaborate, multi-component claude.ai HTML artifacts using modern frontend web technologies (React, Tailwind CSS, shadcn/ui). Use for complex artifacts requiring state management, routing, or shadcn/ui components - not for simple single-file HTML/JSX artifacts."
+  },
+  {
+    "id": "web-design-guidelines",
+    "path": "web-design-guidelines",
+    "name": "web-design-guidelines",
+    "description": "Review UI code for Web Interface Guidelines compliance. Use when asked to \"review my UI\", \"check accessibility\", \"audit design\", \"review UX\", or \"check my site against best practices\"."
+  },
+  {
+    "id": "web3-testing",
+    "path": "web3-testing",
+    "name": "web3-testing",
+    "description": "Test smart contracts comprehensively using Hardhat and Foundry with unit tests, integration tests, and mainnet forking. Use when testing Solidity contracts, setting up blockchain test suites, or validating DeFi protocols."
+  },
+  {
+    "id": "webapp-testing",
+    "path": "webapp-testing",
+    "name": "webapp-testing",
+    "description": "Toolkit for interacting with and testing local web applications using Playwright. Supports verifying frontend functionality, debugging UI behavior, capturing browser screenshots, and viewing browser logs."
+  },
+  {
+    "id": "workflow-orchestration-patterns",
+    "path": "workflow-orchestration-patterns",
+    "name": "workflow-orchestration-patterns",
+    "description": "Design durable workflows with Temporal for distributed systems. Covers workflow vs activity separation, saga patterns, state management, and determinism constraints. Use when building long-running processes, distributed transactions, or microservice orchestration."
+  },
+  {
+    "id": "writing-plans",
+    "path": "writing-plans",
+    "name": "writing-plans",
+    "description": "Use when you have a spec or requirements for a multi-step task, before touching code"
+  },
+  {
+    "id": "writing-skills",
+    "path": "writing-skills",
+    "name": "writing-skills",
+    "description": "Use when creating new skills, editing existing skills, or verifying skills work before deployment"
+  },
+  {
+    "id": "xlsx-official",
+    "path": "xlsx-official",
+    "name": "xlsx",
+    "description": "Comprehensive spreadsheet creation, editing, and analysis with support for formulas, formatting, data analysis, and visualization. When Claude needs to work with spreadsheets (.xlsx, .xlsm, .csv, .tsv, etc) for: (1) Creating new spreadsheets with formulas and formatting, (2) Reading or analyzing data, (3) Modify existing spreadsheets while preserving formulas, (4) Data analysis and visualization in spreadsheets, or (5) Recalculating formulas"
+  },
+  {
+    "id": "zarr-python",
+    "path": "zarr-python",
+    "name": "zarr-python",
+    "description": "Chunked N-D arrays for cloud storage. Compressed arrays, parallel I/O, S3/GCS integration, NumPy/Dask/Xarray compatible, for large-scale scientific computing pipelines."
+  },
+  {
+    "id": "zinc-database",
+    "path": "zinc-database",
+    "name": "zinc-database",
+    "description": "Access ZINC (230M+ purchasable compounds). Search by ZINC ID/SMILES, similarity searches, 3D-ready structures for docking, analog discovery, for virtual screening and drug discovery."
+  }
+]
