@@ -42,10 +42,7 @@ impl Extractor {
             }
 
             let tri = from_bytes(data[i], data[i + 1], data[i + 2]);
-            self.trigram_offsets
-                .entry(tri)
-                .or_default()
-                .push(i as u32);
+            self.trigram_offsets.entry(tri).or_default().push(i as u32);
         }
 
         &self.trigram_offsets

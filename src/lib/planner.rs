@@ -2,9 +2,9 @@
 //!
 //! Decomposes regex patterns into required trigram sets.
 
+use crate::trigram::{Extractor, Trigram};
 use regex::Regex;
 use regex_syntax::hir::{Hir, HirKind};
-use crate::trigram::{Trigram, Extractor};
 
 #[derive(Debug)]
 pub enum QueryPlan {
@@ -13,17 +13,15 @@ pub enum QueryPlan {
         pattern: Vec<u8>,
         trigrams: Vec<Trigram>,
     },
-    
+
     /// Regex with extractable literals
     RegexWithLiterals {
         regex: Regex,
         required_trigram_sets: Vec<Vec<Trigram>>,
     },
-    
+
     /// No literals extractable — full scan fallback
-    FullScan {
-        regex: Regex,
-    },
+    FullScan { regex: Regex },
 }
 
 pub struct Planner;
@@ -33,23 +31,27 @@ impl Planner {
         if !is_regex {
             let bytes = pattern.as_bytes().to_vec();
             let trigrams = Extractor::extract_set(&bytes);
-            
+
             if trigrams.is_empty() {
                 // Pattern too short for trigrams (< 3 bytes)
                 return QueryPlan::FullScan {
                     regex: Regex::new(&regex::escape(pattern)).unwrap(),
                 };
             }
-            
+
             return QueryPlan::Literal {
                 pattern: bytes,
                 trigrams,
             };
         }
-        
+
         let regex = match Regex::new(pattern) {
             Ok(r) => r,
-            Err(_) => return QueryPlan::FullScan { regex: Regex::new("").unwrap() }, // Should be handled by CLI
+            Err(_) => {
+                return QueryPlan::FullScan {
+                    regex: Regex::new("").unwrap(),
+                };
+            } // Should be handled by CLI
         };
 
         let hir = match regex_syntax::parse(pattern) {

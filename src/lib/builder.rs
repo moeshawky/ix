@@ -4,19 +4,19 @@
 //! Phase 2: Scan (mmap, check binary, extract trigrams, bloom filter)
 //! Phase 3: Serialize (write sections, compute CRCs, atomic rename)
 
-use std::fs::{self, File};
-use std::io::{BufWriter, Write, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use std::collections::HashMap;
-use memmap2::Mmap;
-use ignore::WalkBuilder;
+use crate::bloom::BloomFilter;
 use crate::error::{Error, Result};
 use crate::format::*;
-use crate::trigram::{Trigram, Extractor};
-use crate::bloom::BloomFilter;
-use crate::posting::{PostingList, PostingEntry};
+use crate::posting::{PostingEntry, PostingList};
 use crate::string_pool::StringPool;
+use crate::trigram::{Extractor, Trigram};
+use ignore::WalkBuilder;
+use memmap2::Mmap;
+use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{BufWriter, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub struct Builder {
     root: PathBuf,
@@ -62,10 +62,10 @@ impl Builder {
 
     pub fn build(&mut self) -> Result<PathBuf> {
         let start = Instant::now();
-        
+
         // 1. Discovery
         let file_paths = self.discover_files()?;
-        
+
         // 2. Scan & Extract
         let mut next_id = 0u32;
         for path in file_paths {
@@ -73,12 +73,12 @@ impl Builder {
                 next_id += 1;
             }
         }
-        
+
         // 3. Serialize
         let output_path = self.serialize()?;
-        
+
         tracing::info!("Build completed in {:?}: {:?}", start.elapsed(), self.stats);
-        
+
         Ok(output_path)
     }
 
@@ -102,9 +102,14 @@ impl Builder {
     fn process_file(&mut self, file_id: u32, path: PathBuf) -> Result<bool> {
         let metadata = fs::metadata(&path)?;
         let size = metadata.len();
-        let mtime = metadata.modified()?.duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
+        let mtime = metadata
+            .modified()?
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
 
-        if size > 100 * 1024 * 1024 { // 100MB limit
+        if size > 100 * 1024 * 1024 {
+            // 100MB limit
             self.stats.files_skipped_size += 1;
             return Ok(false);
         }
@@ -148,7 +153,7 @@ impl Builder {
         self.bloom_filters.push(bloom);
         self.stats.files_scanned += 1;
         self.stats.bytes_scanned += size;
-        
+
         Ok(true)
     }
 
@@ -159,7 +164,7 @@ impl Builder {
         let final_path = ix_dir.join("shard.ix");
 
         let mut f = BufWriter::new(File::create(&tmp_path)?);
-        
+
         // Placeholder for header
         f.write_all(&[0u8; HEADER_SIZE])?;
 
@@ -190,13 +195,15 @@ impl Builder {
         self.align_to_8(&mut f)?;
         let posting_data_offset = f.stream_position()?;
         let mut posting_infos = HashMap::new();
-        
+
         let mut sorted_trigrams: Vec<Trigram> = self.postings.keys().cloned().collect();
         sorted_trigrams.sort_unstable();
 
         for &tri in &sorted_trigrams {
             let entries = &self.postings[&tri];
-            let list = PostingList { entries: entries.clone() };
+            let list = PostingList {
+                entries: entries.clone(),
+            };
             let encoded = list.encode();
             let offset = f.stream_position()? - posting_data_offset;
             f.write_all(&encoded)?;
@@ -250,12 +257,16 @@ impl Builder {
         }
 
         // Finalize Header
-        let created_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
+        let created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
         let mut header_bytes = [0u8; HEADER_SIZE];
         header_bytes[0..4].copy_from_slice(&MAGIC);
         header_bytes[0x04..0x06].copy_from_slice(&VERSION_MAJOR.to_le_bytes());
         header_bytes[0x06..0x08].copy_from_slice(&VERSION_MINOR.to_le_bytes());
-        header_bytes[0x08..0x10].copy_from_slice(&(flags::HAS_BLOOM_FILTERS | flags::HAS_CONTENT_HASHES).to_le_bytes());
+        header_bytes[0x08..0x10]
+            .copy_from_slice(&(flags::HAS_BLOOM_FILTERS | flags::HAS_CONTENT_HASHES).to_le_bytes());
         header_bytes[0x10..0x18].copy_from_slice(&created_at.to_le_bytes());
         header_bytes[0x18..0x20].copy_from_slice(&self.stats.bytes_scanned.to_le_bytes());
         header_bytes[0x20..0x24].copy_from_slice(&(self.files.len() as u32).to_le_bytes());

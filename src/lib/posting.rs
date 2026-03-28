@@ -2,8 +2,8 @@
 //!
 //! Compact representation of (file_id, [offsets]) for a single trigram.
 
-use crate::varint;
 use crate::error::Result;
+use crate::varint;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostingList {

@@ -5,16 +5,20 @@
 //!   ix --build [path]
 //!   ix --regex "pattern" [path]
 
-use std::path::{Path, PathBuf};
 use clap::Parser;
 use ix::builder::Builder;
-use ix::reader::Reader;
 use ix::executor::Executor;
 use ix::planner::Planner;
+use ix::reader::Reader;
 use ix::scanner::Scanner;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
-#[command(name = "ix", version = "0.1.0", about = "Trigram code search — the grep replacement")]
+#[command(
+    name = "ix",
+    version = "0.1.0",
+    about = "Trigram code search — the grep replacement"
+)]
 struct Cli {
     /// Search pattern
     pattern: Option<String>,
@@ -75,27 +79,39 @@ fn do_build(path: &Path) -> ix::error::Result<()> {
 
 fn do_search(pattern: &str, path: &Path, is_regex: bool, no_index: bool) -> ix::error::Result<()> {
     let index_path = path.join(".ix/shard.ix");
-    
+
     if !no_index && index_path.exists() {
         let reader = Reader::open(&index_path)?;
         let plan = Planner::plan(pattern, is_regex);
         let executor = Executor::new(&reader);
-        
+
         let (matches, stats) = executor.execute(&plan)?;
-        
+
         for m in matches {
-            println!("{}:{}:{}:{}", m.file_path.display(), m.line_number, m.byte_offset, m.line_content);
+            println!(
+                "{}:{}:{}:{}",
+                m.file_path.display(),
+                m.line_number,
+                m.byte_offset,
+                m.line_content
+            );
         }
-        
+
         tracing::debug!("Search stats: {:?}", stats);
     } else {
         let scanner = Scanner::new(path);
         let matches = scanner.scan(pattern, is_regex)?;
-        
+
         for m in matches {
-            println!("{}:{}:{}:{}", m.file_path.display(), m.line_number, m.byte_offset, m.line_content);
+            println!(
+                "{}:{}:{}:{}",
+                m.file_path.display(),
+                m.line_number,
+                m.byte_offset,
+                m.line_content
+            );
         }
     }
-    
+
     Ok(())
 }

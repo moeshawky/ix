@@ -3,10 +3,10 @@
 //! 256 bytes bitset, 5 hashes, FPR ≈ 0.7% for 200 unique trigrams.
 //! Eliminates candidate files before decoding posting lists.
 
+use crate::trigram::Trigram;
+use std::hash::Hasher;
 use std::io::Write;
 use xxhash_rust::xxh64::Xxh64;
-use std::hash::Hasher;
-use crate::trigram::Trigram;
 
 pub struct BloomFilter {
     pub size: u16,

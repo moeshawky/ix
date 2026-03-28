@@ -105,10 +105,7 @@ impl Header {
         let major = r16(0x04);
         let minor = r16(0x06);
         if major != VERSION_MAJOR {
-            return Err(crate::error::Error::UnsupportedVersion {
-                major,
-                minor,
-            });
+            return Err(crate::error::Error::UnsupportedVersion { major, minor });
         }
 
         // Validate CRC32C of header (bytes 0x00..0xF8)
@@ -159,12 +156,24 @@ impl Header {
             }
         };
         check("file_table", self.file_table_offset, self.file_table_size)?;
-        check("trigram_table", self.trigram_table_offset, self.trigram_table_size)?;
-        check("posting_data", self.posting_data_offset, self.posting_data_size)?;
+        check(
+            "trigram_table",
+            self.trigram_table_offset,
+            self.trigram_table_size,
+        )?;
+        check(
+            "posting_data",
+            self.posting_data_offset,
+            self.posting_data_size,
+        )?;
         if self.bloom_size > 0 {
             check("bloom", self.bloom_offset, self.bloom_size)?;
         }
-        check("string_pool", self.string_pool_offset, self.string_pool_size)?;
+        check(
+            "string_pool",
+            self.string_pool_offset,
+            self.string_pool_size,
+        )?;
         if self.name_index_size > 0 {
             check("name_index", self.name_index_offset, self.name_index_size)?;
         }

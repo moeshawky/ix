@@ -1,12 +1,12 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use std::fs;
-use tempfile::tempdir;
-use ix::trigram::Extractor;
-use ix::posting::{PostingList, PostingEntry};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use ix::builder::Builder;
-use ix::reader::Reader;
 use ix::executor::Executor;
 use ix::planner::Planner;
+use ix::posting::{PostingEntry, PostingList};
+use ix::reader::Reader;
+use ix::trigram::Extractor;
+use std::fs;
+use tempfile::tempdir;
 
 fn bench_trigram_extraction(c: &mut Criterion) {
     let mut extractor = Extractor::new();
@@ -62,5 +62,10 @@ fn bench_search(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_trigram_extraction, bench_posting_decode, bench_search);
+criterion_group!(
+    benches,
+    bench_trigram_extraction,
+    bench_posting_decode,
+    bench_search
+);
 criterion_main!(benches);

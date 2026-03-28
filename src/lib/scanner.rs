@@ -2,13 +2,13 @@
 //!
 //! Used when .ix index is missing or explicitly disabled.
 
-use std::fs::File;
-use std::path::{Path, PathBuf};
-use memmap2::Mmap;
-use regex::Regex;
-use ignore::WalkBuilder;
 use crate::error::Result;
 use crate::executor::Match;
+use ignore::WalkBuilder;
+use memmap2::Mmap;
+use regex::Regex;
+use std::fs::File;
+use std::path::{Path, PathBuf};
 
 pub struct Scanner {
     root: PathBuf,
@@ -16,7 +16,9 @@ pub struct Scanner {
 
 impl Scanner {
     pub fn new(root: &Path) -> Self {
-        Self { root: root.to_owned() }
+        Self {
+            root: root.to_owned(),
+        }
     }
 
     pub fn scan(&self, pattern: &str, is_regex: bool) -> Result<Vec<Match>> {
@@ -57,7 +59,7 @@ impl Scanner {
         }
 
         let mmap = unsafe { Mmap::map(&file)? };
-        
+
         // Binary check
         let check_len = mmap.len().min(8192);
         if mmap[..check_len].contains(&0u8) {
