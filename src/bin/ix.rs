@@ -17,15 +17,17 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "ix",
     version = "0.1.0",
-    about = "ix: High-performance, byte-level code search using a trigram index.",
-    after_help = "LLM AGENT USAGE:
-    Quick count:     ix -c \"pattern\"              → \"14\"
-    Find files:      ix -l \"pattern\"              → file paths
-    With context:    ix -C 3 \"pattern\"            → ±3 lines around matches
-    Rust files only: ix -t rs \"pattern\"           → only .rs files
-    JSON output:     ix --json \"pattern\"          → machine-parseable
-    Safe default:    ix \"pattern\"                 → max 100 results
-    All results:     ix -n 0 \"pattern\"            → unlimited
+    about = "Trigram-indexed code search for developers and AI agents. Optimized for sub-millisecond retrieval and context-aware extraction.",
+    after_help = "AGENTIC RETRIEVAL (UTCP Schema):
+    Existence check:  ix -c \"pattern\"    → Single integer (count)
+    Location:         ix -l \"pattern\"    → Unique file paths
+    Contextual:       ix -C 3 \"pattern\"  → ±3 lines around match
+    Structured:       ix --json \"pattern\" → JSON Lines output
+    Deterministic:    ix --fresh \"pattern\" → Force rebuild + search
+
+CONSTRAINTS:
+    - Max results default to 100 to prevent context flooding (use -n 0 for unlimited).
+    - Index stored in .ix/shard.ix relative to search path.
 
 EXAMPLES:
     Index the current directory:
@@ -57,15 +59,15 @@ struct Cli {
     #[arg(short, long)]
     regex: bool,
 
-    /// Perform a case-insensitive search (currently only for non-indexed scans).
+    /// Perform a case-insensitive search (non-indexed scans only).
     #[arg(short, long)]
     ignore_case: bool,
 
-    /// Output results as JSON Lines.
+    /// Output results as JSON Lines (Schema: {file, line, col, content, byte_offset, context_before, context_after}).
     #[arg(long)]
     json: bool,
 
-    /// Print search statistics to stderr.
+    /// Print search performance statistics to stderr.
     #[arg(long)]
     stats: bool,
 
@@ -73,7 +75,7 @@ struct Cli {
     #[arg(short, long)]
     count: bool,
 
-    /// Print only the unique file paths of matching files.
+    /// Print only unique file paths of matching files.
     #[arg(short = 'l', long)]
     files_only: bool,
 
@@ -81,19 +83,19 @@ struct Cli {
     #[arg(short = 'C', long, default_value = "0")]
     context: usize,
 
-    /// Stop after N results (0 for unlimited).
+    /// Stop after N results (0 for unlimited). Default: 100.
     #[arg(short = 'n', long, default_value = "100")]
     max_results: usize,
 
-    /// Only search files with these extensions (e.g. rs, py, ts).
+    /// Filter by file extensions (e.g. rs, py, ts).
     #[arg(short = 't', long = "type")]
     file_types: Vec<String>,
 
-    /// Force a full file-system scan, ignoring any existing .ix index.
+    /// Force full file-system scan, bypassing any existing .ix index.
     #[arg(long)]
     no_index: bool,
 
-    /// Rebuild index before searching (equivalent to --build then search).
+    /// Rebuild index before searching (ensures data freshness).
     #[arg(long)]
     fresh: bool,
 }

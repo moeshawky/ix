@@ -2,6 +2,7 @@
 //!
 //! Keeps the index fresh when the system is idle.
 
+use clap::Parser;
 use ix::builder::Builder;
 use ix::idle::{DaemonState, IdleTracker};
 use ix::watcher::Watcher;
@@ -10,11 +11,23 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+#[derive(Parser)]
+#[command(
+    name = "ixd",
+    version = "0.1.0",
+    about = "ix background daemon. Automatically maintains a fresh trigram index.",
+    after_help = "The daemon monitors the filesystem for changes and incrementally updates the index. 
+It enters a dormant state after 30 minutes of inactivity to conserve resources."
+)]
+struct Cli {
+    /// The directory to watch and index.
+    #[arg(default_value = ".", value_name = "PATH")]
+    path: PathBuf,
+}
+
 fn main() -> ix::error::Result<()> {
-    let root = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
-    let root = PathBuf::from(root)
-        .canonicalize()
-        .map_err(ix::error::Error::Io)?;
+    let cli = Cli::parse();
+    let root = cli.path.canonicalize().map_err(ix::error::Error::Io)?;
 
     println!("ixd: watching {}...", root.display());
 

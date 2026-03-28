@@ -4,3 +4,4 @@
 *.ix.tmp
 Cargo.lock
 .gemini/
+docs/guidelines/
