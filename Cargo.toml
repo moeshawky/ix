@@ -9,8 +9,11 @@ readme = "README.md"
 keywords = ["search", "grep", "trigram", "code", "index"]
 categories = ["command-line-utilities", "development-tools", "text-processing"]
 
+[workspace]
+members = ["."]
+
 # Config for 'cargo dist'
-[package.metadata.dist]
+[workspace.metadata.dist]
 # The preferred cargo-dist version to use in CI (checked by infra)
 cargo-dist-version = "0.14.1"
 # CI backends to support
@@ -23,6 +26,8 @@ targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-apple-dar
 publish-jobs = ["homebrew"]
 # Whether to install an updater binary
 install-updater = true
+# Repository to release to
+repository = "https://github.com/moeshawky/ix"
 
 [[bin]]
 name = "ix"
