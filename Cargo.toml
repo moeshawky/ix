@@ -4,10 +4,25 @@ version = "0.1.0"
 edition = "2024"
 description = "Trigram code search — the grep replacement"
 license = "MIT"
-repository = "https://github.com/moesw/ix"
+repository = "https://github.com/moeshawky/ix"
 readme = "README.md"
 keywords = ["search", "grep", "trigram", "code", "index"]
 categories = ["command-line-utilities", "development-tools", "text-processing"]
+
+# Config for 'cargo dist'
+[package.metadata.dist]
+# The preferred cargo-dist version to use in CI (checked by infra)
+cargo-dist-version = "0.14.1"
+# CI backends to support
+ci = ["github"]
+# The installers to generate for each release
+installers = ["shell", "powershell"]
+# Target platforms to build binaries for (multi-platform support)
+targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc"]
+# Publish jobs to run in CI
+publish-jobs = ["homebrew"]
+# Whether to install an updater binary
+install-updater = true
 
 [[bin]]
 name = "ix"

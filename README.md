@@ -29,8 +29,15 @@
 ## Getting Started
 
 ### Installation
+
+#### From Source
 ```bash
 cargo install --path .
+```
+
+#### Pre-built Binaries (Linux & macOS)
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/moeshawky/ix/releases/latest/download/ix-installer.sh | sh
 ```
 
 ### Initializing the Index
