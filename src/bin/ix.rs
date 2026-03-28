@@ -92,6 +92,10 @@ struct Cli {
     /// Force a full file-system scan, ignoring any existing .ix index.
     #[arg(long)]
     no_index: bool,
+
+    /// Rebuild index before searching (equivalent to --build then search).
+    #[arg(long)]
+    fresh: bool,
 }
 
 struct SearchParams<'a> {
@@ -99,6 +103,7 @@ struct SearchParams<'a> {
     path: &'a Path,
     is_regex: bool,
     no_index: bool,
+    fresh: bool,
     json: bool,
     stats_flag: bool,
     count_flag: bool,
@@ -132,6 +137,7 @@ fn main() {
         path: &cli.path,
         is_regex: cli.regex,
         no_index: cli.no_index,
+        fresh: cli.fresh,
         json: cli.json,
         stats_flag: cli.stats,
         count_flag: cli.count,
@@ -170,6 +176,11 @@ fn truncate_safe(s: &mut String, max_bytes: usize) {
 
 fn do_search(params: SearchParams) -> ix::error::Result<()> {
     let index_path = params.path.join(".ix/shard.ix");
+
+    if params.fresh {
+        do_build(params.path)?;
+    }
+
     let start_time = std::time::Instant::now();
 
     // Map shorthand types to actual extensions
@@ -212,6 +223,30 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
 
     let (matches, stats) = if !params.no_index && index_path.exists() {
         let reader = Reader::open(&index_path)?;
+
+        // Staleness check
+        let last_mod = Reader::get_last_modified(params.path)?;
+        if last_mod > reader.header.created_at {
+            let last_built_secs = (reader.header.created_at / 1_000_000) as i64;
+            let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
+            unsafe {
+                libc::localtime_r(&last_built_secs, &mut tm);
+            }
+            let time_str = format!(
+                "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+                tm.tm_year + 1900,
+                tm.tm_mon + 1,
+                tm.tm_mday,
+                tm.tm_hour,
+                tm.tm_min,
+                tm.tm_sec
+            );
+            eprintln!(
+                "ix: index is stale (last built: {}). Run 'ix --build' to update.",
+                time_str
+            );
+        }
+
         let plan = Planner::plan(params.pattern, params.is_regex);
         let executor = Executor::new(&reader);
         executor.execute(&plan, &options)?
@@ -321,7 +356,12 @@ fn print_match(
             for (i, line) in m.context_before.iter().enumerate() {
                 let line_num = (m.line_number as usize - m.context_before.len() + i) as u32;
                 if !printed_lines.contains(&line_num) {
-                    println!("{}:{}:- :{}", m.file_path.display(), line_num, truncate(line));
+                    println!(
+                        "{}:{}:- :{}",
+                        m.file_path.display(),
+                        line_num,
+                        truncate(line)
+                    );
                     printed_lines.insert(line_num);
                 }
             }
@@ -342,7 +382,12 @@ fn print_match(
             for (i, line) in m.context_after.iter().enumerate() {
                 let line_num = (m.line_number as usize + 1 + i) as u32;
                 if !printed_lines.contains(&line_num) {
-                    println!("{}:{}:- :{}", m.file_path.display(), line_num, truncate(line));
+                    println!(
+                        "{}:{}:- :{}",
+                        m.file_path.display(),
+                        line_num,
+                        truncate(line)
+                    );
                     printed_lines.insert(line_num);
                 }
             }

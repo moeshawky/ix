@@ -139,9 +139,12 @@ impl<'a> Executor<'a> {
 
             stats.files_verified += 1;
             stats.bytes_verified += file_info.size_bytes;
-            if let Ok(file_matches) =
-                self.verify_file(&file_info, &regex, options.count_only, options.context_lines)
-            {
+            if let Ok(file_matches) = self.verify_file(
+                &file_info,
+                &regex,
+                options.count_only,
+                options.context_lines,
+            ) {
                 if options.count_only {
                     stats.total_matches += file_matches.len() as u32;
                 } else {

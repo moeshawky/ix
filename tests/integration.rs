@@ -11,8 +11,16 @@ fn integration_search_literal() {
     let root = dir.path();
 
     // Create test files
-    fs::write(root.join("test1.txt"), "hello world\nthis is a test\nix search tool").unwrap();
-    fs::write(root.join("test2.txt"), "another file\nwith different content\nhello again").unwrap();
+    fs::write(
+        root.join("test1.txt"),
+        "hello world\nthis is a test\nix search tool",
+    )
+    .unwrap();
+    fs::write(
+        root.join("test2.txt"),
+        "another file\nwith different content\nhello again",
+    )
+    .unwrap();
     fs::write(root.join("binary.dat"), b"some data\0with null byte").unwrap();
 
     // Build index
@@ -37,7 +45,11 @@ fn integration_search_regex() {
     let dir = tempdir().unwrap();
     let root = dir.path();
 
-    fs::write(root.join("code.rs"), "fn main() {\n    let x = 42;\n    println!(\"{}\", x);\n}").unwrap();
+    fs::write(
+        root.join("code.rs"),
+        "fn main() {\n    let x = 42;\n    println!(\"{}\", x);\n}",
+    )
+    .unwrap();
 
     let mut builder = Builder::new(root);
     builder.build().unwrap();

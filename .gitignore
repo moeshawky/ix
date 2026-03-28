@@ -3,3 +3,4 @@
 *.ix
 *.ix.tmp
 Cargo.lock
+.gemini/

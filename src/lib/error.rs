@@ -45,6 +45,9 @@ pub enum Error {
     #[error("regex: {0}")]
     Regex(#[from] regex::Error),
 
+    #[error("watcher: {0}")]
+    Watcher(#[from] notify::Error),
+
     #[error("config: {0}")]
     Config(String),
 }

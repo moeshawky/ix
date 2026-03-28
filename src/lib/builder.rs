@@ -23,7 +23,6 @@ pub struct Builder {
     files: Vec<FileRecord>,
     postings: HashMap<Trigram, Vec<PostingEntry>>,
     string_pool: StringPool,
-    bloom_filters: Vec<BloomFilter>,
     extractor: Extractor,
     stats: BuildStats,
 }
@@ -36,6 +35,8 @@ pub struct FileRecord {
     pub content_hash: u64,
     pub trigram_count: u32,
     pub is_binary: bool,
+    pub trigrams: HashMap<Trigram, Vec<u32>>,
+    pub bloom: BloomFilter,
 }
 
 #[derive(Default, Debug)]
@@ -54,7 +55,6 @@ impl Builder {
             files: Vec::new(),
             postings: HashMap::new(),
             string_pool: StringPool::new(),
-            bloom_filters: Vec::new(),
             extractor: Extractor::new(),
             stats: BuildStats::default(),
         }
@@ -82,9 +82,76 @@ impl Builder {
         Ok(output_path)
     }
 
+    pub fn update(&mut self, changed_files: &[PathBuf]) -> Result<PathBuf> {
+        let start = Instant::now();
+
+        if self.files.is_empty() {
+            return self.build();
+        }
+
+        let changed_set: std::collections::HashSet<_> = changed_files.iter().collect();
+
+        let old_files = std::mem::take(&mut self.files);
+        self.postings = HashMap::new();
+        self.string_pool = StringPool::new();
+
+        let mut next_id = 0u32;
+        for mut record in old_files {
+            if changed_set.contains(&record.path) {
+                // Modified
+                if self.process_file(next_id, record.path.clone())? {
+                    next_id += 1;
+                }
+            } else if record.path.exists() {
+                // Unchanged - reuse trigrams and bloom
+                self.string_pool.add_path(&record.path);
+                for (&tri, offsets) in &record.trigrams {
+                    self.postings.entry(tri).or_default().push(PostingEntry {
+                        file_id: next_id,
+                        offsets: offsets.clone(),
+                    });
+                }
+                record.file_id = next_id;
+                self.files.push(record);
+                next_id += 1;
+            }
+            // Deleted files are simply not added back to self.files
+        }
+
+        // Handle brand new files
+        let mut to_add = Vec::new();
+        {
+            let existing_paths: std::collections::HashSet<_> =
+                self.files.iter().map(|f| &f.path).collect();
+            for path in changed_files {
+                if !existing_paths.contains(path) && path.exists() {
+                    to_add.push(path.clone());
+                }
+            }
+        }
+
+        for path in to_add {
+            if self.process_file(next_id, path)? {
+                next_id += 1;
+            }
+        }
+
+        let output_path = self.serialize()?;
+        tracing::info!("Incremental update completed in {:?}", start.elapsed());
+        Ok(output_path)
+    }
+
+    pub fn files_len(&self) -> usize {
+        self.files.len()
+    }
+
+    pub fn trigrams_len(&self) -> usize {
+        self.postings.len()
+    }
+
     fn discover_files(&mut self) -> Result<Vec<PathBuf>> {
         let mut paths = Vec::new();
-        
+
         let walker = WalkBuilder::new(&self.root)
             .hidden(false)
             .git_ignore(true)
@@ -95,7 +162,8 @@ impl Builder {
                 // Explicitly skip high-volume non-source directories
                 if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    if name == "target" || name == ".git" || name == "node_modules" || name == ".ix" {
+                    if name == "target" || name == ".git" || name == "node_modules" || name == ".ix"
+                    {
                         return false;
                     }
                 }
@@ -139,13 +207,13 @@ impl Builder {
         }
 
         let content_hash = xxhash_rust::xxh64::xxh64(data, 0);
-        let trigrams = self.extractor.extract_with_offsets(data);
+        let trigrams = self.extractor.extract_with_offsets(data).clone();
         let trigram_count = trigrams.len() as u32;
 
         self.string_pool.add_path(&path);
 
         let mut bloom = BloomFilter::new(256, 5);
-        for (&tri, offsets) in trigrams {
+        for (&tri, offsets) in &trigrams {
             bloom.insert(tri);
             self.postings.entry(tri).or_default().push(PostingEntry {
                 file_id,
@@ -161,9 +229,10 @@ impl Builder {
             content_hash,
             trigram_count,
             is_binary: false,
+            trigrams,
+            bloom,
         });
 
-        self.bloom_filters.push(bloom);
         self.stats.files_scanned += 1;
         self.stats.bytes_scanned += size;
 
@@ -243,10 +312,10 @@ impl Builder {
         self.align_to_8(&mut f)?;
         let bloom_offset = f.stream_position()?;
         let mut bloom_relative_offsets = Vec::new();
-        for bloom in &self.bloom_filters {
+        for record in &self.files {
             let rel_off = (f.stream_position()? - bloom_offset) as u32;
             bloom_relative_offsets.push(rel_off);
-            bloom.serialize(&mut f)?;
+            record.bloom.serialize(&mut f)?;
         }
         let bloom_size = f.stream_position()? - bloom_offset;
 

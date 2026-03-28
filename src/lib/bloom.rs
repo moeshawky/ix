@@ -8,6 +8,7 @@ use std::hash::Hasher;
 use std::io::Write;
 use xxhash_rust::xxh64::Xxh64;
 
+#[derive(Clone)]
 pub struct BloomFilter {
     pub size: u16,
     pub num_hashes: u8,

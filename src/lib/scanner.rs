@@ -59,9 +59,12 @@ impl Scanner {
                     }
                 }
 
-                if let Ok(file_matches) =
-                    self.scan_file(entry.path(), &regex, options.count_only, options.context_lines)
-                {
+                if let Ok(file_matches) = self.scan_file(
+                    entry.path(),
+                    &regex,
+                    options.count_only,
+                    options.context_lines,
+                ) {
                     if options.count_only {
                         matches.extend(file_matches);
                     } else {
