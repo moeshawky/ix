@@ -458,6 +458,17 @@ impl<'a> Executor<'a> {
         (non_printable as f32 / check_len as f32) > 0.3
     }
 
+    /// Exposed for integration testing of the streaming logic.
+    pub fn verify_stream_for_test<R: Read>(
+        &self,
+        reader: R,
+        path: PathBuf,
+        regex: &Regex,
+        options: &QueryOptions,
+    ) -> Result<Vec<Match>> {
+        self.verify_stream(reader, path, regex, options)
+    }
+
     fn verify_stream<R: Read>(
         &self,
         reader: R,
