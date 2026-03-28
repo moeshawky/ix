@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use tempfile::tempdir;
 use ix::reader::Reader;
 use ix::format::*;

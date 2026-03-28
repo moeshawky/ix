@@ -250,30 +250,31 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
         }
     } else {
         let mut last_file = PathBuf::new();
-        let mut last_line = 0;
+        let mut printed_lines = std::collections::HashSet::new();
 
         for m in &matches {
-            if options.context_lines > 0 && !params.json {
-                if m.file_path != last_file {
-                    if !last_file.as_os_str().is_empty() {
-                        println!("--");
-                    }
-                } else if m.line_number > last_line + 1 {
+            if m.file_path != last_file {
+                if options.context_lines > 0 && !params.json && !last_file.as_os_str().is_empty() {
+                    println!("--");
+                }
+                printed_lines.clear();
+                last_file = m.file_path.clone();
+            } else if options.context_lines > 0 && !params.json {
+                // Check if there is a gap between this match's context and previous printed lines
+                let match_start = (m.line_number as usize).saturating_sub(options.context_lines);
+                let prev_end = printed_lines.iter().max().copied().unwrap_or(0) as usize;
+                if match_start > prev_end + 1 && prev_end > 0 {
                     println!("--");
                 }
             }
 
-            print_match(m, params.json, options.context_lines);
-
-            last_file = m.file_path.clone();
-            last_line = m.line_number + m.context_after.len() as u32;
+            print_match(m, params.json, options.context_lines, &mut printed_lines);
         }
 
         if options.max_results > 0 && stats.total_matches >= options.max_results as u32 {
             eprintln!(
-                "ix: showing {} of {}+ matches (use -n 0 for all)",
-                matches.len(),
-                stats.total_matches
+                "ix: output capped at {} results (use -n 0 for all)",
+                options.max_results
             );
         }
     }
@@ -285,7 +286,12 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
     Ok(())
 }
 
-fn print_match(m: &ix::executor::Match, json: bool, context: usize) {
+fn print_match(
+    m: &ix::executor::Match,
+    json: bool,
+    context: usize,
+    printed_lines: &mut std::collections::HashSet<u32>,
+) {
     let truncate = |s: &str| -> String {
         let mut string = s.to_string();
         if string.len() > 200 {
@@ -313,23 +319,32 @@ fn print_match(m: &ix::executor::Match, json: bool, context: usize) {
     } else {
         if context > 0 {
             for (i, line) in m.context_before.iter().enumerate() {
-                let line_num = m.line_number as usize - m.context_before.len() + i;
-                println!("{}:{}:- :{}", m.file_path.display(), line_num, truncate(line));
+                let line_num = (m.line_number as usize - m.context_before.len() + i) as u32;
+                if !printed_lines.contains(&line_num) {
+                    println!("{}:{}:- :{}", m.file_path.display(), line_num, truncate(line));
+                    printed_lines.insert(line_num);
+                }
             }
         }
 
-        println!(
-            "{}:{}:{}:{}",
-            m.file_path.display(),
-            m.line_number,
-            m.byte_offset,
-            truncate(&m.line_content)
-        );
+        if !printed_lines.contains(&m.line_number) {
+            println!(
+                "{}:{}:{}:{}",
+                m.file_path.display(),
+                m.line_number,
+                m.byte_offset,
+                truncate(&m.line_content)
+            );
+            printed_lines.insert(m.line_number);
+        }
 
         if context > 0 {
             for (i, line) in m.context_after.iter().enumerate() {
-                let line_num = m.line_number as usize + 1 + i;
-                println!("{}:{}:- :{}", m.file_path.display(), line_num, truncate(line));
+                let line_num = (m.line_number as usize + 1 + i) as u32;
+                if !printed_lines.contains(&line_num) {
+                    println!("{}:{}:- :{}", m.file_path.display(), line_num, truncate(line));
+                    printed_lines.insert(line_num);
+                }
             }
         }
     }
