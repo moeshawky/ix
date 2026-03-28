@@ -163,6 +163,25 @@ fn do_build(path: &Path) -> ix::error::Result<()> {
     Ok(())
 }
 
+fn find_index(path: &Path) -> Option<(PathBuf, PathBuf)> {
+    let mut current = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+
+    loop {
+        let index_file = current.join(".ix/shard.ix");
+        if index_file.exists() {
+            return Some((index_file, current));
+        }
+        if !current.pop() {
+            break;
+        }
+    }
+    None
+}
+
 /// Truncate string without splitting a UTF-8 character.
 /// Walks backwards from max_bytes until a char boundary is found.
 fn truncate_safe(s: &mut String, max_bytes: usize) {
@@ -177,7 +196,18 @@ fn truncate_safe(s: &mut String, max_bytes: usize) {
 }
 
 fn do_search(params: SearchParams) -> ix::error::Result<()> {
-    let index_path = params.path.join(".ix/shard.ix");
+    let original_cwd = std::env::current_dir()?;
+    let search_path_abs = if params.path.is_absolute() {
+        params.path.to_path_buf()
+    } else {
+        original_cwd.join(params.path)
+    };
+
+    let index_info = if params.no_index {
+        None
+    } else {
+        find_index(params.path)
+    };
 
     if params.fresh {
         do_build(params.path)?;
@@ -223,11 +253,11 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
         context_lines: params.context,
     };
 
-    let (matches, stats) = if !params.no_index && index_path.exists() {
-        let reader = Reader::open(&index_path)?;
+    let (matches, mut stats) = if let Some((path, index_root)) = &index_info {
+        let reader = Reader::open(path)?;
 
         // Staleness check
-        let last_mod = Reader::get_last_modified(params.path)?;
+        let last_mod = Reader::get_last_modified(index_root)?;
         if last_mod > reader.header.created_at {
             let last_built_secs = (reader.header.created_at / 1_000_000) as i64;
             let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
@@ -249,9 +279,30 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
             );
         }
 
+        // Change directory to index root so verify_file can find the files
+        std::env::set_current_dir(index_root)?;
+
         let plan = Planner::plan(params.pattern, params.is_regex);
         let executor = Executor::new(&reader);
-        executor.execute(&plan, &options)?
+        let (m, s) = executor.execute(&plan, &options)?;
+
+        // Filter matches to only those within the search path
+        let filtered_matches: Vec<_> = m
+            .into_iter()
+            .filter(|m| {
+                let abs_path = if m.file_path.is_absolute() {
+                    m.file_path.clone()
+                } else {
+                    index_root.join(&m.file_path)
+                };
+                abs_path.starts_with(&search_path_abs)
+            })
+            .collect();
+
+        // Restore CWD
+        let _ = std::env::set_current_dir(&original_cwd);
+
+        (filtered_matches, s)
     } else {
         let scanner = Scanner::new(params.path);
         let matches = scanner.scan(params.pattern, params.is_regex, &options)?;
@@ -261,6 +312,11 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
         };
         (matches, stats)
     };
+
+    // Update stats total_matches after filtering
+    if index_info.is_some() {
+        stats.total_matches = matches.len() as u32;
+    }
 
     if options.count_only {
         if params.json {
