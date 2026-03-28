@@ -155,6 +155,19 @@ fn do_build(path: &Path) -> ix::error::Result<()> {
     Ok(())
 }
 
+/// Truncate string without splitting a UTF-8 character.
+/// Walks backwards from max_bytes until a char boundary is found.
+fn truncate_safe(s: &mut String, max_bytes: usize) {
+    if max_bytes >= s.len() {
+        return;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+}
+
 fn do_search(params: SearchParams) -> ix::error::Result<()> {
     let index_path = params.path.join(".ix/shard.ix");
     let start_time = std::time::Instant::now();
@@ -274,15 +287,12 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
 
 fn print_match(m: &ix::executor::Match, json: bool, context: usize) {
     let truncate = |s: &str| -> String {
-        let max_bytes = 200;
-        if s.len() <= max_bytes {
-            return s.to_string();
+        let mut string = s.to_string();
+        if string.len() > 200 {
+            truncate_safe(&mut string, 200);
+            string.push_str("...");
         }
-        let mut end = max_bytes;
-        while end > 0 && !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}...", &s[..end])
+        string
     };
 
     if json {
