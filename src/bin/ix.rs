@@ -11,6 +11,7 @@ use ix::executor::Executor;
 use ix::planner::Planner;
 use ix::reader::Reader;
 use ix::scanner::Scanner;
+use regex::Regex;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -24,6 +25,13 @@ use std::path::{Path, PathBuf};
     Contextual:       ix -C 3 \"pattern\"  → ±3 lines around match
     Structured:       ix --json \"pattern\" → JSON Lines output
     Deterministic:    ix --fresh \"pattern\" → Force rebuild + search
+
+LLM AGENT USAGE:
+    Compressed:  ix -z \"pattern\"               → search .gz/.zst/.bz2/.xz
+    Multiline:   ix -r -U \"foo.*\\nbar\"         → cross-line regex
+    Piped:       cat log | ix \"error\"           → stdin search
+    Archives:    ix --archive \"pattern\" /path   → search inside .zip/.tar.gz
+    Parallel:    ix -j 8 \"pattern\"              → 8 search threads
 
 CONSTRAINTS:
     - Max results default to 100 to prevent context flooding (use -n 0 for unlimited).
@@ -48,8 +56,8 @@ struct Cli {
     pattern: Option<String>,
 
     /// The directory to search in.
-    #[arg(default_value = ".", value_name = "PATH")]
-    path: PathBuf,
+    #[arg(value_name = "PATH")]
+    path: Option<PathBuf>,
 
     /// Build or update the .ix index for the target directory.
     #[arg(long, help_heading = "Actions")]
@@ -91,6 +99,26 @@ struct Cli {
     #[arg(short = 't', long = "type")]
     file_types: Vec<String>,
 
+    /// Search inside compressed files (.gz, .zst, .bz2, .xz).
+    #[arg(short = 'z', long)]
+    decompress: bool,
+
+    /// Number of search threads (0 = auto).
+    #[arg(short = 'j', long, default_value = "0")]
+    threads: usize,
+
+    /// Enable multiline mode (dot matches newline). Requires --regex.
+    #[arg(short = 'U', long)]
+    multiline: bool,
+
+    /// Search inside .zip and .tar.gz archives.
+    #[arg(long)]
+    archive: bool,
+
+    /// Search binary files (normally skipped).
+    #[arg(long)]
+    binary: bool,
+
     /// Force full file-system scan, bypassing any existing .ix index.
     #[arg(long)]
     no_index: bool,
@@ -114,30 +142,74 @@ struct SearchParams<'a> {
     context: usize,
     max_results: usize,
     file_types: &'a [String],
+    decompress: bool,
+    threads: usize,
+    multiline: bool,
+    archive: bool,
+    binary: bool,
 }
+
+use std::io::IsTerminal;
+use std::io::{self, Read};
 
 fn main() {
     let cli = Cli::parse();
 
+    if cli.threads > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(cli.threads)
+            .build_global()
+            .unwrap();
+    }
+
+    let is_stdin_pipe = !io::stdin().is_terminal();
+
+    // Determine path and handle build action
+    let search_path = if let Some(ref p) = cli.path {
+        p.clone()
+    } else {
+        if cli.build {
+            PathBuf::from(".")
+        } else if is_stdin_pipe && cli.pattern.is_some() {
+            // Special path to signal stdin search
+            PathBuf::from("(stdin)")
+        } else {
+            PathBuf::from(".")
+        }
+    };
+
     if cli.build {
-        if let Err(e) = do_build(&cli.path) {
+        if let Err(e) = do_build(&search_path, cli.decompress) {
             eprintln!("Error building index: {}", e);
             std::process::exit(1);
         }
         return;
     }
 
+    if cli.multiline && !cli.regex {
+        eprintln!("ix: --multiline requires --regex (-r)");
+        std::process::exit(1);
+    }
+
     let pattern = match cli.pattern {
-        Some(p) => p,
+        Some(ref p) => p,
         None => {
             eprintln!("Error: no pattern provided");
             std::process::exit(1);
         }
     };
 
+    if search_path.to_str() == Some("(stdin)") {
+        if let Err(e) = do_stdin_search(pattern, &cli) {
+            eprintln!("Error searching stdin: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let params = SearchParams {
-        pattern: &pattern,
-        path: &cli.path,
+        pattern,
+        path: &search_path,
         is_regex: cli.regex,
         ignore_case: cli.ignore_case,
         no_index: cli.no_index,
@@ -149,6 +221,11 @@ fn main() {
         context: cli.context,
         max_results: cli.max_results,
         file_types: &cli.file_types,
+        decompress: cli.decompress,
+        threads: cli.threads,
+        multiline: cli.multiline,
+        archive: cli.archive,
+        binary: cli.binary,
     };
 
     if let Err(e) = do_search(params) {
@@ -157,9 +234,101 @@ fn main() {
     }
 }
 
-fn do_build(path: &Path) -> ix::error::Result<()> {
+fn do_stdin_search(pattern: &str, cli: &Cli) -> ix::error::Result<()> {
+    let mut buffer = String::new();
+    io::stdin().read_to_string(&mut buffer)?;
+
+    let regex_pat = if cli.regex {
+        if cli.ignore_case {
+            format!("(?i){}", pattern)
+        } else {
+            pattern.to_string()
+        }
+    } else {
+        let escaped = regex::escape(pattern);
+        if cli.ignore_case {
+            format!("(?i){}", escaped)
+        } else {
+            escaped
+        }
+    };
+    let re = Regex::new(&regex_pat)?;
+
+    let lines: Vec<&str> = buffer.lines().collect();
+    let mut matches = Vec::new();
+
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(m) = re.find(line) {
+            let context_before = if cli.context > 0 {
+                let start = i.saturating_sub(cli.context);
+                lines[start..i].iter().map(|s| s.to_string()).collect()
+            } else {
+                vec![]
+            };
+
+            let context_after = if cli.context > 0 {
+                let end = (i + 1 + cli.context).min(lines.len());
+                lines[i + 1..end].iter().map(|s| s.to_string()).collect()
+            } else {
+                vec![]
+            };
+
+            matches.push(ix::executor::Match {
+                file_path: PathBuf::from("(stdin)"),
+                line_number: (i + 1) as u32,
+                col: (m.start() + 1) as u32,
+                line_content: if cli.count {
+                    String::new()
+                } else {
+                    line.to_string()
+                },
+                byte_offset: 0, // Not easily computed for stdin without keeping track
+                context_before,
+                context_after,
+                is_binary: false,
+            });
+
+            if cli.max_results > 0 && matches.len() >= cli.max_results {
+                break;
+            }
+        }
+    }
+
+    if cli.count {
+        if cli.json {
+            println!("{{\"count\": {}}}", matches.len());
+        } else {
+            println!("{}", matches.len());
+        }
+    } else if cli.files_only {
+        if !matches.is_empty() {
+            if cli.json {
+                println!("{{\"files\": [\"(stdin)\"]}}");
+            } else {
+                println!("(stdin)");
+            }
+        }
+    } else {
+        let mut printed_lines = std::collections::HashSet::new();
+        for m in &matches {
+            print_match(m, cli.json, cli.context, &mut printed_lines);
+        }
+
+        if cli.max_results > 0 && matches.len() >= cli.max_results {
+            eprintln!(
+                "ix: output capped at {} results (use -n 0 for all)",
+                cli.max_results
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn do_build(path: &Path, decompress: bool) -> ix::error::Result<()> {
     println!("Building index for {}...", path.display());
     let mut builder = Builder::new(path);
+    builder.set_decompress(decompress);
     let out = builder.build()?;
     println!("Index built at {}", out.display());
     Ok(())
@@ -212,7 +381,7 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
     };
 
     if params.fresh {
-        do_build(params.path)?;
+        do_build(params.path, params.decompress)?;
     }
 
     let start_time = std::time::Instant::now();
@@ -253,6 +422,11 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
         max_results: params.max_results,
         type_filter: extensions,
         context_lines: params.context,
+        decompress: params.decompress,
+        threads: params.threads,
+        multiline: params.multiline,
+        archive: params.archive,
+        binary: params.binary,
     };
 
     let (matches, mut stats) = if let Some((path, index_root)) = &index_info {
@@ -284,7 +458,12 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
         // Change directory to index root so verify_file can find the files
         std::env::set_current_dir(index_root)?;
 
-        let plan = Planner::plan_with_options(params.pattern, params.is_regex, params.ignore_case);
+        let plan = Planner::plan_with_options(
+            params.pattern,
+            params.is_regex,
+            params.ignore_case,
+            params.multiline,
+        );
         let executor = Executor::new(&reader);
         let (m, s) = executor.execute(&plan, &options)?;
 
@@ -387,6 +566,11 @@ fn print_match(
     context: usize,
     printed_lines: &mut std::collections::HashSet<u32>,
 ) {
+    if !json && m.is_binary {
+        println!("Binary file {} matches", m.file_path.display());
+        return;
+    }
+
     let truncate = |s: &str| -> String {
         let mut string = s.to_string();
         if string.len() > 200 {
@@ -402,14 +586,15 @@ fn print_match(
         let context_after: Vec<String> = m.context_after.iter().map(|s| truncate(s)).collect();
 
         println!(
-            "{{\"file\":\"{}\",\"line\":{},\"col\":{},\"content\":\"{}\",\"byte_offset\":{},\"context_before\":{:?},\"context_after\":{:?}}}",
+            "{{\"file\":\"{}\",\"line\":{},\"col\":{},\"content\":\"{}\",\"byte_offset\":{},\"context_before\":{:?},\"context_after\":{:?},\"is_binary\":{}}}",
             m.file_path.display(),
             m.line_number,
             m.col,
             content.replace('"', "\\\"").replace('\n', "\\n"),
             m.byte_offset,
             context_before,
-            context_after
+            context_after,
+            m.is_binary
         );
     } else {
         if context > 0 {

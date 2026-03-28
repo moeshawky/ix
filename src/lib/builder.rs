@@ -5,6 +5,7 @@
 //! Phase 3: Serialize (write sections, compute CRCs, atomic rename)
 
 use crate::bloom::BloomFilter;
+use crate::decompress::maybe_decompress;
 use crate::error::{Error, Result};
 use crate::format::*;
 use crate::posting::{PostingEntry, PostingList};
@@ -25,6 +26,7 @@ pub struct Builder {
     string_pool: StringPool,
     extractor: Extractor,
     stats: BuildStats,
+    decompress: bool,
 }
 
 pub struct FileRecord {
@@ -57,7 +59,12 @@ impl Builder {
             string_pool: StringPool::new(),
             extractor: Extractor::new(),
             stats: BuildStats::default(),
+            decompress: false,
         }
+    }
+
+    pub fn set_decompress(&mut self, decompress: bool) {
+        self.decompress = decompress;
     }
 
     pub fn build(&mut self) -> Result<PathBuf> {
@@ -197,7 +204,17 @@ impl Builder {
 
         let file = File::open(&path)?;
         let mmap = unsafe { Mmap::map(&file)? };
-        let data = &mmap[..];
+
+        // Handle decompression
+        let raw_data = if self.decompress {
+            maybe_decompress(&path, &mmap)?
+                .map(std::borrow::Cow::Owned)
+                .unwrap_or_else(|| std::borrow::Cow::Borrowed(&mmap[..]))
+        } else {
+            std::borrow::Cow::Borrowed(&mmap[..])
+        };
+
+        let data = &raw_data[..];
 
         // Binary check (null byte in first 8KB)
         let check_len = data.len().min(8192);

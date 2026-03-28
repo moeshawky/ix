@@ -2,7 +2,10 @@
 //!
 //! Handles literal searches, indexed regex, and full scans.
 
+use crate::decompress::maybe_decompress;
 use crate::error::Result;
+use rayon::prelude::*;
+use std::sync::atomic::{AtomicU32, Ordering};
 use crate::planner::QueryPlan;
 use crate::reader::{FileInfo, Reader};
 use crate::trigram::Trigram;
@@ -21,6 +24,7 @@ pub struct Match {
     pub byte_offset: u64,
     pub context_before: Vec<String>,
     pub context_after: Vec<String>,
+    pub is_binary: bool,
 }
 
 #[derive(Default, Debug)]
@@ -40,6 +44,11 @@ pub struct QueryOptions {
     pub max_results: usize,
     pub type_filter: Vec<String>,
     pub context_lines: usize,
+    pub decompress: bool,
+    pub threads: usize,
+    pub multiline: bool,
+    pub archive: bool,
+    pub binary: bool,
 }
 
 pub struct Executor<'a> {
@@ -123,51 +132,51 @@ impl<'a> Executor<'a> {
         }
 
         stats.candidate_files = candidates.len() as u32;
-        let mut matches = Vec::new();
+
         let regex = Regex::new(&regex::escape(&String::from_utf8_lossy(pattern))).unwrap();
 
-        for fid in candidates {
-            let file_info = self.index.get_file(fid)?;
+        let files_verified = AtomicU32::new(0);
+        let bytes_verified = std::sync::atomic::AtomicU64::new(0);
 
-            // Filter by extension
-            if !options.type_filter.is_empty() {
-                let ext = file_info
-                    .path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("");
-                if !options.type_filter.iter().any(|e| e == ext) {
-                    continue;
-                }
-            }
+        let candidate_list: Vec<u32> = candidates.into_iter().collect();
 
-            stats.files_verified += 1;
-            stats.bytes_verified += file_info.size_bytes;
-            if let Ok(file_matches) = self.verify_file(
-                &file_info,
-                &regex,
-                options.count_only,
-                options.context_lines,
-            ) {
-                if options.count_only {
-                    stats.total_matches += file_matches.len() as u32;
-                } else {
-                    for m in file_matches {
-                        matches.push(m);
-                        if options.max_results > 0 && matches.len() >= options.max_results {
-                            stats.total_matches = matches.len() as u32;
-                            return Ok((matches, stats));
-                        }
+        let mut all_matches: Vec<Match> = candidate_list
+            .into_par_iter()
+            .filter_map(|fid| {
+                let file_info = self.index.get_file(fid).ok()?;
+
+                // Filter by extension
+                if !options.type_filter.is_empty() {
+                    let ext = file_info
+                        .path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("");
+                    if !options.type_filter.iter().any(|e| e == ext) {
+                        return None;
                     }
                 }
-            }
+
+                files_verified.fetch_add(1, Ordering::Relaxed);
+                bytes_verified.fetch_add(file_info.size_bytes, Ordering::Relaxed);
+
+                self.verify_file(&file_info, &regex, options).ok()
+            })
+            .flatten()
+            .collect();
+
+        stats.files_verified = files_verified.into_inner();
+        stats.bytes_verified = bytes_verified.into_inner();
+
+        if options.max_results > 0 && all_matches.len() > options.max_results {
+            all_matches.truncate(options.max_results);
         }
 
-        if !options.count_only {
-            stats.total_matches = matches.len() as u32;
+        stats.total_matches = all_matches.len() as u32;
+
+        Ok((all_matches, stats))
         }
-        Ok((matches, stats))
-    }
+
 
     fn execute_regex_indexed(
         &self,
@@ -227,46 +236,46 @@ impl<'a> Executor<'a> {
         }
 
         stats.candidate_files = final_candidates.len() as u32;
-        let mut matches = Vec::new();
 
-        for fid in final_candidates {
-            let file_info = self.index.get_file(fid)?;
+        let files_verified = AtomicU32::new(0);
+        let bytes_verified = std::sync::atomic::AtomicU64::new(0);
 
-            // Filter by extension
-            if !options.type_filter.is_empty() {
-                let ext = file_info
-                    .path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("");
-                if !options.type_filter.iter().any(|e| e == ext) {
-                    continue;
-                }
-            }
+        let candidate_list: Vec<u32> = final_candidates.into_iter().collect();
 
-            stats.files_verified += 1;
-            stats.bytes_verified += file_info.size_bytes;
-            if let Ok(file_matches) =
-                self.verify_file(&file_info, regex, options.count_only, options.context_lines)
-            {
-                if options.count_only {
-                    stats.total_matches += file_matches.len() as u32;
-                } else {
-                    for m in file_matches {
-                        matches.push(m);
-                        if options.max_results > 0 && matches.len() >= options.max_results {
-                            stats.total_matches = matches.len() as u32;
-                            return Ok((matches, stats));
-                        }
+        let mut all_matches: Vec<Match> = candidate_list
+            .into_par_iter()
+            .filter_map(|fid| {
+                let file_info = self.index.get_file(fid).ok()?;
+
+                // Filter by extension
+                if !options.type_filter.is_empty() {
+                    let ext = file_info
+                        .path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("");
+                    if !options.type_filter.iter().any(|e| e == ext) {
+                        return None;
                     }
                 }
-            }
+
+                files_verified.fetch_add(1, Ordering::Relaxed);
+                bytes_verified.fetch_add(file_info.size_bytes, Ordering::Relaxed);
+
+                self.verify_file(&file_info, regex, options).ok()
+            })
+            .flatten()
+            .collect();
+
+        stats.files_verified = files_verified.into_inner();
+        stats.bytes_verified = bytes_verified.into_inner();
+
+        if options.max_results > 0 && all_matches.len() > options.max_results {
+            all_matches.truncate(options.max_results);
         }
 
-        if !options.count_only {
-            stats.total_matches = matches.len() as u32;
-        }
-        Ok((matches, stats))
+        stats.total_matches = all_matches.len() as u32;
+        Ok((all_matches, stats))
     }
 
     fn execute_case_insensitive(
@@ -311,45 +320,45 @@ impl<'a> Executor<'a> {
         };
 
         stats.candidate_files = final_candidates.len() as u32;
-        let mut matches = Vec::new();
 
-        for fid in final_candidates {
-            let file_info = self.index.get_file(fid)?;
+        let files_verified = AtomicU32::new(0);
+        let bytes_verified = std::sync::atomic::AtomicU64::new(0);
 
-            if !options.type_filter.is_empty() {
-                let ext = file_info
-                    .path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("");
-                if !options.type_filter.iter().any(|e| e == ext) {
-                    continue;
-                }
-            }
+        let candidate_list: Vec<u32> = final_candidates.into_iter().collect();
 
-            stats.files_verified += 1;
-            stats.bytes_verified += file_info.size_bytes;
-            if let Ok(file_matches) =
-                self.verify_file(&file_info, regex, options.count_only, options.context_lines)
-            {
-                if options.count_only {
-                    stats.total_matches += file_matches.len() as u32;
-                } else {
-                    for m in file_matches {
-                        matches.push(m);
-                        if options.max_results > 0 && matches.len() >= options.max_results {
-                            stats.total_matches = matches.len() as u32;
-                            return Ok((matches, stats));
-                        }
+        let mut all_matches: Vec<Match> = candidate_list
+            .into_par_iter()
+            .filter_map(|fid| {
+                let file_info = self.index.get_file(fid).ok()?;
+
+                if !options.type_filter.is_empty() {
+                    let ext = file_info
+                        .path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("");
+                    if !options.type_filter.iter().any(|e| e == ext) {
+                        return None;
                     }
                 }
-            }
+
+                files_verified.fetch_add(1, Ordering::Relaxed);
+                bytes_verified.fetch_add(file_info.size_bytes, Ordering::Relaxed);
+
+                self.verify_file(&file_info, regex, options).ok()
+            })
+            .flatten()
+            .collect();
+
+        stats.files_verified = files_verified.into_inner();
+        stats.bytes_verified = bytes_verified.into_inner();
+
+        if options.max_results > 0 && all_matches.len() > options.max_results {
+            all_matches.truncate(options.max_results);
         }
 
-        if !options.count_only {
-            stats.total_matches = matches.len() as u32;
-        }
-        Ok((matches, stats))
+        stats.total_matches = all_matches.len() as u32;
+        Ok((all_matches, stats))
     }
 
     fn execute_full_scan(
@@ -357,97 +366,177 @@ impl<'a> Executor<'a> {
         regex: &Regex,
         options: &QueryOptions,
     ) -> Result<(Vec<Match>, QueryStats)> {
-        let mut stats = QueryStats::default();
-        let mut matches = Vec::new();
+        let stats_candidate_files = self.index.header.file_count;
 
-        for fid in 0..self.index.header.file_count {
-            let file_info = self.index.get_file(fid)?;
+        let files_verified = AtomicU32::new(0);
+        let bytes_verified = std::sync::atomic::AtomicU64::new(0);
 
-            // Filter by extension
-            if !options.type_filter.is_empty() {
-                let ext = file_info
-                    .path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("");
-                if !options.type_filter.iter().any(|e| e == ext) {
-                    continue;
-                }
-            }
+        let mut all_matches: Vec<Match> = (0..self.index.header.file_count)
+            .into_par_iter()
+            .filter_map(|fid| {
+                let file_info = self.index.get_file(fid).ok()?;
 
-            stats.files_verified += 1;
-            stats.bytes_verified += file_info.size_bytes;
-            if let Ok(file_matches) =
-                self.verify_file(&file_info, regex, options.count_only, options.context_lines)
-            {
-                if options.count_only {
-                    stats.total_matches += file_matches.len() as u32;
-                } else {
-                    for m in file_matches {
-                        matches.push(m);
-                        if options.max_results > 0 && matches.len() >= options.max_results {
-                            stats.total_matches = matches.len() as u32;
-                            return Ok((matches, stats));
-                        }
+                // Filter by extension
+                if !options.type_filter.is_empty() {
+                    let ext = file_info
+                        .path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("");
+                    if !options.type_filter.iter().any(|e| e == ext) {
+                        return None;
                     }
                 }
-            }
+
+                files_verified.fetch_add(1, Ordering::Relaxed);
+                bytes_verified.fetch_add(file_info.size_bytes, Ordering::Relaxed);
+
+                self.verify_file(&file_info, regex, options).ok()
+            })
+            .flatten()
+            .collect();
+
+        if options.max_results > 0 && all_matches.len() > options.max_results {
+            all_matches.truncate(options.max_results);
         }
 
-        stats.candidate_files = self.index.header.file_count;
-        if !options.count_only {
-            stats.total_matches = matches.len() as u32;
+        let stats = QueryStats {
+            candidate_files: stats_candidate_files,
+            files_verified: files_verified.into_inner(),
+            bytes_verified: bytes_verified.into_inner(),
+            total_matches: all_matches.len() as u32,
+            ..Default::default()
+        };
+        Ok((all_matches, stats))
+    }
+
+    fn is_binary(data: &[u8]) -> bool {
+        if data.is_empty() {
+            return false;
         }
-        Ok((matches, stats))
+        let check_len = data.len().min(512);
+        let non_printable = data[..check_len]
+            .iter()
+            .filter(|&&b| !matches!(b, 0x09 | 0x0A | 0x0D | 0x20..=0x7E))
+            .count();
+        
+        (non_printable as f32 / check_len as f32) > 0.3
     }
 
     fn verify_file(
         &self,
         info: &FileInfo,
         regex: &Regex,
-        count_only: bool,
-        context: usize,
+        options: &QueryOptions,
     ) -> Result<Vec<Match>> {
         let file = File::open(&info.path)?;
         let mmap = unsafe { Mmap::map(&file)? };
 
-        // Use lossy conversion to handle files with mixed encoding
-        let data = String::from_utf8_lossy(&mmap);
-        let lines: Vec<&str> = data.lines().collect();
+        // Handle decompression
+        let raw_data = if options.decompress {
+            maybe_decompress(&info.path, &mmap)?
+                .map(std::borrow::Cow::Owned)
+                .unwrap_or_else(|| std::borrow::Cow::Borrowed(&mmap[..]))
+        } else {
+            std::borrow::Cow::Borrowed(&mmap[..])
+        };
 
+        // Binary check
+        let is_bin = Self::is_binary(&raw_data);
+        if is_bin && !options.binary {
+            return Ok(vec![]);
+        }
+
+        let data = String::from_utf8_lossy(&raw_data);
         let mut matches = Vec::new();
-        let mut line_start_offset = 0;
-        for (i, line) in lines.iter().enumerate() {
-            if let Some(m) = regex.find(line) {
-                let context_before = if context > 0 {
-                    let start = i.saturating_sub(context);
-                    lines[start..i].iter().map(|s| s.to_string()).collect()
+
+        if options.multiline {
+            // Multiline search: match against entire content
+            for m in regex.find_iter(&data) {
+                let byte_offset = m.start();
+                
+                // Compute line number by counting newlines before match
+                let line_number = data[..byte_offset].chars().filter(|&c| c == '\n').count() + 1;
+                
+                // Find line boundaries for context
+                let line_start = data[..byte_offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
+                let line_end = data[byte_offset..].find('\n').map(|i| byte_offset + i).unwrap_or(data.len());
+                let line_content = &data[line_start..line_end];
+
+                let context_before = if options.context_lines > 0 {
+                    // This is slightly complex for multiline, but let's approximate by splitting into lines
+                    let all_lines: Vec<&str> = data.lines().collect();
+                    let current_line_idx = line_number - 1;
+                    let start = current_line_idx.saturating_sub(options.context_lines);
+                    all_lines[start..current_line_idx].iter().map(|s| s.to_string()).collect()
                 } else {
                     vec![]
                 };
 
-                let context_after = if context > 0 {
-                    let end = (i + 1 + context).min(lines.len());
-                    lines[i + 1..end].iter().map(|s| s.to_string()).collect()
+                let context_after = if options.context_lines > 0 {
+                    let all_lines: Vec<&str> = data.lines().collect();
+                    let current_line_idx = line_number - 1;
+                    let end = (current_line_idx + 1 + options.context_lines).min(all_lines.len());
+                    all_lines[current_line_idx + 1..end].iter().map(|s| s.to_string()).collect()
                 } else {
                     vec![]
                 };
 
                 matches.push(Match {
                     file_path: info.path.clone(),
-                    line_number: (i + 1) as u32,
-                    col: (m.start() + 1) as u32,
-                    line_content: if count_only {
+                    line_number: line_number as u32,
+                    col: (byte_offset - line_start + 1) as u32,
+                    line_content: if options.count_only {
                         String::new()
                     } else {
-                        line.to_string()
+                        line_content.to_string()
                     },
-                    byte_offset: (line_start_offset + m.start()) as u64,
+                    byte_offset: byte_offset as u64,
                     context_before,
                     context_after,
+                    is_binary: is_bin,
                 });
+
+                if options.max_results > 0 && matches.len() >= options.max_results {
+                    break;
+                }
             }
-            line_start_offset += line.len() + 1; // +1 for newline
+        } else {
+            let lines: Vec<&str> = data.lines().collect();
+            let mut line_start_offset = 0;
+            for (i, line) in lines.iter().enumerate() {
+                if let Some(m) = regex.find(line) {
+                    let context_before = if options.context_lines > 0 {
+                        let start = i.saturating_sub(options.context_lines);
+                        lines[start..i].iter().map(|s| s.to_string()).collect()
+                    } else {
+                        vec![]
+                    };
+
+                    let context_after = if options.context_lines > 0 {
+                        let end = (i + 1 + options.context_lines).min(lines.len());
+                        lines[i + 1..end].iter().map(|s| s.to_string()).collect()
+                    } else {
+                        vec![]
+                    };
+
+                    matches.push(Match {
+                        file_path: info.path.clone(),
+                        line_number: (i + 1) as u32,
+                        col: (m.start() + 1) as u32,
+                        line_content: if options.count_only {
+                            String::new()
+                        } else {
+                            line.to_string()
+                        },
+                        byte_offset: (line_start_offset + m.start()) as u64,
+                        context_before,
+                        context_after,
+                        is_binary: is_bin,
+                    });
+                }
+                line_start_offset += line.len() + 1; // +1 for newline
+            }
         }
         Ok(matches)
     }

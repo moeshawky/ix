@@ -45,8 +45,13 @@ pub enum Error {
     #[error("regex: {0}")]
     Regex(#[from] regex::Error),
 
-    #[error("watcher: {0}")]
+    #[cfg(feature = "notify")]
+    #[error("Watcher error: {0}")]
     Watcher(#[from] notify::Error),
+
+    #[cfg(feature = "archive")]
+    #[error("Zip error: {0}")]
+    Zip(#[from] zip::result::ZipError),
 
     #[error("config: {0}")]
     Config(String),

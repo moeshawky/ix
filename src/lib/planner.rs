@@ -35,18 +35,28 @@ pub struct Planner;
 
 impl Planner {
     pub fn plan(pattern: &str, is_regex: bool) -> QueryPlan {
-        Self::plan_with_options(pattern, is_regex, false)
+        Self::plan_with_options(pattern, is_regex, false, false)
     }
 
-    pub fn plan_with_options(pattern: &str, is_regex: bool, ignore_case: bool) -> QueryPlan {
+    pub fn plan_with_options(
+        pattern: &str,
+        is_regex: bool,
+        ignore_case: bool,
+        multiline: bool,
+    ) -> QueryPlan {
+        let mut final_pattern = pattern.to_string();
+        if multiline && is_regex {
+            final_pattern = format!("(?s){}", final_pattern);
+        }
+
         if !is_regex && !ignore_case {
-            let bytes = pattern.as_bytes().to_vec();
+            let bytes = final_pattern.as_bytes().to_vec();
             let trigrams = Extractor::extract_set(&bytes);
 
             if trigrams.is_empty() {
                 // Pattern too short for trigrams (< 3 bytes)
                 return QueryPlan::FullScan {
-                    regex: Regex::new(&regex::escape(pattern)).unwrap(),
+                    regex: Regex::new(&regex::escape(&final_pattern)).unwrap(),
                 };
             }
 
@@ -59,14 +69,16 @@ impl Planner {
         // Case-insensitive literal: per-position trigram groups.
         // Executor UNIONs within each group, INTERSECTs across groups.
         if !is_regex && ignore_case {
-            let bytes = pattern.as_bytes();
+            let bytes = final_pattern.as_bytes();
             let groups = Extractor::extract_groups_case_insensitive(bytes);
-            let regex_pat = format!("(?i){}", regex::escape(pattern));
+            let regex_pat = format!("(?i){}", regex::escape(&final_pattern));
             let regex = match Regex::new(&regex_pat) {
                 Ok(r) => r,
-                Err(_) => return QueryPlan::FullScan {
-                    regex: Regex::new("").unwrap(),
-                },
+                Err(_) => {
+                    return QueryPlan::FullScan {
+                        regex: Regex::new("").unwrap(),
+                    }
+                }
             };
 
             if groups.is_empty() {
@@ -79,10 +91,10 @@ impl Planner {
             };
         }
 
-        let regex_pat = if ignore_case && !pattern.starts_with("(?i)") {
-            format!("(?i){pattern}")
+        let regex_pat = if ignore_case && !final_pattern.starts_with("(?i)") {
+            format!("(?i){final_pattern}")
         } else {
-            pattern.to_string()
+            final_pattern.clone()
         };
 
         let regex = match Regex::new(&regex_pat) {
@@ -94,7 +106,7 @@ impl Planner {
             } // Should be handled by CLI
         };
 
-        let hir = match regex_syntax::parse(pattern) {
+        let hir = match regex_syntax::parse(&final_pattern) {
             Ok(h) => h,
             Err(_) => return QueryPlan::FullScan { regex },
         };
