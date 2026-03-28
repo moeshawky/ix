@@ -11,6 +11,7 @@ use rayon::prelude::*;
 use regex::Regex;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 pub struct Scanner {
     root: PathBuf,
@@ -49,9 +50,16 @@ impl Scanner {
             .map(|entry| entry.path().to_owned())
             .collect();
 
+        let matches_found = AtomicU32::new(0);
         let mut matches: Vec<Match> = paths
             .into_par_iter()
             .filter_map(|path| {
+                if options.max_results > 0
+                    && matches_found.load(Ordering::Relaxed) >= options.max_results as u32
+                {
+                    return None;
+                }
+
                 // Filter by extension
                 if !options.type_filter.is_empty() {
                     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -67,19 +75,23 @@ impl Scanner {
 
                     #[cfg(feature = "archive")]
                     {
-                        if _ext == "zip" {
-                            if let Ok(archive_matches) = crate::archive::scan_zip(&path, &regex, options) {
-                                return Some(archive_matches);
-                            }
-                        } else if _is_tar_gz {
-                            if let Ok(archive_matches) = crate::archive::scan_tar_gz(&path, &regex, options) {
-                                return Some(archive_matches);
-                            }
+                        if _ext == "zip"
+                            && let Ok(archive_matches) = crate::archive::scan_zip(&path, &regex, options)
+                        {
+                            matches_found.fetch_add(archive_matches.len() as u32, Ordering::Relaxed);
+                            return Some(archive_matches);
+                        } else if _is_tar_gz
+                            && let Ok(archive_matches) = crate::archive::scan_tar_gz(&path, &regex, options)
+                        {
+                            matches_found.fetch_add(archive_matches.len() as u32, Ordering::Relaxed);
+                            return Some(archive_matches);
                         }
                     }
                 }
 
-                self.scan_file(&path, &regex, options).ok()
+                let file_matches = self.scan_file(&path, &regex, options).ok()?;
+                matches_found.fetch_add(file_matches.len() as u32, Ordering::Relaxed);
+                Some(file_matches)
             })
             .flatten()
             .collect();

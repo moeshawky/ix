@@ -223,8 +223,10 @@ impl Reader {
             return true;
         }
 
-        let bloom_rel_off =
-            u32::from_le_bytes(bloom_rel_off_bytes.unwrap().try_into().unwrap_or([0u8; 4]));
+        let bloom_rel_off = bloom_rel_off_bytes
+            .and_then(|b| b.try_into().ok())
+            .map(u32::from_le_bytes)
+            .unwrap_or(0);
 
         let bloom_abs_off = self.header.bloom_offset as usize + bloom_rel_off as usize;
         if bloom_abs_off + 4 > self.mmap.len() {

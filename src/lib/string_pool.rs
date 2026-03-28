@@ -120,7 +120,7 @@ impl<'a> StringPoolReader<'a> {
         if data.len() < 4 {
             return Err(Error::StringPoolOutOfBounds);
         }
-        let prefix_count = u32::from_le_bytes(data[0..4].try_into().unwrap()) as usize;
+        let prefix_count = data[0..4].try_into().ok().map(u32::from_le_bytes).unwrap_or(0) as usize;
         let mut prefixes = Vec::with_capacity(prefix_count);
         let mut pos = 4;
 
@@ -128,8 +128,8 @@ impl<'a> StringPoolReader<'a> {
             if pos + 4 > data.len() {
                 return Err(Error::StringPoolOutOfBounds);
             }
-            let _id = u16::from_le_bytes(data[pos..pos + 2].try_into().unwrap());
-            let len = u16::from_le_bytes(data[pos + 2..pos + 4].try_into().unwrap()) as usize;
+            let _id = data[pos..pos + 2].try_into().ok().map(u16::from_le_bytes).unwrap_or(0);
+            let len = data[pos + 2..pos + 4].try_into().ok().map(u16::from_le_bytes).unwrap_or(0) as usize;
             pos += 4;
             if pos + len > data.len() {
                 return Err(Error::StringPoolOutOfBounds);
@@ -147,9 +147,9 @@ impl<'a> StringPoolReader<'a> {
             return Err(Error::StringPoolOutOfBounds);
         }
 
-        let prefix_id = u16::from_le_bytes(self.data[pos..pos + 2].try_into().unwrap()) as usize;
+        let prefix_id = self.data[pos..pos + 2].try_into().ok().map(u16::from_le_bytes).unwrap_or(0) as usize;
         let suffix_len =
-            u16::from_le_bytes(self.data[pos + 2..pos + 4].try_into().unwrap()) as usize;
+            self.data[pos + 2..pos + 4].try_into().ok().map(u16::from_le_bytes).unwrap_or(0) as usize;
 
         if prefix_id >= self.prefixes.len() {
             return Err(Error::StringPoolOutOfBounds);

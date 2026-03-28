@@ -59,7 +59,7 @@ fn test_repetitive_data_explosion() {
     let executor = Executor::new(&reader);
 
     let plan = Planner::plan("abc", false);
-    let (matches, _) = executor
+    let (matches, stats) = executor
         .execute(
             &plan,
             &QueryOptions {
@@ -71,6 +71,7 @@ fn test_repetitive_data_explosion() {
 
     // Test explicit cap
     assert_eq!(matches.len(), 100);
+    assert_eq!(stats.total_matches, 100);
 
     // Library default is unlimited (0)
     let (matches_default, _) = executor.execute(&plan, &QueryOptions::default()).unwrap();

@@ -73,7 +73,7 @@ impl BloomFilter {
         if data.len() < 4 {
             return None;
         }
-        let size = u16::from_le_bytes(data[0..2].try_into().unwrap()) as usize;
+        let size = data[0..2].try_into().ok().map(u16::from_le_bytes).unwrap_or(0) as usize;
         let num_hashes = data[2];
         let total_size = 4 + size;
         if data.len() < total_size {

@@ -5,7 +5,7 @@
 use crate::decompress::maybe_decompress;
 use crate::error::Result;
 use rayon::prelude::*;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use crate::planner::QueryPlan;
 use crate::reader::{FileInfo, Reader};
 use crate::trigram::Trigram;
@@ -133,16 +133,22 @@ impl<'a> Executor<'a> {
 
         stats.candidate_files = candidates.len() as u32;
 
-        let regex = Regex::new(&regex::escape(&String::from_utf8_lossy(pattern))).unwrap();
+        let regex = Regex::new(&regex::escape(&String::from_utf8_lossy(pattern)))?;
 
+        // Parallel verification
         let files_verified = AtomicU32::new(0);
         let bytes_verified = std::sync::atomic::AtomicU64::new(0);
+        let matches_found = AtomicU32::new(0);
 
         let candidate_list: Vec<u32> = candidates.into_iter().collect();
 
         let mut all_matches: Vec<Match> = candidate_list
             .into_par_iter()
             .filter_map(|fid| {
+                if options.max_results > 0 && matches_found.load(Ordering::Relaxed) >= options.max_results as u32 {
+                    return None;
+                }
+
                 let file_info = self.index.get_file(fid).ok()?;
 
                 // Filter by extension
@@ -160,7 +166,9 @@ impl<'a> Executor<'a> {
                 files_verified.fetch_add(1, Ordering::Relaxed);
                 bytes_verified.fetch_add(file_info.size_bytes, Ordering::Relaxed);
 
-                self.verify_file(&file_info, &regex, options).ok()
+                let matches = self.verify_file(&file_info, &regex, options).ok()?;
+                matches_found.fetch_add(matches.len() as u32, Ordering::Relaxed);
+                Some(matches)
             })
             .flatten()
             .collect();
@@ -238,13 +246,20 @@ impl<'a> Executor<'a> {
         stats.candidate_files = final_candidates.len() as u32;
 
         let files_verified = AtomicU32::new(0);
-        let bytes_verified = std::sync::atomic::AtomicU64::new(0);
+        let bytes_verified = AtomicU64::new(0);
+        let matches_found = AtomicU32::new(0);
 
         let candidate_list: Vec<u32> = final_candidates.into_iter().collect();
 
         let mut all_matches: Vec<Match> = candidate_list
             .into_par_iter()
             .filter_map(|fid| {
+                if options.max_results > 0
+                    && matches_found.load(Ordering::Relaxed) >= options.max_results as u32
+                {
+                    return None;
+                }
+
                 let file_info = self.index.get_file(fid).ok()?;
 
                 // Filter by extension
@@ -262,7 +277,9 @@ impl<'a> Executor<'a> {
                 files_verified.fetch_add(1, Ordering::Relaxed);
                 bytes_verified.fetch_add(file_info.size_bytes, Ordering::Relaxed);
 
-                self.verify_file(&file_info, regex, options).ok()
+                let file_matches = self.verify_file(&file_info, regex, options).ok()?;
+                matches_found.fetch_add(file_matches.len() as u32, Ordering::Relaxed);
+                Some(file_matches)
             })
             .flatten()
             .collect();
@@ -322,13 +339,20 @@ impl<'a> Executor<'a> {
         stats.candidate_files = final_candidates.len() as u32;
 
         let files_verified = AtomicU32::new(0);
-        let bytes_verified = std::sync::atomic::AtomicU64::new(0);
+        let bytes_verified = AtomicU64::new(0);
+        let matches_found = AtomicU32::new(0);
 
         let candidate_list: Vec<u32> = final_candidates.into_iter().collect();
 
         let mut all_matches: Vec<Match> = candidate_list
             .into_par_iter()
             .filter_map(|fid| {
+                if options.max_results > 0
+                    && matches_found.load(Ordering::Relaxed) >= options.max_results as u32
+                {
+                    return None;
+                }
+
                 let file_info = self.index.get_file(fid).ok()?;
 
                 if !options.type_filter.is_empty() {
@@ -345,7 +369,9 @@ impl<'a> Executor<'a> {
                 files_verified.fetch_add(1, Ordering::Relaxed);
                 bytes_verified.fetch_add(file_info.size_bytes, Ordering::Relaxed);
 
-                self.verify_file(&file_info, regex, options).ok()
+                let file_matches = self.verify_file(&file_info, regex, options).ok()?;
+                matches_found.fetch_add(file_matches.len() as u32, Ordering::Relaxed);
+                Some(file_matches)
             })
             .flatten()
             .collect();
@@ -369,11 +395,18 @@ impl<'a> Executor<'a> {
         let stats_candidate_files = self.index.header.file_count;
 
         let files_verified = AtomicU32::new(0);
-        let bytes_verified = std::sync::atomic::AtomicU64::new(0);
+        let bytes_verified = AtomicU64::new(0);
+        let matches_found = AtomicU32::new(0);
 
         let mut all_matches: Vec<Match> = (0..self.index.header.file_count)
             .into_par_iter()
             .filter_map(|fid| {
+                if options.max_results > 0
+                    && matches_found.load(Ordering::Relaxed) >= options.max_results as u32
+                {
+                    return None;
+                }
+
                 let file_info = self.index.get_file(fid).ok()?;
 
                 // Filter by extension
@@ -391,7 +424,9 @@ impl<'a> Executor<'a> {
                 files_verified.fetch_add(1, Ordering::Relaxed);
                 bytes_verified.fetch_add(file_info.size_bytes, Ordering::Relaxed);
 
-                self.verify_file(&file_info, regex, options).ok()
+                let file_matches = self.verify_file(&file_info, regex, options).ok()?;
+                matches_found.fetch_add(file_matches.len() as u32, Ordering::Relaxed);
+                Some(file_matches)
             })
             .flatten()
             .collect();
@@ -534,6 +569,10 @@ impl<'a> Executor<'a> {
                         context_after,
                         is_binary: is_bin,
                     });
+
+                    if options.max_results > 0 && matches.len() >= options.max_results {
+                        break;
+                    }
                 }
                 line_start_offset += line.len() + 1; // +1 for newline
             }
