@@ -95,4 +95,4 @@ Distributed under the MIT License. See `LICENSE` for more information.
 
 ## Acknowledgements
 - Inspired by the need for faster-than-grep search in massive codebases.
-- Built with Rust 2024.
+- Built with Rust 2026.
