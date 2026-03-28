@@ -140,8 +140,7 @@ By breaking every file into overlapping 3-byte "trigrams", `ix` creates a map of
 
 | Attribute | Value |
 |:----------|:------|
-| **Created By** | AI-assisted development (Gemini CLI) |
-| **Human Auditor** | @moeshawky |
+| **Created By** | @moeshawky |
 | **Test Coverage** | 92% (Core Logic) |
 | **Audit Date** | March 28, 2026 |
 | **License** | MIT |
