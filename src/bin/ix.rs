@@ -274,11 +274,15 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
 
 fn print_match(m: &ix::executor::Match, json: bool, context: usize) {
     let truncate = |s: &str| -> String {
-        if s.len() > 200 {
-            format!("{}...", &s[..200])
-        } else {
-            s.to_string()
+        let max_bytes = 200;
+        if s.len() <= max_bytes {
+            return s.to_string();
         }
+        let mut end = max_bytes;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
     };
 
     if json {
