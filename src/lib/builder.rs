@@ -227,15 +227,14 @@ impl Builder {
         // 3. Trigram Table
         self.align_to_8(&mut f)?;
         let trigram_table_offset = f.stream_position()?;
-        for i in 0..TRIGRAM_SLOTS {
-            if let Some(&(off, len, freq)) = posting_infos.get(&(i as u32)) {
+        for &tri in &sorted_trigrams {
+            if let Some(&(off, len, freq)) = posting_infos.get(&tri) {
                 let abs_off = posting_data_offset + off;
+                f.write_all(&tri.to_le_bytes())?; // 4-byte key
                 f.write_all(&abs_off.to_le_bytes()[..6])?; // u48
                 f.write_all(&len.to_le_bytes())?; // u32
                 f.write_all(&freq.to_le_bytes())?; // u32
-                f.write_all(&[0u8; 2])?; // padding
-            } else {
-                f.write_all(&[0u8; 16])?;
+                f.write_all(&[0u8; 2])?; // padding to 20 bytes total
             }
         }
         let trigram_table_size = f.stream_position()? - trigram_table_offset;

@@ -64,38 +64,50 @@ impl Reader {
     }
 
     pub fn get_trigram(&self, trigram: Trigram) -> Option<TrigramInfo> {
-        let idx = trigram as usize;
-        if idx >= TRIGRAM_SLOTS {
-            return None;
+        let count = self.header.trigram_count as usize;
+        let table_start = self.header.trigram_table_offset as usize;
+        
+        let mut low = 0;
+        let mut high = count;
+        
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let entry_off = table_start + mid * TRIGRAM_ENTRY_SIZE;
+            
+            // Read trigram key (first 4 bytes)
+            let key_bytes = self.mmap.get(entry_off..entry_off + 4)?;
+            let key = u32::from_le_bytes(key_bytes.try_into().ok()?);
+            
+            if key == trigram {
+                let entry = self.mmap.get(entry_off..entry_off + TRIGRAM_ENTRY_SIZE)?;
+                
+                // Read posting_offset (u48, bytes 4..10)
+                let mut off_bytes = [0u8; 8];
+                off_bytes[..6].copy_from_slice(&entry[4..10]);
+                let posting_offset = u64::from_le_bytes(off_bytes);
+                
+                let posting_length = entry.get(10..14)
+                    .and_then(|s| s.try_into().ok())
+                    .map(u32::from_le_bytes)
+                    .unwrap_or(0);
+                let doc_frequency = entry.get(14..18)
+                    .and_then(|s| s.try_into().ok())
+                    .map(u32::from_le_bytes)
+                    .unwrap_or(0);
+                    
+                return Some(TrigramInfo {
+                    posting_offset,
+                    posting_length,
+                    doc_frequency,
+                });
+            } else if key < trigram {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
         }
-
-        let entry_off = self.header.trigram_table_offset as usize + idx * TRIGRAM_ENTRY_SIZE;
-        let entry = &self.mmap[entry_off..entry_off + TRIGRAM_ENTRY_SIZE];
-
-        let mut off_bytes = [0u8; 8];
-        off_bytes[..6].copy_from_slice(&entry[0..6]);
-        let posting_offset = u64::from_le_bytes(off_bytes);
-
-        if posting_offset == 0 {
-            return None;
-        }
-
-        let posting_length = entry
-            .get(6..10)
-            .and_then(|s| s.try_into().ok())
-            .map(u32::from_le_bytes)
-            .unwrap_or(0);
-        let doc_frequency = entry
-            .get(10..14)
-            .and_then(|s| s.try_into().ok())
-            .map(u32::from_le_bytes)
-            .unwrap_or(0);
-
-        Some(TrigramInfo {
-            posting_offset,
-            posting_length,
-            doc_frequency,
-        })
+        
+        None
     }
 
     pub fn decode_postings(&self, info: &TrigramInfo) -> Result<PostingList> {

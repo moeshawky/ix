@@ -8,16 +8,13 @@ pub const MAGIC: [u8; 4] = [0x49, 0x58, 0x30, 0x31];
 
 /// Current format version
 pub const VERSION_MAJOR: u16 = 1;
-pub const VERSION_MINOR: u16 = 0;
+pub const VERSION_MINOR: u16 = 1;
 
 /// Fixed header size (256 bytes)
 pub const HEADER_SIZE: usize = 256;
 
-/// Trigram table: one entry per possible 3-byte combination
-pub const TRIGRAM_SLOTS: usize = 16_777_216; // 256^3
-
-/// Trigram entry size in bytes
-pub const TRIGRAM_ENTRY_SIZE: usize = 16;
+/// Trigram entry size in bytes (u32 key + 16-byte existing entry)
+pub const TRIGRAM_ENTRY_SIZE: usize = 20;
 
 /// File entry size in bytes
 pub const FILE_ENTRY_SIZE: usize = 48;
@@ -104,7 +101,7 @@ impl Header {
 
         let major = r16(0x04);
         let minor = r16(0x06);
-        if major != VERSION_MAJOR {
+        if major != VERSION_MAJOR || minor < VERSION_MINOR {
             return Err(crate::error::Error::UnsupportedVersion { major, minor });
         }
 
