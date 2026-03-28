@@ -17,29 +17,42 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "ix",
     version = "0.1.0",
-    about = "Trigram code search — the grep replacement"
+    about = "ix: High-performance, byte-level code search using a trigram index.",
+    after_help = "EXAMPLES:
+    Index the current directory:
+        ix --build
+
+    Search for a literal string:
+        ix \"ConnectionTimeout\"
+
+    Search using a Regular Expression:
+        ix --regex \"err(or|no).*timeout\"
+
+    Search in a specific directory without using the index:
+        ix --no-index \"TODO\" ./src"
 )]
 struct Cli {
-    /// Search pattern
+    /// The pattern to search for (literal string by default).
+    #[arg(value_name = "PATTERN")]
     pattern: Option<String>,
 
-    /// Directory to search in
-    #[arg(default_value = ".")]
+    /// The directory to search in.
+    #[arg(default_value = ".", value_name = "PATH")]
     path: PathBuf,
 
-    /// Build the index
-    #[arg(long)]
+    /// Build or update the .ix index for the target directory.
+    #[arg(long, help_heading = "Actions")]
     build: bool,
 
-    /// Use regular expression for search
+    /// Interpret the pattern as a regular expression.
     #[arg(short, long)]
     regex: bool,
 
-    /// Case-insensitive search
+    /// Perform a case-insensitive search (currently only for non-indexed scans).
     #[arg(short, long)]
     ignore_case: bool,
 
-    /// Force full scan (ignore index)
+    /// Force a full file-system scan, ignoring any existing .ix index.
     #[arg(long)]
     no_index: bool,
 }
