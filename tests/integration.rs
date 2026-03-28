@@ -1,9 +1,9 @@
+use ix::builder::Builder;
+use ix::executor::{Executor, QueryOptions};
+use ix::planner::Planner;
+use ix::reader::Reader;
 use std::fs;
 use tempfile::tempdir;
-use ix::builder::Builder;
-use ix::reader::Reader;
-use ix::executor::Executor;
-use ix::planner::Planner;
 
 #[test]
 fn integration_search_literal() {
@@ -28,7 +28,7 @@ fn integration_search_literal() {
 
     // Literal search
     let plan = Planner::plan("hello", false);
-    let (matches, _) = executor.execute(&plan).unwrap();
+    let (matches, _) = executor.execute(&plan, &QueryOptions::default()).unwrap();
     assert_eq!(matches.len(), 2);
 }
 
@@ -48,7 +48,7 @@ fn integration_search_regex() {
 
     // Regex search
     let plan = Planner::plan("let [a-z] =", true);
-    let (matches, _) = executor.execute(&plan).unwrap();
+    let (matches, _) = executor.execute(&plan, &QueryOptions::default()).unwrap();
     assert_eq!(matches.len(), 1);
     assert!(matches[0].line_content.contains("let x = 42"));
 }

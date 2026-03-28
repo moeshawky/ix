@@ -16,8 +16,11 @@ use std::path::PathBuf;
 pub struct Match {
     pub file_path: PathBuf,
     pub line_number: u32,
+    pub col: u32,
     pub line_content: String,
     pub byte_offset: u64,
+    pub context_before: Vec<String>,
+    pub context_after: Vec<String>,
 }
 
 #[derive(Default, Debug)]
@@ -30,6 +33,15 @@ pub struct QueryStats {
     pub total_matches: u32,
 }
 
+#[derive(Debug, Default)]
+pub struct QueryOptions {
+    pub count_only: bool,
+    pub files_only: bool,
+    pub max_results: usize,
+    pub type_filter: Vec<String>,
+    pub context_lines: usize,
+}
+
 pub struct Executor<'a> {
     index: &'a Reader,
 }
@@ -39,14 +51,20 @@ impl<'a> Executor<'a> {
         Self { index }
     }
 
-    pub fn execute(&self, plan: &QueryPlan) -> Result<(Vec<Match>, QueryStats)> {
+    pub fn execute(
+        &self,
+        plan: &QueryPlan,
+        options: &QueryOptions,
+    ) -> Result<(Vec<Match>, QueryStats)> {
         match plan {
-            QueryPlan::Literal { pattern, trigrams } => self.execute_literal(pattern, trigrams),
+            QueryPlan::Literal { pattern, trigrams } => {
+                self.execute_literal(pattern, trigrams, options)
+            }
             QueryPlan::RegexWithLiterals {
                 regex,
                 required_trigram_sets,
-            } => self.execute_regex_indexed(regex, required_trigram_sets),
-            QueryPlan::FullScan { regex } => self.execute_full_scan(regex),
+            } => self.execute_regex_indexed(regex, required_trigram_sets, options),
+            QueryPlan::FullScan { regex } => self.execute_full_scan(regex, options),
         }
     }
 
@@ -54,6 +72,7 @@ impl<'a> Executor<'a> {
         &self,
         pattern: &[u8],
         trigrams: &[Trigram],
+        options: &QueryOptions,
     ) -> Result<(Vec<Match>, QueryStats)> {
         let mut stats = QueryStats::default();
 
@@ -105,14 +124,41 @@ impl<'a> Executor<'a> {
 
         for fid in candidates {
             let file_info = self.index.get_file(fid)?;
+
+            // Filter by extension
+            if !options.type_filter.is_empty() {
+                let ext = file_info
+                    .path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("");
+                if !options.type_filter.iter().any(|e| e == ext) {
+                    continue;
+                }
+            }
+
             stats.files_verified += 1;
             stats.bytes_verified += file_info.size_bytes;
-            if let Ok(file_matches) = self.verify_file(&file_info, &regex) {
-                matches.extend(file_matches);
+            if let Ok(file_matches) =
+                self.verify_file(&file_info, &regex, options.count_only, options.context_lines)
+            {
+                if options.count_only {
+                    stats.total_matches += file_matches.len() as u32;
+                } else {
+                    for m in file_matches {
+                        matches.push(m);
+                        if options.max_results > 0 && matches.len() >= options.max_results {
+                            stats.total_matches = matches.len() as u32;
+                            return Ok((matches, stats));
+                        }
+                    }
+                }
             }
         }
 
-        stats.total_matches = matches.len() as u32;
+        if !options.count_only {
+            stats.total_matches = matches.len() as u32;
+        }
         Ok((matches, stats))
     }
 
@@ -120,6 +166,7 @@ impl<'a> Executor<'a> {
         &self,
         regex: &Regex,
         required_trigram_sets: &[Vec<Trigram>],
+        options: &QueryOptions,
     ) -> Result<(Vec<Match>, QueryStats)> {
         let mut stats = QueryStats::default();
 
@@ -177,52 +224,140 @@ impl<'a> Executor<'a> {
 
         for fid in final_candidates {
             let file_info = self.index.get_file(fid)?;
+
+            // Filter by extension
+            if !options.type_filter.is_empty() {
+                let ext = file_info
+                    .path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("");
+                if !options.type_filter.iter().any(|e| e == ext) {
+                    continue;
+                }
+            }
+
             stats.files_verified += 1;
             stats.bytes_verified += file_info.size_bytes;
-            if let Ok(file_matches) = self.verify_file(&file_info, regex) {
-                matches.extend(file_matches);
+            if let Ok(file_matches) =
+                self.verify_file(&file_info, regex, options.count_only, options.context_lines)
+            {
+                if options.count_only {
+                    stats.total_matches += file_matches.len() as u32;
+                } else {
+                    for m in file_matches {
+                        matches.push(m);
+                        if options.max_results > 0 && matches.len() >= options.max_results {
+                            stats.total_matches = matches.len() as u32;
+                            return Ok((matches, stats));
+                        }
+                    }
+                }
             }
         }
 
-        stats.total_matches = matches.len() as u32;
+        if !options.count_only {
+            stats.total_matches = matches.len() as u32;
+        }
         Ok((matches, stats))
     }
 
-    fn execute_full_scan(&self, regex: &Regex) -> Result<(Vec<Match>, QueryStats)> {
+    fn execute_full_scan(
+        &self,
+        regex: &Regex,
+        options: &QueryOptions,
+    ) -> Result<(Vec<Match>, QueryStats)> {
         let mut stats = QueryStats::default();
         let mut matches = Vec::new();
 
         for fid in 0..self.index.header.file_count {
             let file_info = self.index.get_file(fid)?;
+
+            // Filter by extension
+            if !options.type_filter.is_empty() {
+                let ext = file_info
+                    .path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("");
+                if !options.type_filter.iter().any(|e| e == ext) {
+                    continue;
+                }
+            }
+
             stats.files_verified += 1;
             stats.bytes_verified += file_info.size_bytes;
-            if let Ok(file_matches) = self.verify_file(&file_info, regex) {
-                matches.extend(file_matches);
+            if let Ok(file_matches) =
+                self.verify_file(&file_info, regex, options.count_only, options.context_lines)
+            {
+                if options.count_only {
+                    stats.total_matches += file_matches.len() as u32;
+                } else {
+                    for m in file_matches {
+                        matches.push(m);
+                        if options.max_results > 0 && matches.len() >= options.max_results {
+                            stats.total_matches = matches.len() as u32;
+                            return Ok((matches, stats));
+                        }
+                    }
+                }
             }
         }
 
         stats.candidate_files = self.index.header.file_count;
-        stats.total_matches = matches.len() as u32;
+        if !options.count_only {
+            stats.total_matches = matches.len() as u32;
+        }
         Ok((matches, stats))
     }
 
-    fn verify_file(&self, info: &FileInfo, regex: &Regex) -> Result<Vec<Match>> {
+    fn verify_file(
+        &self,
+        info: &FileInfo,
+        regex: &Regex,
+        count_only: bool,
+        context: usize,
+    ) -> Result<Vec<Match>> {
         let file = File::open(&info.path)?;
         let mmap = unsafe { Mmap::map(&file)? };
 
         // Use lossy conversion to handle files with mixed encoding
         let data = String::from_utf8_lossy(&mmap);
+        let lines: Vec<&str> = data.lines().collect();
 
         let mut matches = Vec::new();
-        for (i, line) in data.lines().enumerate() {
+        let mut line_start_offset = 0;
+        for (i, line) in lines.iter().enumerate() {
             if let Some(m) = regex.find(line) {
+                let context_before = if context > 0 {
+                    let start = i.saturating_sub(context);
+                    lines[start..i].iter().map(|s| s.to_string()).collect()
+                } else {
+                    vec![]
+                };
+
+                let context_after = if context > 0 {
+                    let end = (i + 1 + context).min(lines.len());
+                    lines[i + 1..end].iter().map(|s| s.to_string()).collect()
+                } else {
+                    vec![]
+                };
+
                 matches.push(Match {
                     file_path: info.path.clone(),
                     line_number: (i + 1) as u32,
-                    line_content: line.to_string(),
-                    byte_offset: m.start() as u64,
+                    col: (m.start() + 1) as u32,
+                    line_content: if count_only {
+                        String::new()
+                    } else {
+                        line.to_string()
+                    },
+                    byte_offset: (line_start_offset + m.start()) as u64,
+                    context_before,
+                    context_after,
                 });
             }
+            line_start_offset += line.len() + 1; // +1 for newline
         }
         Ok(matches)
     }
