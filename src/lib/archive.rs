@@ -3,7 +3,7 @@
 #[cfg(feature = "archive")]
 use std::fs::File;
 #[cfg(feature = "archive")]
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 #[cfg(feature = "archive")]
 use std::path::{Path, PathBuf};
 #[cfg(feature = "archive")]
@@ -12,8 +12,6 @@ use crate::error::Result;
 use crate::executor::{Match, QueryOptions};
 #[cfg(feature = "archive")]
 use regex::Regex;
-
-const DECOMPRESSION_LIMIT: u64 = 10 * 1024 * 1024; // 10MB
 
 #[cfg(feature = "archive")]
 fn is_binary(data: &[u8]) -> bool {
@@ -42,17 +40,8 @@ pub fn scan_zip(path: &Path, regex: &Regex, options: &QueryOptions) -> Result<Ve
         }
 
         let entry_name = entry.name().to_string();
-
-        let mut buffer = Vec::new();
-        // Limit entry size to 10MB to avoid OOM
-        entry.take(DECOMPRESSION_LIMIT).read_to_end(&mut buffer)?;
-
-        if is_binary(&buffer) {
-            continue;
-        }
-
         let display_path = format!("{}:{}", path.display(), entry_name);
-        let entry_matches = match_content(&buffer, &PathBuf::from(display_path), regex, options);
+        let entry_matches = match_content_stream(entry, &PathBuf::from(display_path), regex, options)?;
         
         for m in entry_matches {
             matches.push(m);
@@ -75,18 +64,11 @@ pub fn scan_tar_gz(path: &Path, regex: &Regex, options: &QueryOptions) -> Result
     for entry in archive.entries()? {
         let entry = entry?;
         let path_in_tar = entry.path()?.to_path_buf();
-        
-        let mut buffer = Vec::new();
-        // Limit entry size to 10MB
-        entry.take(DECOMPRESSION_LIMIT).read_to_end(&mut buffer)?;
-
-        if is_binary(&buffer) {
-            continue;
-        }
-
         let display_path = format!("{}:{}", path.display(), path_in_tar.display());
-        let entry_matches = match_content(&buffer, &PathBuf::from(display_path), regex, options);
-        
+
+        let entry_matches =
+            match_content_stream(entry, &PathBuf::from(display_path), regex, options)?;
+
         for m in entry_matches {
             matches.push(m);
             if options.max_results > 0 && matches.len() >= options.max_results {
@@ -99,42 +81,94 @@ pub fn scan_tar_gz(path: &Path, regex: &Regex, options: &QueryOptions) -> Result
 }
 
 #[cfg(feature = "archive")]
-fn match_content(data: &[u8], path: &Path, regex: &Regex, options: &QueryOptions) -> Vec<Match> {
-    let content = String::from_utf8_lossy(data);
-    let lines: Vec<&str> = content.lines().collect();
+fn match_content_stream<R: Read>(
+    reader: R,
+    path: &Path,
+    regex: &Regex,
+    options: &QueryOptions,
+) -> Result<Vec<Match>> {
+    let mut buf_reader = BufReader::new(reader);
     let mut matches = Vec::new();
+    let mut line_number = 0u32;
+    let mut byte_offset = 0u64;
 
-    for (i, line) in lines.iter().enumerate() {
-        if let Some(m) = regex.find(line) {
-            let context_before = if options.context_lines > 0 {
-                let start = i.saturating_sub(options.context_lines);
-                lines[start..i].iter().map(|s| s.to_string()).collect()
-            } else {
-                vec![]
-            };
+    // Binary check on first 8KB
+    {
+        let buffer = buf_reader.fill_buf()?;
+        if buffer.is_empty() {
+            return Ok(vec![]);
+        }
+        if is_binary(buffer) {
+            return Ok(vec![]);
+        }
+    }
 
-            let context_after = if options.context_lines > 0 {
-                let end = (i + 1 + options.context_lines).min(lines.len());
-                lines[i + 1..end].iter().map(|s| s.to_string()).collect()
-            } else {
-                vec![]
-            };
+    let mut line = String::new();
+    let mut context_before = std::collections::VecDeque::new();
+    let mut pending_matches: Vec<Match> = Vec::new();
 
-            matches.push(Match {
+    while buf_reader.read_line(&mut line)? > 0 {
+        line_number += 1;
+        let line_len = line.len() as u64;
+        let trimmed_line = line.trim_end().to_string();
+
+        // Fill context_after for pending matches
+        for m in &mut pending_matches {
+            if m.context_after.len() < options.context_lines {
+                m.context_after.push(trimmed_line.clone());
+            }
+        }
+
+        // Move completed matches to final list
+        let (completed, still_pending): (Vec<_>, Vec<_>) = pending_matches
+            .into_iter()
+            .partition(|m| m.context_after.len() >= options.context_lines);
+        matches.extend(completed);
+        pending_matches = still_pending;
+
+        if let Some(m) = regex.find(&line) {
+            let context_before_vec: Vec<String> =
+                context_before.iter().map(|s: &String| s.trim_end().to_string()).collect();
+
+            let new_match = Match {
                 file_path: path.to_owned(),
-                line_number: (i + 1) as u32,
+                line_number,
                 col: (m.start() + 1) as u32,
                 line_content: if options.count_only {
                     String::new()
                 } else {
-                    line.to_string()
+                    trimmed_line.clone()
                 },
-                byte_offset: 0,
-                context_before,
-                context_after,
+                byte_offset: byte_offset + m.start() as u64,
+                context_before: context_before_vec,
+                context_after: vec![],
                 is_binary: false,
-            });
+            };
+
+            if options.context_lines > 0 {
+                pending_matches.push(new_match);
+            } else {
+                matches.push(new_match);
+            }
+
+            if options.max_results > 0 && (matches.len() + pending_matches.len()) >= options.max_results {
+                if pending_matches.is_empty() || matches.len() >= options.max_results {
+                    break;
+                }
+            }
         }
+
+        if options.context_lines > 0 {
+            context_before.push_back(line.clone());
+            if context_before.len() > options.context_lines {
+                context_before.pop_front();
+            }
+        }
+
+        byte_offset += line_len;
+        line.clear();
     }
-    matches
+
+    matches.extend(pending_matches);
+    Ok(matches)
 }

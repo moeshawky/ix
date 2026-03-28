@@ -10,6 +10,7 @@ use memmap2::Mmap;
 use rayon::prelude::*;
 use regex::Regex;
 use std::fs::File;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -116,6 +117,97 @@ impl Scanner {
         (non_printable as f32 / check_len as f32) > 0.3
     }
 
+    fn scan_stream<R: Read>(
+        &self,
+        reader: R,
+        path: &Path,
+        regex: &Regex,
+        options: &QueryOptions,
+    ) -> Result<Vec<Match>> {
+        let mut buf_reader = BufReader::new(reader);
+        let mut matches = Vec::new();
+        let mut line_number = 0u32;
+        let mut byte_offset = 0u64;
+
+        // Binary check on first 8KB
+        {
+            let buffer = buf_reader.fill_buf()?;
+            let is_bin = Self::is_binary(buffer);
+            if is_bin && !options.binary {
+                return Ok(vec![]);
+            }
+        }
+
+        let mut line = String::new();
+        let mut context_before = std::collections::VecDeque::new();
+        let mut pending_matches: Vec<Match> = Vec::new();
+
+        while buf_reader.read_line(&mut line)? > 0 {
+            line_number += 1;
+            let line_len = line.len() as u64;
+            let trimmed_line = line.trim_end().to_string();
+
+            // Fill context_after for pending matches
+            for m in &mut pending_matches {
+                if m.context_after.len() < options.context_lines {
+                    m.context_after.push(trimmed_line.clone());
+                }
+            }
+
+            // Move completed matches to final list
+            let (completed, still_pending): (Vec<_>, Vec<_>) = pending_matches
+                .into_iter()
+                .partition(|m| m.context_after.len() >= options.context_lines);
+            matches.extend(completed);
+            pending_matches = still_pending;
+
+            if let Some(m) = regex.find(&line) {
+                let context_before_vec: Vec<String> =
+                    context_before.iter().map(|s: &String| s.trim_end().to_string()).collect();
+
+                let new_match = Match {
+                    file_path: path.to_owned(),
+                    line_number,
+                    col: (m.start() + 1) as u32,
+                    line_content: if options.count_only {
+                        String::new()
+                    } else {
+                        trimmed_line.clone()
+                    },
+                    byte_offset: byte_offset + m.start() as u64,
+                    context_before: context_before_vec,
+                    context_after: vec![],
+                    is_binary: false,
+                };
+
+                if options.context_lines > 0 {
+                    pending_matches.push(new_match);
+                } else {
+                    matches.push(new_match);
+                }
+
+                if options.max_results > 0 && (matches.len() + pending_matches.len()) >= options.max_results {
+                    if pending_matches.is_empty() || matches.len() >= options.max_results {
+                        break;
+                    }
+                }
+            }
+
+            if options.context_lines > 0 {
+                context_before.push_back(line.clone());
+                if context_before.len() > options.context_lines {
+                    context_before.pop_front();
+                }
+            }
+
+            byte_offset += line_len;
+            line.clear();
+        }
+
+        matches.extend(pending_matches);
+        Ok(matches)
+    }
+
     fn scan_file(
         &self,
         path: &Path,
@@ -124,32 +216,29 @@ impl Scanner {
     ) -> Result<Vec<Match>> {
         let file = File::open(path)?;
         let metadata = file.metadata()?;
-        if metadata.len() > 100 * 1024 * 1024 {
+        if metadata.len() > 100 * 1024 * 1024 && !options.decompress {
+            // Keep 100MB limit for raw files to avoid huge mmaps in parallel
+            // But if it's compressed, we stream it, so no size limit needed.
             return Ok(vec![]);
         }
 
         let mmap = unsafe { Mmap::map(&file)? };
 
-        // Handle decompression
-        let raw_data = if options.decompress {
-            maybe_decompress(path, &mmap)?
-                .map(std::borrow::Cow::Owned)
-                .unwrap_or_else(|| std::borrow::Cow::Borrowed(&mmap[..]))
-        } else {
-            std::borrow::Cow::Borrowed(&mmap[..])
-        };
+        if options.decompress {
+            if let Some(reader) = maybe_decompress(path, &mmap)? {
+                return self.scan_stream(reader, path, regex, options);
+            }
+        }
 
         // Binary check
-        let is_bin = Self::is_binary(&raw_data);
+        let is_bin = Self::is_binary(&mmap);
         if is_bin && !options.binary {
             return Ok(vec![]);
         }
 
-        let data = String::from_utf8_lossy(&raw_data);
-
         let mut matches = Vec::new();
-
         if options.multiline {
+            let data = String::from_utf8_lossy(&mmap);
             for m in regex.find_iter(&data) {
                 let byte_offset = m.start();
                 let line_number = data[..byte_offset].chars().filter(|&c| c == '\n').count() + 1;
@@ -195,6 +284,7 @@ impl Scanner {
                 }
             }
         } else {
+            let data = String::from_utf8_lossy(&mmap);
             let lines: Vec<&str> = data.lines().collect();
             let mut line_start_offset = 0;
             for (i, line) in lines.iter().enumerate() {
@@ -227,6 +317,10 @@ impl Scanner {
                         context_after,
                         is_binary: is_bin,
                     });
+
+                    if options.max_results > 0 && matches.len() >= options.max_results {
+                        break;
+                    }
                 }
                 line_start_offset += line.len() + 1;
             }

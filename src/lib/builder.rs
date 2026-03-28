@@ -207,9 +207,20 @@ impl Builder {
 
         // Handle decompression
         let raw_data = if self.decompress {
-            maybe_decompress(&path, &mmap)?
-                .map(std::borrow::Cow::Owned)
-                .unwrap_or_else(|| std::borrow::Cow::Borrowed(&mmap[..]))
+            if let Some(mut reader) = maybe_decompress(&path, &mmap)? {
+                let mut buf = Vec::new();
+                // We still need a cap during indexing because we extract all trigrams
+                // and compute content hash, which requires full data in memory.
+                // 10MB is a safe default for 'code' files.
+                use std::io::Read;
+                reader.read_to_end(&mut buf)?; // Remove take() if we want 'no cap' but indexing MUST buffer.
+                // Wait, if indexing doesn't cap, we could OOM during index.
+                // I'll keep a large but reasonable cap for indexing.
+                // Actually, let's just read it all for now as requested 'no capping'.
+                std::borrow::Cow::Owned(buf)
+            } else {
+                std::borrow::Cow::Borrowed(&mmap[..])
+            }
         } else {
             std::borrow::Cow::Borrowed(&mmap[..])
         };

@@ -4,16 +4,16 @@
 
 use crate::decompress::maybe_decompress;
 use crate::error::Result;
-use rayon::prelude::*;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use crate::planner::QueryPlan;
 use crate::reader::{FileInfo, Reader};
 use crate::trigram::Trigram;
-use memmap2::Mmap;
+use rayon::prelude::*;
 use regex::Regex;
 use std::collections::HashSet;
 use std::fs::File;
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 #[derive(Debug)]
 pub struct Match {
@@ -156,9 +156,9 @@ impl<'a> Executor<'a> {
                     let ext = file_info
                         .path
                         .extension()
-                        .and_then(|e| e.to_str())
+                        .and_then(|e: &std::ffi::OsStr| e.to_str())
                         .unwrap_or("");
-                    if !options.type_filter.iter().any(|e| e == ext) {
+                    if !options.type_filter.iter().any(|e: &String| e == ext) {
                         return None;
                     }
                 }
@@ -235,12 +235,12 @@ impl<'a> Executor<'a> {
         }
 
         // Intersect candidates from all fragments
-        let mut final_candidates = match fragment_candidates.pop() {
+        let mut final_candidates: HashSet<u32> = match fragment_candidates.pop() {
             Some(c) => c,
             None => return Ok((vec![], stats)),
         };
         for set in fragment_candidates {
-            final_candidates.retain(|fid| set.contains(fid));
+            final_candidates.retain(|fid: &u32| set.contains(fid));
         }
 
         stats.candidate_files = final_candidates.len() as u32;
@@ -267,9 +267,9 @@ impl<'a> Executor<'a> {
                     let ext = file_info
                         .path
                         .extension()
-                        .and_then(|e| e.to_str())
+                        .and_then(|e: &std::ffi::OsStr| e.to_str())
                         .unwrap_or("");
-                    if !options.type_filter.iter().any(|e| e == ext) {
+                    if !options.type_filter.iter().any(|e: &String| e == ext) {
                         return None;
                     }
                 }
@@ -414,9 +414,9 @@ impl<'a> Executor<'a> {
                     let ext = file_info
                         .path
                         .extension()
-                        .and_then(|e| e.to_str())
+                        .and_then(|e: &std::ffi::OsStr| e.to_str())
                         .unwrap_or("");
-                    if !options.type_filter.iter().any(|e| e == ext) {
+                    if !options.type_filter.iter().any(|e: &String| e == ext) {
                         return None;
                     }
                 }
@@ -458,6 +458,101 @@ impl<'a> Executor<'a> {
         (non_printable as f32 / check_len as f32) > 0.3
     }
 
+    fn verify_stream<R: Read>(
+        &self,
+        reader: R,
+        path: PathBuf,
+        regex: &Regex,
+        options: &QueryOptions,
+    ) -> Result<Vec<Match>> {
+        let mut buf_reader = BufReader::new(reader);
+        let mut matches = Vec::new();
+        let mut line_number = 0u32;
+        let mut byte_offset = 0u64;
+
+        // Binary check on first 8KB
+        {
+            let buffer = buf_reader.fill_buf()?;
+            let is_bin = Self::is_binary(buffer);
+            if is_bin && !options.binary {
+                return Ok(vec![]);
+            }
+        }
+
+        let mut line = String::new();
+        let mut context_before = std::collections::VecDeque::new();
+        let mut pending_matches: Vec<Match> = Vec::new();
+
+        while buf_reader.read_line(&mut line)? > 0 {
+            line_number += 1;
+            let line_len = line.len() as u64;
+            let trimmed_line = line.trim_end().to_string();
+
+            // Fill context_after for pending matches
+            for m in &mut pending_matches {
+                if m.context_after.len() < options.context_lines {
+                    m.context_after.push(trimmed_line.clone());
+                }
+            }
+
+            // Move completed matches to final list
+            let (completed, still_pending): (Vec<_>, Vec<_>) = pending_matches
+                .into_iter()
+                .partition(|m| m.context_after.len() >= options.context_lines);
+            matches.extend(completed);
+            pending_matches = still_pending;
+
+            if let Some(m) = regex.find(&line) {
+                let context_before_vec: Vec<String> =
+                    context_before.iter().map(|s: &String| s.trim_end().to_string()).collect();
+
+                let new_match = Match {
+                    file_path: path.clone(),
+                    line_number,
+                    col: (m.start() + 1) as u32,
+                    line_content: if options.count_only {
+                        String::new()
+                    } else {
+                        trimmed_line.clone()
+                    },
+                    byte_offset: byte_offset + m.start() as u64,
+                    context_before: context_before_vec,
+                    context_after: vec![],
+                    is_binary: false,
+                };
+
+                if options.context_lines > 0 {
+                    pending_matches.push(new_match);
+                } else {
+                    matches.push(new_match);
+                }
+
+                if options.max_results > 0 && (matches.len() + pending_matches.len()) >= options.max_results {
+                    // Capped, but let's keep going to fill context if we really wanted to.
+                    // Actually, if we hit max_results, we should just stop.
+                    // But for streaming, stopping early might miss some context lines.
+                    // Let's just break if we have enough matches.
+                    if pending_matches.is_empty() || matches.len() >= options.max_results {
+                        break;
+                    }
+                }
+            }
+
+            if options.context_lines > 0 {
+                context_before.push_back(line.clone());
+                if context_before.len() > options.context_lines {
+                    context_before.pop_front();
+                }
+            }
+
+            byte_offset += line_len;
+            line.clear();
+        }
+        
+        matches.extend(pending_matches);
+        Ok(matches)
+    }
+
     fn verify_file(
         &self,
         info: &FileInfo,
@@ -465,45 +560,35 @@ impl<'a> Executor<'a> {
         options: &QueryOptions,
     ) -> Result<Vec<Match>> {
         let file = File::open(&info.path)?;
-        let mmap = unsafe { Mmap::map(&file)? };
+        let mmap = unsafe { memmap2::Mmap::map(&file)? };
 
-        // Handle decompression
-        let raw_data = if options.decompress {
-            maybe_decompress(&info.path, &mmap)?
-                .map(std::borrow::Cow::Owned)
-                .unwrap_or_else(|| std::borrow::Cow::Borrowed(&mmap[..]))
-        } else {
-            std::borrow::Cow::Borrowed(&mmap[..])
-        };
+        if options.decompress {
+            if let Some(reader) = maybe_decompress(&info.path, &mmap)? {
+                return self.verify_stream(reader, info.path.clone(), regex, options);
+            }
+        }
 
         // Binary check
-        let is_bin = Self::is_binary(&raw_data);
+        let is_bin = Self::is_binary(&mmap);
         if is_bin && !options.binary {
             return Ok(vec![]);
         }
 
-        let data = String::from_utf8_lossy(&raw_data);
         let mut matches = Vec::new();
-
         if options.multiline {
-            // Multiline search: match against entire content
+            let data = String::from_utf8_lossy(&mmap);
             for m in regex.find_iter(&data) {
                 let byte_offset = m.start();
-                
-                // Compute line number by counting newlines before match
                 let line_number = data[..byte_offset].chars().filter(|&c| c == '\n').count() + 1;
-                
-                // Find line boundaries for context
                 let line_start = data[..byte_offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
                 let line_end = data[byte_offset..].find('\n').map(|i| byte_offset + i).unwrap_or(data.len());
                 let line_content = &data[line_start..line_end];
 
                 let context_before = if options.context_lines > 0 {
-                    // This is slightly complex for multiline, but let's approximate by splitting into lines
                     let all_lines: Vec<&str> = data.lines().collect();
                     let current_line_idx = line_number - 1;
                     let start = current_line_idx.saturating_sub(options.context_lines);
-                    all_lines[start..current_line_idx].iter().map(|s| s.to_string()).collect()
+                    all_lines[start..current_line_idx].iter().map(|s: &&str| s.to_string()).collect()
                 } else {
                     vec![]
                 };
@@ -512,7 +597,7 @@ impl<'a> Executor<'a> {
                     let all_lines: Vec<&str> = data.lines().collect();
                     let current_line_idx = line_number - 1;
                     let end = (current_line_idx + 1 + options.context_lines).min(all_lines.len());
-                    all_lines[current_line_idx + 1..end].iter().map(|s| s.to_string()).collect()
+                    all_lines[current_line_idx + 1..end].iter().map(|s: &&str| s.to_string()).collect()
                 } else {
                     vec![]
                 };
@@ -537,6 +622,7 @@ impl<'a> Executor<'a> {
                 }
             }
         } else {
+            let data = String::from_utf8_lossy(&mmap);
             let lines: Vec<&str> = data.lines().collect();
             let mut line_start_offset = 0;
             for (i, line) in lines.iter().enumerate() {
