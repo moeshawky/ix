@@ -40,6 +40,11 @@ cargo install --path .
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/moeshawky/ix/releases/latest/download/ix-installer.sh | sh
 ```
 
+#### Pre-built Binaries (Windows)
+```powershell
+powershell -c "irm https://github.com/moeshawky/ix/releases/latest/download/ix-installer.ps1 | iex"
+```
+
 ### Initializing the Index
 Build the index once for your project root:
 ```bash
