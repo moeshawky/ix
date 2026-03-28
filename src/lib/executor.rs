@@ -2,15 +2,15 @@
 //!
 //! Handles literal searches, indexed regex, and full scans.
 
-use std::fs::File;
-use std::path::PathBuf;
-use std::collections::HashSet;
+use crate::error::Result;
+use crate::planner::QueryPlan;
+use crate::reader::{FileInfo, Reader};
+use crate::trigram::Trigram;
 use memmap2::Mmap;
 use regex::Regex;
-use crate::error::Result;
-use crate::reader::{Reader, FileInfo};
-use crate::planner::QueryPlan;
-use crate::trigram::Trigram;
+use std::collections::HashSet;
+use std::fs::File;
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub struct Match {
@@ -42,14 +42,21 @@ impl<'a> Executor<'a> {
     pub fn execute(&self, plan: &QueryPlan) -> Result<(Vec<Match>, QueryStats)> {
         match plan {
             QueryPlan::Literal { pattern, trigrams } => self.execute_literal(pattern, trigrams),
-            QueryPlan::RegexWithLiterals { regex, required_trigram_sets } => self.execute_regex_indexed(regex, required_trigram_sets),
+            QueryPlan::RegexWithLiterals {
+                regex,
+                required_trigram_sets,
+            } => self.execute_regex_indexed(regex, required_trigram_sets),
             QueryPlan::FullScan { regex } => self.execute_full_scan(regex),
         }
     }
 
-    fn execute_literal(&self, pattern: &[u8], trigrams: &[Trigram]) -> Result<(Vec<Match>, QueryStats)> {
+    fn execute_literal(
+        &self,
+        pattern: &[u8],
+        trigrams: &[Trigram],
+    ) -> Result<(Vec<Match>, QueryStats)> {
         let mut stats = QueryStats::default();
-        
+
         let mut infos = Vec::new();
         for &tri in trigrams {
             stats.trigrams_queried += 1;
@@ -72,21 +79,23 @@ impl<'a> Executor<'a> {
 
         // ── Step 2: Intersect with next rarest lists if candidate set is large ──
         // Only decode up to 3 lists to avoid excessive I/O
-        for i in 1..infos.len().min(3) {
-            if candidates.len() < 100 { break; }
-            
-            let (_, info) = &infos[i];
-            println!("ix-debug: Intersecting with next rarest trigram (freq: {}). Candidates before: {}", info.doc_frequency, candidates.len());
+        for (_, info) in infos.iter().take(infos.len().min(3)).skip(1) {
+            if candidates.len() < 100 {
+                break;
+            }
+
             let next_postings = self.index.decode_postings(info)?;
             stats.posting_lists_decoded += 1;
-            
+
             let next_set: HashSet<u32> = next_postings.entries.iter().map(|e| e.file_id).collect();
             candidates.retain(|fid| next_set.contains(fid));
         }
 
         // ── Step 3: Filter remaining using Bloom filters ──
         for &(tri, _) in &infos[1..] {
-            if candidates.is_empty() { break; }
+            if candidates.is_empty() {
+                break;
+            }
             candidates.retain(|&fid| self.index.bloom_may_contain(fid, tri));
         }
 
@@ -107,9 +116,13 @@ impl<'a> Executor<'a> {
         Ok((matches, stats))
     }
 
-    fn execute_regex_indexed(&self, regex: &Regex, required_trigram_sets: &[Vec<Trigram>]) -> Result<(Vec<Match>, QueryStats)> {
+    fn execute_regex_indexed(
+        &self,
+        regex: &Regex,
+        required_trigram_sets: &[Vec<Trigram>],
+    ) -> Result<(Vec<Match>, QueryStats)> {
         let mut stats = QueryStats::default();
-        
+
         // For each required literal fragment, find candidate files
         let mut fragment_candidates = Vec::new();
         for trigram_set in required_trigram_sets {
@@ -122,21 +135,25 @@ impl<'a> Executor<'a> {
                     return Ok((vec![], stats));
                 }
             }
-            
+
             infos.sort_by_key(|(_, info)| info.doc_frequency);
-            
+
             // Intersection within fragment
             let (_, rarest_info) = &infos[0];
             let postings = self.index.decode_postings(rarest_info)?;
             stats.posting_lists_decoded += 1;
-            let mut set_candidates: HashSet<u32> = postings.entries.iter().map(|e| e.file_id).collect();
-            
+            let mut set_candidates: HashSet<u32> =
+                postings.entries.iter().map(|e| e.file_id).collect();
+
             // Intersect with up to 2 more lists if large
-            for i in 1..infos.len().min(3) {
-                if set_candidates.len() < 100 { break; }
-                let next_postings = self.index.decode_postings(&infos[i].1)?;
+            for (_, info) in infos.iter().take(infos.len().min(3)).skip(1) {
+                if set_candidates.len() < 100 {
+                    break;
+                }
+                let next_postings = self.index.decode_postings(info)?;
                 stats.posting_lists_decoded += 1;
-                let next_set: HashSet<u32> = next_postings.entries.iter().map(|e| e.file_id).collect();
+                let next_set: HashSet<u32> =
+                    next_postings.entries.iter().map(|e| e.file_id).collect();
                 set_candidates.retain(|fid| next_set.contains(fid));
             }
 
@@ -192,7 +209,7 @@ impl<'a> Executor<'a> {
     fn verify_file(&self, info: &FileInfo, regex: &Regex) -> Result<Vec<Match>> {
         let file = File::open(&info.path)?;
         let mmap = unsafe { Mmap::map(&file)? };
-        
+
         // Use lossy conversion to handle files with mixed encoding
         let data = String::from_utf8_lossy(&mmap);
 
