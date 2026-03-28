@@ -20,6 +20,13 @@ pub enum QueryPlan {
         required_trigram_sets: Vec<Vec<Trigram>>,
     },
 
+    /// Case-insensitive indexed search. Each group = case variants for one
+    /// trigram position. Executor UNIONs within groups, INTERSECTs across.
+    CaseInsensitive {
+        regex: Regex,
+        trigram_groups: Vec<Vec<Trigram>>,
+    },
+
     /// No literals extractable — full scan fallback
     FullScan { regex: Regex },
 }
@@ -28,7 +35,11 @@ pub struct Planner;
 
 impl Planner {
     pub fn plan(pattern: &str, is_regex: bool) -> QueryPlan {
-        if !is_regex {
+        Self::plan_with_options(pattern, is_regex, false)
+    }
+
+    pub fn plan_with_options(pattern: &str, is_regex: bool, ignore_case: bool) -> QueryPlan {
+        if !is_regex && !ignore_case {
             let bytes = pattern.as_bytes().to_vec();
             let trigrams = Extractor::extract_set(&bytes);
 
@@ -45,7 +56,36 @@ impl Planner {
             };
         }
 
-        let regex = match Regex::new(pattern) {
+        // Case-insensitive literal: per-position trigram groups.
+        // Executor UNIONs within each group, INTERSECTs across groups.
+        if !is_regex && ignore_case {
+            let bytes = pattern.as_bytes();
+            let groups = Extractor::extract_groups_case_insensitive(bytes);
+            let regex_pat = format!("(?i){}", regex::escape(pattern));
+            let regex = match Regex::new(&regex_pat) {
+                Ok(r) => r,
+                Err(_) => return QueryPlan::FullScan {
+                    regex: Regex::new("").unwrap(),
+                },
+            };
+
+            if groups.is_empty() {
+                return QueryPlan::FullScan { regex };
+            }
+
+            return QueryPlan::CaseInsensitive {
+                regex,
+                trigram_groups: groups,
+            };
+        }
+
+        let regex_pat = if ignore_case && !pattern.starts_with("(?i)") {
+            format!("(?i){pattern}")
+        } else {
+            pattern.to_string()
+        };
+
+        let regex = match Regex::new(&regex_pat) {
             Ok(r) => r,
             Err(_) => {
                 return QueryPlan::FullScan {
@@ -61,6 +101,13 @@ impl Planner {
 
         let mut literals = Vec::new();
         Self::walk_hir(&hir, &mut literals);
+
+        // For case-insensitive regex, fall back to FullScan — the (?i) regex
+        // handles matching, and extracting trigram groups from regex literals
+        // adds complexity without much narrowing benefit.
+        if ignore_case {
+            return QueryPlan::FullScan { regex };
+        }
 
         let required_trigram_sets: Vec<Vec<Trigram>> = literals
             .iter()

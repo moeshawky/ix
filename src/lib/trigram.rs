@@ -62,6 +62,56 @@ impl Extractor {
         set.dedup();
         set
     }
+
+    /// Extract trigram groups with case permutations for case-insensitive search.
+    /// Returns one group per original trigram position. Each group contains all
+    /// case variants for that position (max 8 per group for 3 ASCII alpha bytes).
+    /// The executor should UNION within each group and INTERSECT across groups.
+    pub fn extract_groups_case_insensitive(query: &[u8]) -> Vec<Vec<Trigram>> {
+        if query.len() < 3 {
+            return vec![];
+        }
+        let mut groups = Vec::with_capacity(query.len() - 2);
+        for i in 0..=(query.len() - 3) {
+            let bytes = [query[i], query[i + 1], query[i + 2]];
+            let mut variants = case_variants(bytes);
+            variants.sort_unstable();
+            variants.dedup();
+            groups.push(variants);
+        }
+        groups
+    }
+}
+
+/// Generate all case permutations of a 3-byte trigram.
+/// Only ASCII alpha bytes get toggled. Max 8 variants per trigram.
+fn case_variants(bytes: [u8; 3]) -> Vec<Trigram> {
+    let alts: [Vec<u8>; 3] = [
+        byte_cases(bytes[0]),
+        byte_cases(bytes[1]),
+        byte_cases(bytes[2]),
+    ];
+    let mut out = Vec::with_capacity(alts[0].len() * alts[1].len() * alts[2].len());
+    for &a in &alts[0] {
+        for &b in &alts[1] {
+            for &c in &alts[2] {
+                out.push(from_bytes(a, b, c));
+            }
+        }
+    }
+    out
+}
+
+/// Return both cases for ASCII alpha, or just the byte itself.
+#[inline]
+fn byte_cases(b: u8) -> Vec<u8> {
+    if b.is_ascii_uppercase() {
+        vec![b, b.to_ascii_lowercase()]
+    } else if b.is_ascii_lowercase() {
+        vec![b, b.to_ascii_uppercase()]
+    } else {
+        vec![b]
+    }
 }
 
 impl Default for Extractor {

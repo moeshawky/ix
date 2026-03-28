@@ -64,6 +64,10 @@ impl<'a> Executor<'a> {
                 regex,
                 required_trigram_sets,
             } => self.execute_regex_indexed(regex, required_trigram_sets, options),
+            QueryPlan::CaseInsensitive {
+                regex,
+                trigram_groups,
+            } => self.execute_case_insensitive(regex, trigram_groups, options),
             QueryPlan::FullScan { regex } => self.execute_full_scan(regex, options),
         }
     }
@@ -229,6 +233,89 @@ impl<'a> Executor<'a> {
             let file_info = self.index.get_file(fid)?;
 
             // Filter by extension
+            if !options.type_filter.is_empty() {
+                let ext = file_info
+                    .path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("");
+                if !options.type_filter.iter().any(|e| e == ext) {
+                    continue;
+                }
+            }
+
+            stats.files_verified += 1;
+            stats.bytes_verified += file_info.size_bytes;
+            if let Ok(file_matches) =
+                self.verify_file(&file_info, regex, options.count_only, options.context_lines)
+            {
+                if options.count_only {
+                    stats.total_matches += file_matches.len() as u32;
+                } else {
+                    for m in file_matches {
+                        matches.push(m);
+                        if options.max_results > 0 && matches.len() >= options.max_results {
+                            stats.total_matches = matches.len() as u32;
+                            return Ok((matches, stats));
+                        }
+                    }
+                }
+            }
+        }
+
+        if !options.count_only {
+            stats.total_matches = matches.len() as u32;
+        }
+        Ok((matches, stats))
+    }
+
+    fn execute_case_insensitive(
+        &self,
+        regex: &Regex,
+        trigram_groups: &[Vec<Trigram>],
+        options: &QueryOptions,
+    ) -> Result<(Vec<Match>, QueryStats)> {
+        let mut stats = QueryStats::default();
+
+        // For each position group: UNION posting lists of all variants found
+        let mut group_candidates = Vec::new();
+        for group in trigram_groups {
+            let mut union_set: HashSet<u32> = HashSet::new();
+            for &tri in group {
+                stats.trigrams_queried += 1;
+                if let Some(info) = self.index.get_trigram(tri)
+                    && let Ok(postings) = self.index.decode_postings(&info)
+                {
+                    stats.posting_lists_decoded += 1;
+                    for entry in &postings.entries {
+                        union_set.insert(entry.file_id);
+                    }
+                }
+                // Missing variant = skip, not abort
+            }
+            if !union_set.is_empty() {
+                group_candidates.push(union_set);
+            }
+        }
+
+        // Intersect across position groups
+        let final_candidates = if let Some(mut base) = group_candidates.pop() {
+            for set in group_candidates {
+                base.retain(|fid| set.contains(fid));
+            }
+            base
+        } else {
+            // No trigrams found at all — fall back to all files
+            let all: HashSet<u32> = (0..self.index.header.file_count).collect();
+            all
+        };
+
+        stats.candidate_files = final_candidates.len() as u32;
+        let mut matches = Vec::new();
+
+        for fid in final_candidates {
+            let file_info = self.index.get_file(fid)?;
+
             if !options.type_filter.is_empty() {
                 let ext = file_info
                     .path

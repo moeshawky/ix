@@ -59,7 +59,7 @@ struct Cli {
     #[arg(short, long)]
     regex: bool,
 
-    /// Perform a case-insensitive search (non-indexed scans only).
+    /// Perform a case-insensitive search.
     #[arg(short, long)]
     ignore_case: bool,
 
@@ -104,6 +104,7 @@ struct SearchParams<'a> {
     pattern: &'a str,
     path: &'a Path,
     is_regex: bool,
+    ignore_case: bool,
     no_index: bool,
     fresh: bool,
     json: bool,
@@ -138,6 +139,7 @@ fn main() {
         pattern: &pattern,
         path: &cli.path,
         is_regex: cli.regex,
+        ignore_case: cli.ignore_case,
         no_index: cli.no_index,
         fresh: cli.fresh,
         json: cli.json,
@@ -282,7 +284,7 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
         // Change directory to index root so verify_file can find the files
         std::env::set_current_dir(index_root)?;
 
-        let plan = Planner::plan(params.pattern, params.is_regex);
+        let plan = Planner::plan_with_options(params.pattern, params.is_regex, params.ignore_case);
         let executor = Executor::new(&reader);
         let (m, s) = executor.execute(&plan, &options)?;
 
@@ -305,7 +307,7 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
         (filtered_matches, s)
     } else {
         let scanner = Scanner::new(params.path);
-        let matches = scanner.scan(params.pattern, params.is_regex, &options)?;
+        let matches = scanner.scan(params.pattern, params.is_regex, params.ignore_case, &options)?;
         let stats = ix::executor::QueryStats {
             total_matches: matches.len() as u32,
             ..Default::default()

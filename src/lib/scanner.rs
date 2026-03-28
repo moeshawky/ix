@@ -25,13 +25,16 @@ impl Scanner {
         &self,
         pattern: &str,
         is_regex: bool,
+        ignore_case: bool,
         options: &crate::executor::QueryOptions,
     ) -> Result<Vec<Match>> {
-        let regex = if is_regex {
-            Regex::new(pattern)?
+        let raw = if is_regex {
+            pattern.to_string()
         } else {
-            Regex::new(&regex::escape(pattern))?
+            regex::escape(pattern)
         };
+        let regex_pat = if ignore_case { format!("(?i){raw}") } else { raw };
+        let regex = Regex::new(&regex_pat)?;
 
         let mut matches = Vec::new();
         let walker = WalkBuilder::new(&self.root)
