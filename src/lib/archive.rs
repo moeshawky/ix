@@ -151,10 +151,11 @@ fn match_content_stream<R: Read>(
                 matches.push(new_match);
             }
 
-            if options.max_results > 0 && (matches.len() + pending_matches.len()) >= options.max_results {
-                if pending_matches.is_empty() || matches.len() >= options.max_results {
-                    break;
-                }
+            if options.max_results > 0
+                && (matches.len() + pending_matches.len()) >= options.max_results
+                && (pending_matches.is_empty() || matches.len() >= options.max_results)
+            {
+                break;
             }
         }
 

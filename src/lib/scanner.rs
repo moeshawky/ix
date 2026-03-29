@@ -186,10 +186,11 @@ impl Scanner {
                     matches.push(new_match);
                 }
 
-                if options.max_results > 0 && (matches.len() + pending_matches.len()) >= options.max_results {
-                    if pending_matches.is_empty() || matches.len() >= options.max_results {
-                        break;
-                    }
+                if options.max_results > 0
+                    && (matches.len() + pending_matches.len()) >= options.max_results
+                    && (pending_matches.is_empty() || matches.len() >= options.max_results)
+                {
+                    break;
                 }
             }
 
@@ -224,10 +225,10 @@ impl Scanner {
 
         let mmap = unsafe { Mmap::map(&file)? };
 
-        if options.decompress {
-            if let Some(reader) = maybe_decompress(path, &mmap)? {
-                return self.scan_stream(reader, path, regex, options);
-            }
+        if options.decompress
+            && let Some(reader) = maybe_decompress(path, &mmap)?
+        {
+            return self.scan_stream(reader, path, regex, options);
         }
 
         // Binary check

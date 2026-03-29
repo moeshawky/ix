@@ -573,10 +573,10 @@ impl<'a> Executor<'a> {
         let file = File::open(&info.path)?;
         let mmap = unsafe { memmap2::Mmap::map(&file)? };
 
-        if options.decompress {
-            if let Some(reader) = maybe_decompress(&info.path, &mmap)? {
-                return self.verify_stream(reader, info.path.clone(), regex, options);
-            }
+        if options.decompress
+            && let Some(reader) = maybe_decompress(&info.path, &mmap)?
+        {
+            return self.verify_stream(reader, info.path.clone(), regex, options);
         }
 
         // Binary check
