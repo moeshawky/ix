@@ -4,7 +4,6 @@ use regex::Regex;
 use std::io::Cursor;
 use std::path::PathBuf;
 use tempfile::tempdir;
-use std::fs;
 
 // Mock Reader for Executor::new
 fn create_empty_index(path: &std::path::Path) {
@@ -69,8 +68,10 @@ fn test_streaming_context_lookahead() {
     let reader = Reader::open(&index_path).unwrap();
     let executor = Executor::new(&reader);
     let regex = Regex::new("match").unwrap();
-    let mut options = QueryOptions::default();
-    options.context_lines = 2;
+    let options = QueryOptions {
+        context_lines: 2,
+        ..Default::default()
+    };
 
     // Match with context_after near EOF
     let data = "line1\nline2\nmatch\nline4\n";

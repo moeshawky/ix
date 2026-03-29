@@ -229,14 +229,14 @@ impl Beacon {
     pub fn write_to(&self, folder: &Path) -> crate::error::Result<()> {
         let path = folder.join("beacon.json");
         let f = std::fs::File::create(path)?;
-        serde_json::to_writer_pretty(f, self).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        serde_json::to_writer_pretty(f, self).map_err(std::io::Error::other)?;
         Ok(())
     }
 
     pub fn read_from(folder: &Path) -> crate::error::Result<Self> {
         let path = folder.join("beacon.json");
         let f = std::fs::File::open(path)?;
-        let beacon = serde_json::from_reader(f).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let beacon = serde_json::from_reader(f).map_err(std::io::Error::other)?;
         Ok(beacon)
     }
 }

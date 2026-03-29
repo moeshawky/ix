@@ -215,10 +215,9 @@ impl Scanner {
 
         let mmap = unsafe { Mmap::map(&file)? };
 
-        if options.decompress {
-            if let Some(reader) = maybe_decompress(path, &mmap)? {
-                return self.scan_stream(reader, path, regex, options);
-            }
+        if options.decompress
+            && let Some(reader) = maybe_decompress(path, &mmap)? {
+            return self.scan_stream(reader, path, regex, options);
         }
 
         // Default to streaming via Cursor for uncompressed files to ensure constant memory (R-02)

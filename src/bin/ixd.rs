@@ -6,6 +6,8 @@ use clap::Parser;
 use ix::builder::Builder;
 use ix::idle::{IdleTracker};
 use ix::watcher::Watcher;
+use ix::format::Beacon;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,6 +43,14 @@ fn main() -> ix::error::Result<()> {
 
     let mut watcher = Watcher::new(&root)?;
     let rx = watcher.start()?;
+
+    // Create Beacon
+    let ix_dir = root.join(".ix");
+    if !ix_dir.exists() {
+        fs::create_dir_all(&ix_dir)?;
+    }
+    let mut beacon = Beacon::new(&root);
+    beacon.write_to(&ix_dir)?;
 
     let mut idle = IdleTracker::new();
 

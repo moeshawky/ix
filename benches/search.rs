@@ -54,10 +54,11 @@ fn bench_search(c: &mut Criterion) {
     let reader = Reader::open(&index_path).unwrap();
     let executor = Executor::new(&reader);
     let plan = Planner::plan("hello", false);
+    let options = ix::executor::QueryOptions::default();
 
     c.bench_function("search_100_files_1mb_total", |b| {
         b.iter(|| {
-            executor.execute(black_box(&plan)).unwrap();
+            executor.execute(black_box(&plan), &options).unwrap();
         })
     });
 }

@@ -331,11 +331,10 @@ fn do_stdin_search(pattern: &str, cli: &Cli) -> ix::error::Result<()> {
 
 fn do_build(path: &Path, decompress: bool, force: bool) -> ix::error::Result<()> {
     // Beacon check
-    if let Some((_, _, Some(beacon))) = find_index(path) {
-        if beacon.is_live() && !force {
-            eprintln!("Error: Search root is managed by ixd (PID {}). Updates are automatic. Use --force to override.", beacon.pid);
-            std::process::exit(1);
-        }
+    if let Some((_, _, Some(beacon))) = find_index(path)
+        && beacon.is_live() && !force {
+        eprintln!("Error: Search root is managed by ixd (PID {}). Updates are automatic. Use --force to override.", beacon.pid);
+        std::process::exit(1);
     }
     println!("Building index for {}...", path.display());
     let mut builder = Builder::new(path);

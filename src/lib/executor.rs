@@ -526,10 +526,11 @@ impl<'a> Executor<'a> {
                     matches.push(new_match);
                 }
 
-                if options.max_results > 0 && (matches.len() + pending_matches.len()) >= options.max_results {
-                    if pending_matches.is_empty() || matches.len() >= options.max_results {
-                        break;
-                    }
+                if options.max_results > 0
+                    && (matches.len() + pending_matches.len()) >= options.max_results
+                    && (pending_matches.is_empty() || matches.len() >= options.max_results)
+                {
+                    break;
                 }
             }
 
@@ -557,10 +558,9 @@ impl<'a> Executor<'a> {
         let file = File::open(&info.path)?;
         let mmap = unsafe { memmap2::Mmap::map(&file)? };
 
-        if options.decompress {
-            if let Some(reader) = maybe_decompress(&info.path, &mmap)? {
-                return self.verify_stream(reader, info.path.clone(), regex, options);
-            }
+        if options.decompress
+            && let Some(reader) = maybe_decompress(&info.path, &mmap)? {
+            return self.verify_stream(reader, info.path.clone(), regex, options);
         }
 
         // Default to streaming via Cursor for uncompressed files to ensure constant memory (R-02)
