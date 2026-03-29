@@ -24,6 +24,7 @@ pub mod flags {
     pub const HAS_BLOOM_FILTERS: u64 = 1 << 0;
     pub const HAS_CONTENT_HASHES: u64 = 1 << 1;
     pub const POSTING_LISTS_COMPRESSED: u64 = 1 << 2;
+    pub const POSTING_LISTS_CHECKSUMMED: u64 = 1 << 3;
 }
 
 /// File status in the file table
@@ -180,4 +181,78 @@ impl Header {
     pub fn has_bloom(&self) -> bool {
         self.flags & flags::HAS_BLOOM_FILTERS != 0
     }
+}
+
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Beacon {
+    pub pid: i32,
+    pub root: PathBuf,
+    pub start_time: u64,
+    pub status: String,
+    pub last_event_at: u64,
+}
+
+impl Beacon {
+    pub fn new(root: &Path) -> Self {
+        let pid = std::process::id() as i32;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        Self {
+            pid,
+            root: root.to_path_buf(),
+            start_time: now,
+            status: "idle".to_string(),
+            last_event_at: now,
+        }
+    }
+
+    pub fn is_live(&self) -> bool {
+        use nix::sys::signal::{kill};
+        use nix::unistd::Pid;
+
+        // Check if process exists
+        if kill(Pid::from_raw(self.pid), None).is_err() {
+            return false;
+        }
+
+        // Existence + matching root is a strong heuristic
+        self.root.exists()
+    }
+
+    pub fn write_to(&self, folder: &Path) -> crate::error::Result<()> {
+        let path = folder.join("beacon.json");
+        let f = std::fs::File::create(path)?;
+        serde_json::to_writer_pretty(f, self).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        Ok(())
+    }
+
+    pub fn read_from(folder: &Path) -> crate::error::Result<Self> {
+        let path = folder.join("beacon.json");
+        let f = std::fs::File::open(path)?;
+        let beacon = serde_json::from_reader(f).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        Ok(beacon)
+    }
+}
+
+/// Centralized binary file detection.
+///
+/// Uses a heuristic based on the ratio of non-printable characters in the first 512 bytes.
+pub fn is_binary(data: &[u8]) -> bool {
+    if data.is_empty() {
+        return false;
+    }
+    let check_len = data.len().min(512);
+    let non_printable = data[..check_len]
+        .iter()
+        .filter(|&&b| !matches!(b, 0x09 | 0x0A | 0x0D | 0x20..=0x7E))
+        .count();
+
+    (non_printable as f32 / check_len as f32) > 0.3
 }

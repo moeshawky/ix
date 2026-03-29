@@ -4,7 +4,7 @@
 
 use clap::Parser;
 use ix::builder::Builder;
-use ix::idle::{DaemonState, IdleTracker};
+use ix::idle::{IdleTracker};
 use ix::watcher::Watcher;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,7 +17,7 @@ use std::time::Duration;
     version = "0.1.0",
     about = "ix background daemon. Automatically maintains a fresh trigram index.",
     after_help = "The daemon monitors the filesystem for changes and incrementally updates the index. 
-It enters a dormant state after 30 minutes of inactivity to conserve resources."
+It remains active in the background to ensure the index is always fresh."
 )]
 struct Cli {
     /// The directory to watch and index.
@@ -40,7 +40,7 @@ fn main() -> ix::error::Result<()> {
     );
 
     let mut watcher = Watcher::new(&root)?;
-    let mut rx = watcher.start()?;
+    let rx = watcher.start()?;
 
     let mut idle = IdleTracker::new();
 
@@ -53,45 +53,39 @@ fn main() -> ix::error::Result<()> {
     .expect("Error setting Ctrl-C handler");
 
     while running.load(Ordering::SeqCst) {
-        // Wait for changes or 60s timeout for dormancy check
-        match rx.recv_timeout(Duration::from_secs(60)) {
+        // Wait for changes. We use a timeout to allow checking the 'running' flag.
+        match rx.recv_timeout(Duration::from_secs(5)) {
             Ok(changed_files) => {
                 println!(
                     "ixd: {} files changed, updating index...",
                     changed_files.len()
                 );
+
+                // Update beacon status
+                beacon.status = "indexing".to_string();
+                beacon.last_event_at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let _ = beacon.write_to(&ix_dir);
+
                 idle.record_change();
                 builder.update(&changed_files)?;
 
-                // If we were dormant, restart watcher
-                if idle.state() != DaemonState::Dormant && !watcher.is_running() {
-                    println!("ixd: system active, restarting watcher");
-                    rx = watcher.start()?;
-                }
+                // Back to idle
+                beacon.status = "idle".to_string();
+                let _ = beacon.write_to(&ix_dir);
             }
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                // Dormancy check
-                match idle.state() {
-                    DaemonState::Dormant => {
-                        if watcher.is_running() {
-                            println!("ixd: system dormant, stopping watcher");
-                            watcher.stop();
-                        }
-                    }
-                    _ => {
-                        // If we are active/idle but watcher was stopped, restart it
-                        if !watcher.is_running() {
-                            println!("ixd: system active, restarting watcher");
-                            rx = watcher.start()?;
-                        }
-                    }
-                }
+                // Just loop to check 'running' flag
+                continue;
             }
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
         }
     }
 
     println!("ixd: shutting down");
+    let _ = fs::remove_file(ix_dir.join("beacon.json"));
     watcher.stop();
     Ok(())
 }

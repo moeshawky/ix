@@ -14,6 +14,7 @@
 ```bash
 # Instant search across a massive repo
 $ time ix "ConnectionTimeout" src/
+[ix] managed by ixd (Status: idle)
 src/network/client.rs:42:1280:    pub timeout: ConnectionTimeout,
 src/config/defaults.rs:15:450:    pub const DEFAULT_TIMEOUT: ConnectionTimeout = 30s;
 
@@ -30,9 +31,9 @@ logs/2026-03-29.gz:1042:0: [ERROR] Database connection failed
 
 ## 🎯 The Hook
 
-`ix` is a high-performance, Unix-native search engine that eliminates the linear scan bottleneck of traditional tools. By leveraging a sparse trigram index and a constant-memory streaming architecture, `ix` delivers sub-millisecond retrieval across multi-gigabyte codebases. 
+`ix` is a high-performance, Unix-native search engine that eliminates the linear scan bottleneck of traditional tools. By leveraging a sparse trigram index and a **constant-memory streaming architecture**, `ix` delivers sub-millisecond retrieval across multi-gigabyte codebases with guaranteed resource safety.
 
-Engineered for the 2026 workflow, it provides high-signal code retrieval for both human developers and AI agents, seamlessly handling compressed files, archives, and piped input.
+Engineered for the 2026 agentic workflow, it introduces the **Beacon Protocol** to eliminate redundant re-indexing and provide authoritative state for AI agents.
 
 ---
 
@@ -54,10 +55,11 @@ ix --build
 ## 💎 Features
 
 - **Universal Search**: Seamlessly query `.rs`, `.py`, `.gz`, `.zst`, `.zip`, and `.tar.gz` files.
-- **Parallel Execution**: Multi-threaded verification powered by `rayon`.
+- **Beacon Protocol**: Coordination plane between CLI and Daemon. Eliminates "stale index" confusion for AI agents.
 - **Streaming Architecture**: Search arbitrarily large files with **constant memory overhead**.
+- **Data Integrity**: Per-posting-list **CRC32C checksums** detect silent data corruption.
+- **Logical Correctness**: Full support for CRLF (`\r\n`) and LF (`\n`) line endings with accurate byte offsets.
 - **Agent-Native**: First-class support for `--json` output and context capping to respect LLM window limits.
-- **Daemon Mode**: `ixd` monitors your filesystem and keeps indices fresh while your system is idle.
 
 ---
 
@@ -71,7 +73,7 @@ ix --build
 | `ix -l "p"` | **Location** | List of unique file paths |
 | `ix -C 3 "p"` | **Contextual Retrieval** | ±3 lines around every match |
 | `ix --json "p"` | **Structured Extraction** | JSON Lines for machine parsing |
-| `ix -r -U "p"` | **Multiline** | Cross-line Regex (dot matches newline) |
+| `ix -r -U \"foo.*\\nbar\"` | **Multiline** | Cross-line Regex support |
 
 ---
 
@@ -79,8 +81,8 @@ ix --build
 
 For contributors and power users:
 - **Telemetry**: Use `--stats` to see retrieval performance and index efficiency.
-- **Diagnostics**: `cargo test --all-features` runs the full integration suite (unit, robustness, and streaming).
-- **Binary Bypass**: Use `--binary` to force search through non-text files.
+- **Integrity**: `ix` automatically verifies checksums during query execution.
+- **Diagnostics**: `cargo test` runs the full suite, including **Negative Oracle** corruption tests and **Resource Boundary** memory tests.
 
 ---
 
@@ -89,8 +91,8 @@ For contributors and power users:
 `ix` employs a tiered verification pipeline:
 1. **Query Planner**: Analyzes Regex/Literal and expands trigram variants.
 2. **Sparse Lookup**: Intersects posting lists from the trigram table.
-3. **Bloom Filter Gate**: Probabilistic skip of false positives before I/O.
-4. **SIMD Verification**: Final byte-level verification of candidate matches.
+3. **Beacon Gate**: Validates authority and coordinates with the background daemon (`ixd`).
+4. **Streaming Verification**: Byte-level verification of candidate matches using constant-memory buffers.
 
 ---
 

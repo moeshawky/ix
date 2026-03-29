@@ -16,6 +16,9 @@ pub enum Error {
     #[error("header CRC mismatch (expected {expected:#010x}, got {actual:#010x})")]
     HeaderCorrupted { expected: u32, actual: u32 },
 
+    #[error("posting list corrupted (CRC mismatch)")]
+    PostingCorrupted,
+
     #[error("section offset out of bounds: {section} at {offset}+{size} > {file_len}")]
     SectionOutOfBounds {
         section: &'static str,

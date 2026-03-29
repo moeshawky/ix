@@ -87,3 +87,23 @@ fn test_streaming_context_lookahead() {
     assert_eq!(matches[1].context_before, vec!["match1", "line2"]);
     assert_eq!(matches[1].context_after, vec!["line4", "line5"]);
 }
+
+#[test]
+fn test_streaming_crlf_offsets() {
+    let dir = tempdir().unwrap();
+    let index_path = dir.path().join(".ix/shard.ix");
+    create_empty_index(dir.path());
+    let reader = Reader::open(&index_path).unwrap();
+    let executor = Executor::new(&reader);
+    let regex = Regex::new("match").unwrap();
+    let options = QueryOptions::default();
+
+    // CRLF data: "line1\r\nmatch\r\n"
+    // line1 is 5 chars + 2 line ending = 7 bytes.
+    // "match" starts at byte offset 7.
+    let data = b"line1\r\nmatch\r\n";
+    let matches = executor.verify_stream_for_test(Cursor::new(data), PathBuf::from("test"), &regex, &options).unwrap();
+    
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].byte_offset, 7, "Offset should account for CRLF (2 bytes)");
+}

@@ -4,13 +4,14 @@
 
 use crate::decompress::maybe_decompress;
 use crate::error::Result;
+use crate::format::is_binary;
 use crate::executor::{Match, QueryOptions};
 use ignore::WalkBuilder;
 use memmap2::Mmap;
 use rayon::prelude::*;
 use regex::Regex;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -64,7 +65,7 @@ impl Scanner {
                 // Filter by extension
                 if !options.type_filter.is_empty() {
                     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                    if !options.type_filter.iter().any(|e| e == ext) {
+                    if !options.type_filter.iter().any(|e: &String| e == ext) {
                         return None;
                     }
                 }
@@ -104,19 +105,6 @@ impl Scanner {
         Ok(matches)
     }
 
-    fn is_binary(data: &[u8]) -> bool {
-        if data.is_empty() {
-            return false;
-        }
-        let check_len = data.len().min(512);
-        let non_printable = data[..check_len]
-            .iter()
-            .filter(|&&b| !matches!(b, 0x09 | 0x0A | 0x0D | 0x20..=0x7E))
-            .count();
-
-        (non_printable as f32 / check_len as f32) > 0.3
-    }
-
     fn scan_stream<R: Read>(
         &self,
         reader: R,
@@ -132,7 +120,10 @@ impl Scanner {
         // Binary check on first 8KB
         {
             let buffer = buf_reader.fill_buf()?;
-            let is_bin = Self::is_binary(buffer);
+            if buffer.is_empty() {
+                return Ok(vec![]);
+            }
+            let is_bin = is_binary(buffer);
             if is_bin && !options.binary {
                 return Ok(vec![]);
             }
@@ -219,113 +210,18 @@ impl Scanner {
         let metadata = file.metadata()?;
         if metadata.len() > 100 * 1024 * 1024 && !options.decompress {
             // Keep 100MB limit for raw files to avoid huge mmaps in parallel
-            // But if it's compressed, we stream it, so no size limit needed.
             return Ok(vec![]);
         }
 
         let mmap = unsafe { Mmap::map(&file)? };
 
-        if options.decompress
-            && let Some(reader) = maybe_decompress(path, &mmap)?
-        {
-            return self.scan_stream(reader, path, regex, options);
-        }
-
-        // Binary check
-        let is_bin = Self::is_binary(&mmap);
-        if is_bin && !options.binary {
-            return Ok(vec![]);
-        }
-
-        let mut matches = Vec::new();
-        if options.multiline {
-            let data = String::from_utf8_lossy(&mmap);
-            for m in regex.find_iter(&data) {
-                let byte_offset = m.start();
-                let line_number = data[..byte_offset].chars().filter(|&c| c == '\n').count() + 1;
-                let line_start = data[..byte_offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
-                let line_end = data[byte_offset..].find('\n').map(|i| byte_offset + i).unwrap_or(data.len());
-                let line_content = &data[line_start..line_end];
-
-                let context_before = if options.context_lines > 0 {
-                    let all_lines: Vec<&str> = data.lines().collect();
-                    let current_line_idx = line_number - 1;
-                    let start = current_line_idx.saturating_sub(options.context_lines);
-                    all_lines[start..current_line_idx].iter().map(|s| s.to_string()).collect()
-                } else {
-                    vec![]
-                };
-
-                let context_after = if options.context_lines > 0 {
-                    let all_lines: Vec<&str> = data.lines().collect();
-                    let current_line_idx = line_number - 1;
-                    let end = (current_line_idx + 1 + options.context_lines).min(all_lines.len());
-                    all_lines[current_line_idx + 1..end].iter().map(|s| s.to_string()).collect()
-                } else {
-                    vec![]
-                };
-
-                matches.push(Match {
-                    file_path: path.to_owned(),
-                    line_number: line_number as u32,
-                    col: (byte_offset - line_start + 1) as u32,
-                    line_content: if options.count_only {
-                        String::new()
-                    } else {
-                        line_content.to_string()
-                    },
-                    byte_offset: byte_offset as u64,
-                    context_before,
-                    context_after,
-                    is_binary: is_bin,
-                });
-
-                if options.max_results > 0 && matches.len() >= options.max_results {
-                    break;
-                }
-            }
-        } else {
-            let data = String::from_utf8_lossy(&mmap);
-            let lines: Vec<&str> = data.lines().collect();
-            let mut line_start_offset = 0;
-            for (i, line) in lines.iter().enumerate() {
-                if let Some(m) = regex.find(line) {
-                    let context_before = if options.context_lines > 0 {
-                        let start = i.saturating_sub(options.context_lines);
-                        lines[start..i].iter().map(|s| s.to_string()).collect()
-                    } else {
-                        vec![]
-                    };
-
-                    let context_after = if options.context_lines > 0 {
-                        let end = (i + 1 + options.context_lines).min(lines.len());
-                        lines[i + 1..end].iter().map(|s| s.to_string()).collect()
-                    } else {
-                        vec![]
-                    };
-
-                    matches.push(Match {
-                        file_path: path.to_owned(),
-                        line_number: (i + 1) as u32,
-                        col: (m.start() + 1) as u32,
-                        line_content: if options.count_only {
-                            String::new()
-                        } else {
-                            line.to_string()
-                        },
-                        byte_offset: (line_start_offset + m.start()) as u64,
-                        context_before,
-                        context_after,
-                        is_binary: is_bin,
-                    });
-
-                    if options.max_results > 0 && matches.len() >= options.max_results {
-                        break;
-                    }
-                }
-                line_start_offset += line.len() + 1;
+        if options.decompress {
+            if let Some(reader) = maybe_decompress(path, &mmap)? {
+                return self.scan_stream(reader, path, regex, options);
             }
         }
-        Ok(matches)
+
+        // Default to streaming via Cursor for uncompressed files to ensure constant memory (R-02)
+        self.scan_stream(Cursor::new(&mmap[..]), path, regex, options)
     }
 }

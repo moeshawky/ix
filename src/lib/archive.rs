@@ -1,6 +1,8 @@
 //! Archive searching support (.zip, .tar.gz).
 
 #[cfg(feature = "archive")]
+use crate::format::is_binary;
+#[cfg(feature = "archive")]
 use std::fs::File;
 #[cfg(feature = "archive")]
 use std::io::{BufRead, BufReader, Read};
@@ -12,20 +14,6 @@ use crate::error::Result;
 use crate::executor::{Match, QueryOptions};
 #[cfg(feature = "archive")]
 use regex::Regex;
-
-#[cfg(feature = "archive")]
-fn is_binary(data: &[u8]) -> bool {
-    if data.is_empty() {
-        return false;
-    }
-    let check_len = data.len().min(512);
-    let non_printable = data[..check_len]
-        .iter()
-        .filter(|&&b| !matches!(b, 0x09 | 0x0A | 0x0D | 0x20..=0x7E))
-        .count();
-    
-    (non_printable as f32 / check_len as f32) > 0.3
-}
 
 #[cfg(feature = "archive")]
 pub fn scan_zip(path: &Path, regex: &Regex, options: &QueryOptions) -> Result<Vec<Match>> {

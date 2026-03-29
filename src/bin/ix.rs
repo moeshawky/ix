@@ -7,12 +7,13 @@
 
 use clap::Parser;
 use ix::builder::Builder;
-use ix::executor::Executor;
+use ix::executor::{Executor, Match, QueryOptions, QueryStats};
 use ix::planner::Planner;
 use ix::reader::Reader;
 use ix::scanner::Scanner;
 use regex::Regex;
 use std::path::{Path, PathBuf};
+use std::io::{self, Read, IsTerminal};
 
 #[derive(Parser)]
 #[command(
@@ -126,6 +127,10 @@ struct Cli {
     /// Rebuild index before searching (ensures data freshness).
     #[arg(long)]
     fresh: bool,
+
+    /// Force operation even if the search root is managed by a daemon.
+    #[arg(long)]
+    force: bool,
 }
 
 struct SearchParams<'a> {
@@ -135,6 +140,7 @@ struct SearchParams<'a> {
     ignore_case: bool,
     no_index: bool,
     fresh: bool,
+    force: bool,
     json: bool,
     stats_flag: bool,
     count_flag: bool,
@@ -148,9 +154,6 @@ struct SearchParams<'a> {
     archive: bool,
     binary: bool,
 }
-
-use std::io::IsTerminal;
-use std::io::{self, Read};
 
 fn main() {
     let cli = Cli::parse();
@@ -179,8 +182,8 @@ fn main() {
     };
 
     if cli.build {
-        if let Err(e) = do_build(&search_path, cli.decompress) {
-            eprintln!("Error building index: {}", e);
+        if let Err(e) = do_build(&search_path, cli.decompress, cli.force) {
+            eprintln!("Error: {}", e);
             std::process::exit(1);
         }
         return;
@@ -214,6 +217,7 @@ fn main() {
         ignore_case: cli.ignore_case,
         no_index: cli.no_index,
         fresh: cli.fresh,
+        force: cli.force,
         json: cli.json,
         stats_flag: cli.stats,
         count_flag: cli.count,
@@ -273,7 +277,7 @@ fn do_stdin_search(pattern: &str, cli: &Cli) -> ix::error::Result<()> {
                 vec![]
             };
 
-            matches.push(ix::executor::Match {
+            matches.push(Match {
                 file_path: PathBuf::from("(stdin)"),
                 line_number: (i + 1) as u32,
                 col: (m.start() + 1) as u32,
@@ -282,7 +286,7 @@ fn do_stdin_search(pattern: &str, cli: &Cli) -> ix::error::Result<()> {
                 } else {
                     line.to_string()
                 },
-                byte_offset: 0, // Not easily computed for stdin without keeping track
+                byte_offset: 0,
                 context_before,
                 context_after,
                 is_binary: false,
@@ -325,7 +329,14 @@ fn do_stdin_search(pattern: &str, cli: &Cli) -> ix::error::Result<()> {
     Ok(())
 }
 
-fn do_build(path: &Path, decompress: bool) -> ix::error::Result<()> {
+fn do_build(path: &Path, decompress: bool, force: bool) -> ix::error::Result<()> {
+    // Beacon check
+    if let Some((_, _, Some(beacon))) = find_index(path) {
+        if beacon.is_live() && !force {
+            eprintln!("Error: Search root is managed by ixd (PID {}). Updates are automatic. Use --force to override.", beacon.pid);
+            std::process::exit(1);
+        }
+    }
     println!("Building index for {}...", path.display());
     let mut builder = Builder::new(path);
     builder.set_decompress(decompress);
@@ -334,7 +345,7 @@ fn do_build(path: &Path, decompress: bool) -> ix::error::Result<()> {
     Ok(())
 }
 
-fn find_index(path: &Path) -> Option<(PathBuf, PathBuf)> {
+fn find_index(path: &Path) -> Option<(PathBuf, PathBuf, Option<ix::format::Beacon>)> {
     let mut current = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -342,9 +353,13 @@ fn find_index(path: &Path) -> Option<(PathBuf, PathBuf)> {
     };
 
     loop {
-        let index_file = current.join(".ix/shard.ix");
-        if index_file.exists() {
-            return Some((index_file, current));
+        let index_dir = current.join(".ix");
+        if index_dir.exists() {
+            let index_file = index_dir.join("shard.ix");
+            let beacon = ix::format::Beacon::read_from(&index_dir).ok();
+            if index_file.exists() || beacon.is_some() {
+                return Some((index_file, current, beacon));
+            }
         }
         if !current.pop() {
             break;
@@ -353,8 +368,6 @@ fn find_index(path: &Path) -> Option<(PathBuf, PathBuf)> {
     None
 }
 
-/// Truncate string without splitting a UTF-8 character.
-/// Walks backwards from max_bytes until a char boundary is found.
 fn truncate_safe(s: &mut String, max_bytes: usize) {
     if max_bytes >= s.len() {
         return;
@@ -381,12 +394,11 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
     };
 
     if params.fresh {
-        do_build(params.path, params.decompress)?;
+        do_build(params.path, params.decompress, params.force)?;
     }
 
     let start_time = std::time::Instant::now();
 
-    // Map shorthand types to actual extensions
     let mut extensions = Vec::new();
     for t in params.file_types {
         match t.as_str() {
@@ -416,7 +428,7 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
         }
     }
 
-    let options = ix::executor::QueryOptions {
+    let options = QueryOptions {
         count_only: params.count_flag,
         files_only: params.files_only,
         max_results: params.max_results,
@@ -429,33 +441,19 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
         binary: params.binary,
     };
 
-    let (matches, mut stats) = if let Some((path, index_root)) = &index_info {
+    let (matches, stats) = if let Some((path, index_root, beacon_opt)) = &index_info {
         let reader = Reader::open(path)?;
 
-        // Staleness check
-        let last_mod = Reader::get_last_modified(index_root)?;
-        if last_mod > reader.header.created_at {
-            let last_built_secs = (reader.header.created_at / 1_000_000) as i64;
-            let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
-            unsafe {
-                libc::localtime_r(&last_built_secs, &mut tm);
+        if let Some(beacon) = &beacon_opt {
+            if beacon.is_live() {
+                eprintln!("[ix] managed by ixd (Status: {})", beacon.status);
+            } else {
+                check_stale(&reader, index_root)?;
             }
-            let time_str = format!(
-                "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-                tm.tm_year + 1900,
-                tm.tm_mon + 1,
-                tm.tm_mday,
-                tm.tm_hour,
-                tm.tm_min,
-                tm.tm_sec
-            );
-            eprintln!(
-                "ix: index is stale (last built: {}). Run 'ix --build' to update.",
-                time_str
-            );
+        } else {
+            check_stale(&reader, index_root)?;
         }
 
-        // Change directory to index root so verify_file can find the files
         std::env::set_current_dir(index_root)?;
 
         let plan = Planner::plan_with_options(
@@ -467,7 +465,6 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
         let executor = Executor::new(&reader);
         let (m, s) = executor.execute(&plan, &options)?;
 
-        // Filter matches to only those within the search path
         let filtered_matches: Vec<_> = m
             .into_iter()
             .filter(|m| {
@@ -480,30 +477,26 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
             })
             .collect();
 
-        // Restore CWD
         let _ = std::env::set_current_dir(&original_cwd);
-
         (filtered_matches, s)
     } else {
         let scanner = Scanner::new(params.path);
         let matches = scanner.scan(params.pattern, params.is_regex, params.ignore_case, &options)?;
-        let stats = ix::executor::QueryStats {
+        let stats = QueryStats {
             total_matches: matches.len() as u32,
             ..Default::default()
         };
         (matches, stats)
     };
 
-    // Update stats total_matches after filtering
-    if index_info.is_some() {
-        stats.total_matches = matches.len() as u32;
-    }
+    let mut final_stats = stats;
+    final_stats.total_matches = matches.len() as u32;
 
     if options.count_only {
         if params.json {
-            println!("{{\"count\": {}}}", stats.total_matches);
+            println!("{{\"count\": {}}}", final_stats.total_matches);
         } else {
-            println!("{}", stats.total_matches);
+            println!("{}", final_stats.total_matches);
         }
     } else if options.files_only {
         let mut unique_files: std::collections::HashSet<PathBuf> =
@@ -534,7 +527,6 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
                 printed_lines.clear();
                 last_file = m.file_path.clone();
             } else if options.context_lines > 0 && !params.json {
-                // Check if there is a gap between this match's context and previous printed lines
                 let match_start = (m.line_number as usize).saturating_sub(options.context_lines);
                 let prev_end = printed_lines.iter().max().copied().unwrap_or(0) as usize;
                 if match_start > prev_end + 1 && prev_end > 0 {
@@ -545,7 +537,7 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
             print_match(m, params.json, options.context_lines, &mut printed_lines);
         }
 
-        if options.max_results > 0 && stats.total_matches >= options.max_results as u32 {
+        if options.max_results > 0 && final_stats.total_matches >= options.max_results as u32 {
             eprintln!(
                 "ix: output capped at {} results (use -n 0 for all)",
                 options.max_results
@@ -554,14 +546,14 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
     }
 
     if params.stats_flag {
-        print_stats(&stats, start_time.elapsed());
+        print_stats(&final_stats, start_time.elapsed());
     }
 
     Ok(())
 }
 
 fn print_match(
-    m: &ix::executor::Match,
+    m: &Match,
     json: bool,
     context: usize,
     printed_lines: &mut std::collections::HashSet<u32>,
@@ -640,7 +632,7 @@ fn print_match(
     }
 }
 
-fn print_stats(stats: &ix::executor::QueryStats, elapsed: std::time::Duration) {
+fn print_stats(stats: &QueryStats, elapsed: std::time::Duration) {
     eprintln!("--- ix stats ---");
     eprintln!("trigrams_queried: {}", stats.trigrams_queried);
     eprintln!("posting_lists_decoded: {}", stats.posting_lists_decoded);
@@ -649,4 +641,29 @@ fn print_stats(stats: &ix::executor::QueryStats, elapsed: std::time::Duration) {
     eprintln!("bytes_verified: {}", stats.bytes_verified);
     eprintln!("total_matches: {}", stats.total_matches);
     eprintln!("search_time_ms: {}", elapsed.as_millis());
+}
+
+fn check_stale(reader: &Reader, index_root: &Path) -> ix::error::Result<()> {
+    let last_mod = Reader::get_last_modified(index_root)?;
+    if last_mod > reader.header.created_at {
+        let last_built_secs = (reader.header.created_at / 1_000_000) as i64;
+        let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
+        unsafe {
+            libc::localtime_r(&last_built_secs, &mut tm);
+        }
+        let time_str = format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            tm.tm_year + 1900,
+            tm.tm_mon + 1,
+            tm.tm_mday,
+            tm.tm_hour,
+            tm.tm_min,
+            tm.tm_sec
+        );
+        eprintln!(
+            "ix: index is stale (last built: {}). Run 'ix --build' to update.",
+            time_str
+        );
+    }
+    Ok(())
 }

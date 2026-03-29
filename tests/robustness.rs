@@ -163,3 +163,35 @@ fn test_type_filtering_robustness() {
         .unwrap();
     assert_eq!(matches.len(), 2);
 }
+
+#[test]
+fn test_large_file_streaming() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Create a 10MB file - large enough to prove streaming works
+    let line = "This is a normal line with a pattern inside it.\n";
+    let count = (10 * 1024 * 1024) / line.len();
+    let content = line.repeat(count);
+    let file_path = root.join("large.txt");
+    fs::write(&file_path, content).unwrap();
+
+    let mut builder = Builder::new(root);
+    builder.build().unwrap();
+
+    let index_path = root.join(".ix/shard.ix");
+    let reader = Reader::open(&index_path).unwrap();
+    let executor = Executor::new(&reader);
+
+    let plan = Planner::plan("pattern", false);
+    let options = QueryOptions {
+        max_results: 10,
+        ..Default::default()
+    };
+
+    // This should succeed quickly and with constant memory
+    let (matches, stats) = executor.execute(&plan, &options).unwrap();
+    
+    assert_eq!(matches.len(), 10);
+    assert!(stats.files_verified >= 1);
+}

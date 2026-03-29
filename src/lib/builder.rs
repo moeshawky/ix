@@ -227,9 +227,8 @@ impl Builder {
 
         let data = &raw_data[..];
 
-        // Binary check (null byte in first 8KB)
-        let check_len = data.len().min(8192);
-        if data[..check_len].contains(&0u8) {
+        // Binary check
+        if is_binary(data) {
             self.stats.files_skipped_binary += 1;
             return Ok(false);
         }
@@ -374,8 +373,12 @@ impl Builder {
         header_bytes[0..4].copy_from_slice(&MAGIC);
         header_bytes[0x04..0x06].copy_from_slice(&VERSION_MAJOR.to_le_bytes());
         header_bytes[0x06..0x08].copy_from_slice(&VERSION_MINOR.to_le_bytes());
-        header_bytes[0x08..0x10]
-            .copy_from_slice(&(flags::HAS_BLOOM_FILTERS | flags::HAS_CONTENT_HASHES).to_le_bytes());
+        header_bytes[0x08..0x10].copy_from_slice(
+            &(flags::HAS_BLOOM_FILTERS
+                | flags::HAS_CONTENT_HASHES
+                | flags::POSTING_LISTS_CHECKSUMMED)
+                .to_le_bytes(),
+        );
         header_bytes[0x10..0x18].copy_from_slice(&created_at.to_le_bytes());
         header_bytes[0x18..0x20].copy_from_slice(&self.stats.bytes_scanned.to_le_bytes());
         header_bytes[0x20..0x24].copy_from_slice(&(self.files.len() as u32).to_le_bytes());
