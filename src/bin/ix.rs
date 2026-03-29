@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "ix",
     version = "0.1.0",
-    about = "Trigram-indexed code search for developers and AI agents. Optimized for sub-millisecond retrieval and context-aware extraction.",
+    about = "High-performance, trigram-indexed code search engine. Optimized for sub-millisecond retrieval and context-aware extraction for humans and AI agents.",
     after_help = "AGENTIC RETRIEVAL (UTCP Schema):
     Existence check:  ix -c \"pattern\"    → Single integer (count)
     Location:         ix -l \"pattern\"    → Unique file paths

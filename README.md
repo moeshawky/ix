@@ -30,9 +30,9 @@ logs/2026-03-29.gz:1042:0: [ERROR] Database connection failed
 
 ## 🎯 The Hook
 
-`ix` is a Unix-native search engine designed for the 2026 developer workflow. While `grep` and `ripgrep` are excellent linear scanners, `ix` bridges the gap to full-text search by leveraging a **sparse trigram index**. 
+`ix` is a high-performance, Unix-native search engine that eliminates the linear scan bottleneck of traditional tools. By leveraging a sparse trigram index and a constant-memory streaming architecture, `ix` delivers sub-millisecond retrieval across multi-gigabyte codebases. 
 
-It is specifically engineered to provide **high-signal retrieval** for AI agents, preventing context flooding by delivering precise code primitives rather than overwhelming chunks of text.
+Engineered for the 2026 workflow, it provides high-signal code retrieval for both human developers and AI agents, seamlessly handling compressed files, archives, and piped input.
 
 ---
 

@@ -1,18 +1,14 @@
-# About `ix`
+# About ix
 
-`ix` is a Unix-native code search tool designed for developers who demand both speed and simplicity. 
+`ix` is a high-performance, Unix-native search engine that eliminates the linear scan bottleneck of traditional tools. By leveraging a sparse trigram index and a constant-memory streaming architecture, `ix` delivers sub-millisecond retrieval across multi-gigabyte codebases. 
 
-While traditional search tools like `grep` and `ripgrep` are exceptionally fast, they are fundamentally limited by the linear scanning of files on disk. As codebases grow into the gigabytes, even the fastest scanner introduces latency that breaks a developer's flow.
+Engineered for the 2026 workflow, it provides high-signal code retrieval for both human developers and AI agents, seamlessly handling compressed files, archives, and piped input.
 
-### The Trigram Advantage
+## Why ix?
 
-`ix` solves this by building a compact, byte-level trigram index. By decomposing every file into overlapping 3-byte sequences, `ix` creates a map of the entire codebase. When you search for a pattern, `ix` consults this index to instantly identify only the files that *could* contain your match.
+Traditional search tools like `grep` and `ripgrep` are exceptionally fast, but they are fundamentally limited by the linear scanning of files on disk ($O(n)$). As codebases grow into the gigabyte range, even the most optimized linear scanner begins to introduce latency that breaks the "flow" of development and causes context-window flooding for AI agents.
 
-### Key Philosophies
-
-*   **Unix Native**: Designed to be a drop-in replacement or supplement to your existing CLI pipelines. It speaks the language of `stdin`, `stdout`, and standard file-line formatting.
-*   **Performance First**: Built in Rust with zero-copy `mmap` access and Bloom filter optimizations, ensuring search time scales with the number of matches, not the size of the repository.
-*   **Byte-Level Correctness**: By operating on raw bytes rather than high-level abstractions, `ix` is inherently robust across different encodings and file types without the overhead of complex charset detection.
-*   **Dormancy-Aware**: Future integration with the `ixd` daemon ensures your index stays fresh by utilizing system idle time, respecting your primary development work.
-
-`ix` isn't just a search tool; it's a productivity multiplier for the modern, massive-scale development environment.
+`ix` solves this by:
+1. **Indexing**: Pre-computing a byte-level trigram index to narrow search candidates to a fraction of the total file set.
+2. **Streaming**: Verifying candidate matches using a memory-constant streaming architecture, allowing it to search massive files without OOM risks.
+3. **Agent-First Design**: Providing structured output and precise context extraction out of the box.
