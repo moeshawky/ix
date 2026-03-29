@@ -1,45 +1,49 @@
-# ix 🔍
+# ix 🔍 
 
-> High-performance, byte-level code search using a sparse trigram index. Optimized for humans and LLM agents.
+> **High-signal code retrieval for humans and AI agents.**  
+> *Sub-millisecond search across multi-gigabyte codebases with constant memory overhead.*
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](docs/CONTRIBUTING.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)]()
-
-`ix` is a Unix-native code search tool that bridges the gap between linear scanners like `grep` and full-text search engines. By leveraging a **sparse trigram index**, `ix` delivers sub-millisecond search latency on multi-gigabyte codebases while maintaining a minimal disk footprint.
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](docs/CONTRIBUTING.md)
 
 ---
 
-## Proof of Life
+## ⚡️ The Hero Visual (Proof of Life)
 
-### Instant Results
 ```bash
-$ time ix "ConnectionTimeout"
+# Instant search across a massive repo
+$ time ix "ConnectionTimeout" src/
 src/network/client.rs:42:1280:    pub timeout: ConnectionTimeout,
 src/config/defaults.rs:15:450:    pub const DEFAULT_TIMEOUT: ConnectionTimeout = 30s;
 
 real    0m0.004s
 user    0m0.002s
 sys     0m0.002s
-```
 
-### High-Signal Agent Output
-```bash
-$ ix --json -C 1 "xyz789"
-{"file":"test3.rs","line":1,"col":0,"content":"xyz789","byte_offset":0,"context_before":[],"context_after":[]}
+# Streaming compressed logs without OOM
+$ ix -z "ERROR" logs/2026-03-29.gz
+logs/2026-03-29.gz:1042:0: [ERROR] Database connection failed
 ```
 
 ---
 
-## Quick Start
+## 🎯 The Hook
+
+`ix` is a Unix-native search engine designed for the 2026 developer workflow. While `grep` and `ripgrep` are excellent linear scanners, `ix` bridges the gap to full-text search by leveraging a **sparse trigram index**. 
+
+It is specifically engineered to provide **high-signal retrieval** for AI agents, preventing context flooding by delivering precise code primitives rather than overwhelming chunks of text.
+
+---
+
+## 🚀 Quick Start
 
 ### Installation
 ```bash
-cargo install --path .
+cargo install --path . --features full
 ```
 
-### Initializing the Index
-Build the index once for your project root:
+### Build your first index
 ```bash
 ix --build
 ```
@@ -47,81 +51,56 @@ ix --build
 
 ---
 
-## Usage Examples
+## 💎 Features
 
-### Basic Search
-```bash
-ix "ConnectionTimeout"
-```
-
-### Regex Search
-```bash
-ix --regex "err(or|no).*timeout"
-```
-
-### Scoped Search (by file type)
-```bash
-ix -t rs -t py "fn main"
-```
-
-### Daemon Mode (ixd)
-Keep your index fresh automatically:
-```bash
-ixd . &
-```
+- **Universal Search**: Seamlessly query `.rs`, `.py`, `.gz`, `.zst`, `.zip`, and `.tar.gz` files.
+- **Parallel Execution**: Multi-threaded verification powered by `rayon`.
+- **Streaming Architecture**: Search arbitrarily large files with **constant memory overhead**.
+- **Agent-Native**: First-class support for `--json` output and context capping to respect LLM window limits.
+- **Daemon Mode**: `ixd` monitors your filesystem and keeps indices fresh while your system is idle.
 
 ---
 
-## LLM Agent Usage
-`ix` is the primary search tool for AI agents to prevent context flooding and ensure high-precision retrieval.
+## 🤖 Agentic Retrieval (LLM Usage)
 
-| Pattern | Command | Output |
-|:---|:---|:---|
-| **Existence Check** | `ix -c "pattern"` | Single integer (count) |
-| **Location** | `ix -l "pattern"` | List of unique file paths |
-| **Context** | `ix -C 3 "pattern"` | ±3 lines around matches |
-| **Safe Default** | `ix "pattern"` | Max 100 results (prevents flooding) |
-| **Machine Read** | `ix --json "pattern"` | JSON Lines format |
+`ix` follows the **UTCP Schema** for optimal AI agent integration:
 
----
-
-## Architecture
-
-```mermaid
-graph TD
-    A[Query] --> B[Planner]
-    B --> C[Sparse Trigram Lookup]
-    C --> D[Bloom Filter Gate]
-    D --> E[SIMD Verification]
-    E --> F[Results]
-    
-    subgraph Daemon [ixd]
-        G[FS Watcher] --> H[Idle Tracker]
-        H --> I[Incremental Update]
-    end
-    I -.-> C
-```
+| Command | Capability | Agent Output |
+| :--- | :--- | :--- |
+| `ix -c "p"` | **Existence Check** | Single integer (match count) |
+| `ix -l "p"` | **Location** | List of unique file paths |
+| `ix -C 3 "p"` | **Contextual Retrieval** | ±3 lines around every match |
+| `ix --json "p"` | **Structured Extraction** | JSON Lines for machine parsing |
+| `ix -r -U "p"` | **Multiline** | Cross-line Regex (dot matches newline) |
 
 ---
 
-## Provenance & Trust
+## 🛠 Debugging & Development
 
-| Attribute | Value |
-|:----------|:------|
-| **Created By** | AI-assisted development (Gemini CLI) |
-| **Human Auditor** | @moeshawky |
-| **Test Coverage** | Comprehensive integration & robustness suite |
-| **Security Scan** | Clean (CWE-safe trigram extraction) |
-| **License** | MIT |
+For contributors and power users:
+- **Telemetry**: Use `--stats` to see retrieval performance and index efficiency.
+- **Diagnostics**: `cargo test --all-features` runs the full integration suite (unit, robustness, and streaming).
+- **Binary Bypass**: Use `--binary` to force search through non-text files.
 
 ---
 
-## Contributing
-Contributions are welcome! Please see [CONTRIBUTING.md](docs/CONTRIBUTING.md) for details.
+## 🏛 Architecture
 
-## License
-Distributed under the MIT License. See `LICENSE` for more information.
+`ix` employs a tiered verification pipeline:
+1. **Query Planner**: Analyzes Regex/Literal and expands trigram variants.
+2. **Sparse Lookup**: Intersects posting lists from the trigram table.
+3. **Bloom Filter Gate**: Probabilistic skip of false positives before I/O.
+4. **SIMD Verification**: Final byte-level verification of candidate matches.
 
-## Acknowledgements
-- Inspired by the need for faster-than-grep search in massive codebases.
-- Built with Rust 2026.
+---
+
+## 📜 License & Provenance
+
+- **License**: MIT  
+- **Created By**: AI-assisted development (Gemini CLI)  
+- **Human Auditor**: @moeshawky  
+- **Evolution**: Built with Rust 2024 (and future-proofed for 2026).
+
+---
+
+> "Stop scanning. Start finding."
