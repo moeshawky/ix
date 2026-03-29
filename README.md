@@ -98,11 +98,6 @@ For contributors and power users:
 
 ## 📜 License & Provenance
 
-- **License**: MIT  
-- **Created By**: AI-assisted development (Gemini CLI)  
-- **Human Auditor**: @moeshawky  
-- **Evolution**: Built with Rust 2024 (and future-proofed for 2026).
-
 ---
 
 > "Stop scanning. Start finding."
