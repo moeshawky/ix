@@ -132,6 +132,10 @@ struct Cli {
     #[arg(long)]
     force: bool,
 
+    /// Run as background daemon (ixd mode).
+    #[arg(long, hide = true)]
+    daemon: bool,
+
     /// Manage ixd as a system service (install, start, stop).
     #[command(subcommand)]
     service: Option<ServiceCommand>,
@@ -191,6 +195,26 @@ fn main() {
             std::process::exit(1);
         }
         return;
+    }
+
+    #[cfg(feature = "notify")]
+    {
+        if cli.daemon {
+            let path = cli.path.unwrap_or_else(|| PathBuf::from("."));
+            if let Err(e) = ix::run_daemon(&path) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+            return;
+        }
+    }
+
+    #[cfg(not(feature = "notify"))]
+    {
+        if cli.daemon {
+            eprintln!("Error: daemon mode requires the 'notify' feature. Install with: cargo install moeix --features notify");
+            std::process::exit(1);
+        }
     }
 
     // Determine path and handle build action
@@ -264,6 +288,7 @@ fn main() {
     }
 }
 
+#[cfg(feature = "notify")]
 fn handle_service(cmd: ServiceCommand) -> ix::error::Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -278,9 +303,8 @@ fn handle_service(cmd: ServiceCommand) -> ix::error::Result<()> {
                 
                 std::fs::create_dir_all(&service_dir)?;
                 
-                let ixd_path = std::env::current_exe()?;
-                // We want to run 'ixd' which should be in the same dir as 'ix'
-                let ixd_bin = ixd_path.parent().unwrap().join("ixd");
+                let ix_path = std::env::current_exe()?;
+                let daemon_cmd = format!("{} --daemon", ix_path.display());
                 
                 let service_content = format!(
 r#"[Unit]
@@ -294,7 +318,7 @@ RestartSec=5
 
 [Install]
 WantedBy=default.target
-"#, ixd_bin.display(), watch_path_abs.display());
+"#, daemon_cmd, watch_path_abs.display());
 
                 std::fs::write(&service_file, service_content)?;
                 
@@ -336,6 +360,13 @@ WantedBy=default.target
         eprintln!("ix service commands are currently only supported on Linux (systemd).");
         Ok(())
     }
+}
+
+#[cfg(not(feature = "notify"))]
+fn handle_service(_cmd: ServiceCommand) -> ix::error::Result<()> {
+    eprintln!("Error: ix service commands require the 'notify' feature.");
+    eprintln!("Install with: cargo install moeix --features notify");
+    std::process::exit(1);
 }
 
 fn do_stdin_search(pattern: &str, cli: &Cli) -> ix::error::Result<()> {

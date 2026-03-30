@@ -1,6 +1,6 @@
 [package]
 name = "moeix"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "High-performance trigram code search for humans and AI agents."
 license = "MIT"
@@ -43,7 +43,8 @@ name = "ix"
 path = "src/lib/lib.rs"
 
 [features]
-default = []
+default = ["notify"]
+notify = ["dep:notify"]
 decompress = ["flate2", "zstd", "bzip2", "xz2"]
 archive = ["zip", "tar"]
 full = ["decompress", "notify", "archive"]
