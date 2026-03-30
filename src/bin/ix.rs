@@ -313,8 +313,12 @@ After=network.target
 
 [Service]
 ExecStart={} {}
-Restart=always
-RestartSec=5
+Restart=on-failure
+RestartSec=10
+MemoryMax=512M
+MemoryHigh=384M
+StartLimitBurst=3
+StartLimitIntervalSec=60
 
 [Install]
 WantedBy=default.target
