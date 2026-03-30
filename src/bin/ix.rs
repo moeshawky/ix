@@ -131,6 +131,24 @@ struct Cli {
     /// Force operation even if the search root is managed by a daemon.
     #[arg(long)]
     force: bool,
+
+    /// Manage ixd as a system service (install, start, stop).
+    #[command(subcommand)]
+    service: Option<ServiceCommand>,
+}
+
+#[derive(clap::Subcommand)]
+enum ServiceCommand {
+    /// Install the ixd system service.
+    Install {
+        /// The path to watch and index (default: $HOME).
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+    },
+    /// Start the ixd system service.
+    Start,
+    /// Stop the ixd system service.
+    Stop,
 }
 
 struct SearchParams<'a> {
@@ -166,6 +184,14 @@ fn main() {
     }
 
     let is_stdin_pipe = !io::stdin().is_terminal();
+
+    if let Some(service) = cli.service {
+        if let Err(e) = handle_service(service) {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
 
     // Determine path and handle build action
     let search_path = if let Some(ref p) = cli.path {
@@ -235,6 +261,80 @@ fn main() {
     if let Err(e) = do_search(params) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
+    }
+}
+
+fn handle_service(cmd: ServiceCommand) -> ix::error::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let home = std::env::var("HOME").map_err(|_| ix::error::Error::Config("HOME not set".into()))?;
+        let service_dir = PathBuf::from(&home).join(".config/systemd/user");
+        let service_file = service_dir.join("ixd.service");
+
+        match cmd {
+            ServiceCommand::Install { path } => {
+                let watch_path = path.unwrap_or_else(|| PathBuf::from(&home));
+                let watch_path_abs = watch_path.canonicalize().unwrap_or(watch_path);
+                
+                std::fs::create_dir_all(&service_dir)?;
+                
+                let ixd_path = std::env::current_exe()?;
+                // We want to run 'ixd' which should be in the same dir as 'ix'
+                let ixd_bin = ixd_path.parent().unwrap().join("ixd");
+                
+                let service_content = format!(
+r#"[Unit]
+Description=ix background daemon
+After=network.target
+
+[Service]
+ExecStart={} {}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+"#, ixd_bin.display(), watch_path_abs.display());
+
+                std::fs::write(&service_file, service_content)?;
+                
+                // Reload systemd
+                let status = std::process::Command::new("systemctl")
+                    .args(["--user", "daemon-reload"])
+                    .status()?;
+                if !status.success() {
+                    return Err(ix::error::Error::Config("systemctl daemon-reload failed".into()));
+                }
+                
+                println!("ixd service installed at {}", service_file.display());
+                println!("Watch path: {}", watch_path_abs.display());
+                println!("Run 'ix service start' to start the daemon.");
+            }
+            ServiceCommand::Start => {
+                let status = std::process::Command::new("systemctl")
+                    .args(["--user", "enable", "--now", "ixd"])
+                    .status()?;
+                if !status.success() {
+                    return Err(ix::error::Error::Config("Failed to start ixd service".into()));
+                }
+                println!("ixd service started.");
+            }
+            ServiceCommand::Stop => {
+                let status = std::process::Command::new("systemctl")
+                    .args(["--user", "stop", "ixd"])
+                    .status()?;
+                if !status.success() {
+                    return Err(ix::error::Error::Config("Failed to stop ixd service".into()));
+                }
+                println!("ixd service stopped.");
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        eprintln!("ix service commands are currently only supported on Linux (systemd).");
+        Ok(())
     }
 }
 

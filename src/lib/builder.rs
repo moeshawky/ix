@@ -6,7 +6,7 @@
 
 use crate::bloom::BloomFilter;
 use crate::decompress::maybe_decompress;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::format::*;
 use crate::posting::{PostingEntry, PostingList};
 use crate::string_pool::StringPool;
@@ -37,7 +37,7 @@ pub struct FileRecord {
     pub content_hash: u64,
     pub trigram_count: u32,
     pub is_binary: bool,
-    pub trigrams: HashMap<Trigram, Vec<u32>>,
+    pub trigrams: Vec<(Trigram, Vec<u32>)>,
     pub bloom: BloomFilter,
 }
 
@@ -112,8 +112,8 @@ impl Builder {
             } else if record.path.exists() {
                 // Unchanged - reuse trigrams and bloom
                 self.string_pool.add_path(&record.path);
-                for (&tri, offsets) in &record.trigrams {
-                    self.postings.entry(tri).or_default().push(PostingEntry {
+                for (tri, offsets) in &record.trigrams {
+                    self.postings.entry(*tri).or_default().push(PostingEntry {
                         file_id: next_id,
                         offsets: offsets.clone(),
                     });
@@ -166,11 +166,33 @@ impl Builder {
             .add_custom_ignore_filename(".ixignore")
             .filter_entry(move |entry| {
                 let path = entry.path();
-                // Explicitly skip high-volume non-source directories
-                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    if name == "target" || name == ".git" || name == "node_modules" || name == ".ix"
-                    {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                
+                // Built-in directory defaults
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                    && (name == "lost+found" || name == ".git" || name == "node_modules" || 
+                       name == "target" || name == "__pycache__" || name == ".tox" || 
+                       name == ".venv" || name == "venv" || name == ".ix") 
+                {
+                    return false;
+                }
+
+                // Built-in file extension defaults
+                if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    match ext {
+                        // Binary extensions
+                        "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" |
+                        // Media
+                        "jpg" | "png" | "gif" | "mp4" | "mp3" | "pdf" |
+                        // Archives
+                        "zip" | "7z" | "rar" |
+                        // Data
+                        "sqlite" | "db" | "bin" => return false,
+                        _ => {}
+                    }
+                    // Handle .tar.gz specifically
+                    if name.ends_with(".tar.gz") {
                         return false;
                     }
                 }
@@ -179,9 +201,15 @@ impl Builder {
             .build();
 
         for result in walker {
-            let entry = result.map_err(|e| Error::Config(e.to_string()))?;
-            if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                paths.push(entry.path().to_owned());
+            match result {
+                Ok(entry) => {
+                    if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                        paths.push(entry.path().to_owned());
+                    }
+                }
+                Err(e) => {
+                    eprintln!("ix: warning: skipping path: {}", e);
+                }
             }
         }
         Ok(paths)
@@ -234,18 +262,34 @@ impl Builder {
         }
 
         let content_hash = xxhash_rust::xxh64::xxh64(data, 0);
-        let trigrams = self.extractor.extract_with_offsets(data).clone();
-        let trigram_count = trigrams.len() as u32;
-
+        let pairs = self.extractor.extract_with_offsets(data);
+        
         self.string_pool.add_path(&path);
-
         let mut bloom = BloomFilter::new(256, 5);
-        for (&tri, offsets) in &trigrams {
+        let mut trigram_count = 0;
+        let mut trigrams = Vec::with_capacity(pairs.len().min(4096));
+
+        // Group by trigram from the sorted slice
+        let mut i = 0;
+        while i < pairs.len() {
+            let tri = pairs[i].0;
+            let mut j = i + 1;
+            while j < pairs.len() && pairs[j].0 == tri {
+                j += 1;
+            }
+            
+            // Now [i..j] contains all offsets for 'tri'
+            let offsets: Vec<u32> = pairs[i..j].iter().map(|p| p.1).collect();
+            
             bloom.insert(tri);
             self.postings.entry(tri).or_default().push(PostingEntry {
                 file_id,
                 offsets: offsets.clone(),
             });
+            
+            trigrams.push((tri, offsets));
+            trigram_count += 1;
+            i = j;
         }
 
         self.files.push(FileRecord {
@@ -256,7 +300,7 @@ impl Builder {
             content_hash,
             trigram_count,
             is_binary: false,
-            trigrams,
+            trigrams, 
             bloom,
         });
 

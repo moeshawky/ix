@@ -3,8 +3,6 @@
 //! Operates on raw bytes. UTF-8 self-synchronization makes this correct
 //! for Unicode for free. No charset detection needed.
 
-use std::collections::HashMap;
-
 /// A trigram is a u32 with high byte always 0.
 /// trigram("abc") = (0x61 << 16) | (0x62 << 8) | 0x63
 pub type Trigram = u32;
@@ -17,24 +15,26 @@ pub fn from_bytes(a: u8, b: u8, c: u8) -> Trigram {
 
 /// Reusable trigram extractor. Pre-allocated, reused across files.
 pub struct Extractor {
-    trigram_offsets: HashMap<Trigram, Vec<u32>>,
+    trigram_offsets: Vec<(Trigram, u32)>,
 }
 
 impl Extractor {
     pub fn new() -> Self {
         Self {
-            trigram_offsets: HashMap::with_capacity(4096),
+            trigram_offsets: Vec::with_capacity(4096),
         }
     }
 
     /// Extract trigrams with byte offsets (for indexing).
-    pub fn extract_with_offsets(&mut self, data: &[u8]) -> &HashMap<Trigram, Vec<u32>> {
+    /// Returns a slice of (trigram, offset) pairs, sorted by trigram then offset.
+    pub fn extract_with_offsets(&mut self, data: &[u8]) -> &[(Trigram, u32)] {
         self.trigram_offsets.clear();
 
         if data.len() < 3 {
             return &self.trigram_offsets;
         }
 
+        // 1. Collect all pairs
         for i in 0..=(data.len() - 3) {
             // Skip trigrams containing null bytes (binary content marker)
             if data[i] == 0 || data[i + 1] == 0 || data[i + 2] == 0 {
@@ -42,8 +42,11 @@ impl Extractor {
             }
 
             let tri = from_bytes(data[i], data[i + 1], data[i + 2]);
-            self.trigram_offsets.entry(tri).or_default().push(i as u32);
+            self.trigram_offsets.push((tri, i as u32));
         }
+
+        // 2. Sort for efficient grouping later
+        self.trigram_offsets.sort_unstable();
 
         &self.trigram_offsets
     }
@@ -136,7 +139,7 @@ mod tests {
         let mut e = Extractor::new();
         let result = e.extract_with_offsets(b"abc");
         assert_eq!(result.len(), 1);
-        assert!(result.contains_key(&from_bytes(b'a', b'b', b'c')));
+        assert_eq!(result[0], (from_bytes(b'a', b'b', b'c'), 0));
     }
 
     #[test]
@@ -144,9 +147,16 @@ mod tests {
         let mut e = Extractor::new();
         let result = e.extract_with_offsets(b"abcabc");
         // "abc" at offset 0 and 3, "bca" at 1, "cab" at 2
+        // Sorted: abc:0, abc:3, bca:1, cab:2
         let abc = from_bytes(b'a', b'b', b'c');
-        assert_eq!(result[&abc].len(), 2);
-        assert_eq!(result[&abc], vec![0, 3]);
+        let bca = from_bytes(b'b', b'c', b'a');
+        let cab = from_bytes(b'c', b'a', b'b');
+        
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0], (abc, 0));
+        assert_eq!(result[1], (abc, 3));
+        assert_eq!(result[2], (bca, 1));
+        assert_eq!(result[3], (cab, 2));
     }
 
     #[test]
@@ -161,7 +171,7 @@ mod tests {
         let mut e = Extractor::new();
         let result = e.extract_with_offsets(&[0xFF, 0xFE, 0xFD]);
         let tri = from_bytes(0xFF, 0xFE, 0xFD);
-        assert!(result.contains_key(&tri));
+        assert_eq!(result[0], (tri, 0));
     }
 
     #[test]

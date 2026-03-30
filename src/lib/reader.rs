@@ -73,10 +73,32 @@ impl Reader {
             .add_custom_ignore_filename(".ixignore")
             .filter_entry(move |entry| {
                 let path = entry.path();
-                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    if name == "target" || name == ".git" || name == "node_modules" || name == ".ix"
-                    {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                
+                // Built-in directory defaults
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                    && (name == "lost+found" || name == ".git" || name == "node_modules" || 
+                       name == "target" || name == "__pycache__" || name == ".tox" || 
+                       name == ".venv" || name == "venv" || name == ".ix") 
+                {
+                    return false;
+                }
+
+                // Built-in file extension defaults
+                if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    match ext {
+                        // Binary extensions
+                        "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" |
+                        // Media
+                        "jpg" | "png" | "gif" | "mp4" | "mp3" | "pdf" |
+                        // Archives
+                        "zip" | "7z" | "rar" |
+                        // Data
+                        "sqlite" | "db" | "bin" => return false,
+                        _ => {}
+                    }
+                    if name.ends_with(".tar.gz") {
                         return false;
                     }
                 }
@@ -85,19 +107,25 @@ impl Reader {
             .build();
 
         for result in walker {
-            let entry = result.map_err(|e| Error::Config(e.to_string()))?;
-            if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                let metadata = entry.metadata().map_err(|e| Error::Config(e.to_string()))?;
-                let mtime = metadata
-                    .modified()
-                    .and_then(|t| {
-                        t.duration_since(UNIX_EPOCH)
-                            .map_err(|_| std::io::Error::other("time went backwards"))
-                    })
-                    .map(|d| d.as_micros() as u64)
-                    .unwrap_or(0);
-                if mtime > last_modified {
-                    last_modified = mtime;
+            match result {
+                Ok(entry) => {
+                    if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                        let metadata = entry.metadata().map_err(|e| Error::Config(e.to_string()))?;
+                        let mtime = metadata
+                            .modified()
+                            .and_then(|t| {
+                                t.duration_since(UNIX_EPOCH)
+                                    .map_err(|_| std::io::Error::other("time went backwards"))
+                            })
+                            .map(|d| d.as_micros() as u64)
+                            .unwrap_or(0);
+                        if mtime > last_modified {
+                            last_modified = mtime;
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("ix: warning: stale check skipping path: {}", e);
                 }
             }
         }

@@ -29,7 +29,65 @@ impl Watcher {
         let (event_tx, event_rx) = mpsc::channel();
 
         let mut watcher = RecommendedWatcher::new(event_tx, Config::default())?;
-        watcher.watch(&self.root, RecursiveMode::Recursive)?;
+        
+        // Instead of recursive watch which crashes on permission denied, 
+        // we walk and add non-recursive watches to each directory.
+        let walker = ignore::WalkBuilder::new(&self.root)
+            .hidden(false)
+            .git_ignore(true)
+            .require_git(false)
+            .add_custom_ignore_filename(".ixignore")
+            .filter_entry(move |entry| {
+                let path = entry.path();
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                
+                // Built-in directory defaults
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                    && (name == "lost+found" || name == ".git" || name == "node_modules" || 
+                       name == "target" || name == "__pycache__" || name == ".tox" || 
+                       name == ".venv" || name == "venv" || name == ".ix") 
+                {
+                    return false;
+                }
+
+                // Built-in file extension defaults
+                if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    match ext {
+                        // Binary extensions
+                        "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" |
+                        // Media
+                        "jpg" | "png" | "gif" | "mp4" | "mp3" | "pdf" |
+                        // Archives
+                        "zip" | "7z" | "rar" |
+                        // Data
+                        "sqlite" | "db" | "bin" => return false,
+                        _ => {}
+                    }
+                    if name.ends_with(".tar.gz") {
+                        return false;
+                    }
+                }
+                true
+            })
+            .build();
+
+        for result in walker {
+            match result {
+                Ok(entry) => {
+                    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                        let path = entry.path();
+                        if let Err(e) = watcher.watch(path, RecursiveMode::NonRecursive) {
+                            eprintln!("ix: warning: watcher failed for {}: {}", path.display(), e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("ix: warning: watcher skipping path: {}", e);
+                }
+            }
+        }
+
         self.watcher = Some(watcher);
 
         let handle = thread::spawn(move || {

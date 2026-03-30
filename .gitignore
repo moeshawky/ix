@@ -5,3 +5,5 @@
 Cargo.lock
 .gemini/
 docs/guidelines/
+AGENTS.md
+PROMPT.md

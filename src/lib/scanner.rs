@@ -44,10 +44,53 @@ impl Scanner {
         let walker = WalkBuilder::new(&self.root)
             .hidden(false)
             .git_ignore(true)
+            .require_git(false)
+            .add_custom_ignore_filename(".ixignore")
+            .filter_entry(move |entry| {
+                let path = entry.path();
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                
+                // Built-in directory defaults
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                    && (name == "lost+found" || name == ".git" || name == "node_modules" || 
+                       name == "target" || name == "__pycache__" || name == ".tox" || 
+                       name == ".venv" || name == "venv" || name == ".ix") 
+                {
+                    return false;
+                }
+
+                // Built-in file extension defaults
+                if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    match ext {
+                        // Binary extensions
+                        "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" |
+                        // Media
+                        "jpg" | "png" | "gif" | "mp4" | "mp3" | "pdf" |
+                        // Archives
+                        "zip" | "7z" | "rar" |
+                        // Data
+                        "sqlite" | "db" | "bin" => return false,
+                        _ => {}
+                    }
+                    if name.ends_with(".tar.gz") {
+                        return false;
+                    }
+                }
+                true
+            })
             .build();
 
         let paths: Vec<PathBuf> = walker
-            .filter_map(|result| result.ok())
+            .filter_map(|result| {
+                match result {
+                    Ok(entry) => Some(entry),
+                    Err(e) => {
+                        eprintln!("ix: warning: scanner skipping path: {}", e);
+                        None
+                    }
+                }
+            })
             .filter(|entry| entry.file_type().map(|t| t.is_file()).unwrap_or(false))
             .map(|entry| entry.path().to_owned())
             .collect();
