@@ -1,5 +1,5 @@
 [package]
-name = "ix"
+name = "moeix"
 version = "0.1.1"
 edition = "2024"
 description = "High-performance trigram code search for humans and AI agents."
