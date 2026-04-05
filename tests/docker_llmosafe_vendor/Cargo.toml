@@ -1,0 +1,36 @@
+[package]
+name = "llmosafe"
+version = "0.2.0"
+edition = "2021"
+description = "3-tier safety-critical library for AI agents: entropy tracking, surprise gating, and perceptual sifting."
+license = "MIT"
+repository = "https://github.com/moeshawky/llmosafe"
+keywords = ["safety", "ai-agent", "entropy", "surprisal", "cognitive-kernel"]
+categories = ["development-tools", "embedded", "science"]
+exclude = ["AGENTS.md", "PROMPT.md", ".sniper/*"]
+
+[dependencies]
+modular-bitfield = "0.13.1"
+libc = "0.2"
+once_cell = "1"
+serde = { version = "1", features = ["derive"], optional = true }
+
+[features]
+serde = ["dep:serde"]
+
+[dev-dependencies]
+proptest = "1.11.0"
+criterion = "0.5"
+
+[[bench]]
+name = "llmosafe_benchmarks"
+harness = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[build-dependencies]
+cbindgen = "0.29.2"
+
+[workspace]
+

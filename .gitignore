@@ -16,4 +16,3 @@ mcp_config.json
 Dockerfile.*
 test_results/
 tests/docker/
-tests/docker_llmosafe_vendor/

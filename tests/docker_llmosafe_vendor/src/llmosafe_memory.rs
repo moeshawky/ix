@@ -1,0 +1,211 @@
+//! LLMOSAFE Tier 2 Cognitive Working Memory
+//! 
+//! This module implements the "Memory Integrity" Axiom.
+//! It uses the Seshat principle of "Tangible Ratios" (Sekel)
+//! to maintain a fixed-size cognitive state without heap allocation.
+//!
+//! Research Grounds:
+//! - Titans: Surprise-based gating with momentum.
+//! - TransformerFAM: Feedback-loop working memory.
+//! - Infini-attention: Compressive associative memory.
+
+use crate::llmosafe_kernel::{CognitiveEntropy, KernelError, Synapse, Privilege, ActionRequest};
+
+/// The "Working Memory" container (The Sekel of State).
+/// Ratio: 64 "Palms" (anchors) for persistent reasoning.
+pub struct WorkingMemory<const SIZE: usize = 64> {
+    state: [CognitiveEntropy<28, 2>; SIZE],
+    current_index: usize,
+    surprise_threshold: i128,
+    pub capability_mask: Vec<Privilege>,
+}
+
+impl<const SIZE: usize> WorkingMemory<SIZE> {
+    /// Initialize with a fixed surprise threshold (e.g. 5.00)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use llmosafe::WorkingMemory;
+    /// let memory = WorkingMemory::<64>::new(1000);
+    /// ```
+    pub fn new(threshold: i128) -> Self {
+        Self {
+            state: [CognitiveEntropy::new(0); SIZE],
+            current_index: 0,
+            surprise_threshold: threshold,
+            capability_mask: vec![Privilege::Sandbox],
+        }
+    }
+
+    /// Updated: Uses the Synapse protocol for state transitions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use llmosafe::{WorkingMemory, Synapse};
+    /// let mut memory = WorkingMemory::<64>::new(1000);
+    /// let synapse = Synapse::from_raw_u64(0);
+    /// assert!(memory.update(synapse).is_ok());
+    /// ```
+    pub fn authorize(&self, action: ActionRequest) -> Result<(), KernelError> { 
+        match action { 
+            ActionRequest::IndexRoot => { 
+                if self.capability_mask.contains(&Privilege::Root) || std::env::var("LLMOSAFE_AUTH_ROOT").is_ok() { 
+                    Ok(()) 
+                } else { 
+                    Err(KernelError::PermissionDenied) 
+                } 
+            }, 
+            ActionRequest::ExternalApiCall => { 
+                if self.capability_mask.contains(&Privilege::Network) || std::env::var("LLMOSAFE_AUTH_NETWORK").is_ok() { 
+                    Ok(()) 
+                } else { 
+                    Err(KernelError::PermissionDenied) 
+                } 
+            }, 
+            ActionRequest::StandardProcessing => Ok(()), 
+        } 
+    } 
+
+    pub fn update(&mut self, synapse: Synapse) -> Result<(), KernelError> {
+        synapse.validate()?;
+
+        if synapse.surprise() > self.surprise_threshold {
+            return Err(KernelError::HallucinationDetected);
+        }
+
+        self.state[self.current_index] = synapse.entropy();
+        self.current_index = (self.current_index + 1) % SIZE;
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llmosafe_kernel::Synapse;
+
+    #[test]
+    fn test_memory_update_gating() {
+        let mut memory = WorkingMemory::<4>::new(500); // Threshold 5.00
+
+        // 1. Valid update (Low surprise, no bias, stable entropy)
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(400);
+        synapse.set_raw_surprise(100);
+        synapse.set_has_bias(false);
+        assert!(memory.update(synapse).is_ok());
+
+        // 2. Invalid update: Surprise too high (Hallucination)
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(400);
+        synapse.set_raw_surprise(600);
+        synapse.set_has_bias(false);
+        assert_eq!(memory.update(synapse).unwrap_err(), KernelError::HallucinationDetected);
+
+        // 3. Invalid update: Bias detected
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(400);
+        synapse.set_raw_surprise(100);
+        synapse.set_has_bias(true);
+        assert_eq!(memory.update(synapse).unwrap_err(), KernelError::BiasHaloDetected);
+
+        // 4. Invalid update: Cognitive Instability
+        let mut synapse = Synapse::new();
+        synapse.set_raw_entropy(1100);
+        synapse.set_raw_surprise(100);
+        synapse.set_has_bias(false);
+        assert_eq!(memory.update(synapse).unwrap_err(), KernelError::CognitiveInstability);
+    }
+
+    #[test]
+    fn test_working_memory_size_1() {
+        let mut memory = WorkingMemory::<1>::new(1000);
+        let mut s1 = Synapse::new();
+        s1.set_raw_entropy(100);
+        let mut s2 = Synapse::new();
+        s2.set_raw_entropy(200);
+        
+        memory.update(s1).unwrap();
+        assert!(memory.state[0].is_stable(100));
+        
+        memory.update(s2).unwrap();
+        assert!(memory.state[0].is_stable(200));
+        assert_eq!(memory.current_index, 0);
+    }
+
+    #[test]
+    fn test_memory_new_max_threshold() {
+        let memory = WorkingMemory::<64>::new(i128::MAX);
+        assert_eq!(memory.surprise_threshold, i128::MAX);
+    }
+
+    #[test]
+    fn test_memory_zero_threshold() {
+        let mut memory = WorkingMemory::<64>::new(0);
+        let mut synapse = Synapse::new();
+        synapse.set_raw_surprise(1);
+        // Any surprise > 0 should fail
+        assert_eq!(memory.update(synapse).unwrap_err(), KernelError::HallucinationDetected);
+    }
+
+    #[test]
+    fn test_memory_negative_threshold() {
+        let mut memory = WorkingMemory::<64>::new(-1);
+        let synapse = Synapse::new();
+        // Even surprise 0 > -1, so it should fail
+        assert_eq!(memory.update(synapse).unwrap_err(), KernelError::HallucinationDetected);
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+    use crate::llmosafe_kernel::Synapse;
+
+    proptest! {
+        #[test]
+        fn test_working_memory_random_synapse_sequence(
+            entropies in prop::collection::vec(0u16..800u16, 1..200)
+        ) {
+            let mut memory = WorkingMemory::<64>::new(1000);
+            for e in entropies {
+                let mut synapse = Synapse::new();
+                synapse.set_raw_entropy(e);
+                prop_assert!(memory.update(synapse).is_ok());
+            }
+        }
+    }
+}
+
+// #[crate::scrust::tier(2)]
+pub mod cognitive_memory {
+    use super::*;
+use once_cell::sync::Lazy;
+    use std::sync::Mutex;
+
+    /// Global singleton for the Cognitive Working Memory.
+    /// Uses a Mutex for thread-safety in distributed hive environments.
+    static GLOBAL_MEMORY: Lazy<Mutex<WorkingMemory<64>>> = Lazy::new(|| Mutex::new(WorkingMemory::<64>::new(500))); // Threshold = 5.00
+
+    /// Bridges the working memory to the reasoning core via Synapse.
+    /// Returns 0 on success, or a negative error code.
+    pub fn process_state_update(synapse_bits: u64) -> i32 {
+        let synapse = Synapse::from_raw_u64(synapse_bits);
+
+        let mut memory = GLOBAL_MEMORY.lock().unwrap();
+
+        match memory.update(synapse) {
+            Ok(_) => 0,
+            Err(KernelError::DepthExceeded) => -1,
+            Err(KernelError::CognitiveInstability) => -2,
+            Err(KernelError::BiasHaloDetected) => -3,
+            Err(KernelError::HallucinationDetected) => -4,
+            Err(KernelError::ResourceExhaustion) => -5,
+            Err(KernelError::PermissionDenied) => -6,
+        }
+    }
+}
