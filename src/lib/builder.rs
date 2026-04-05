@@ -195,7 +195,7 @@ impl Builder {
         
         // Self-Aware Capability Alignment
         if root.to_string_lossy() == "/" {
-            let caps = unsafe { llmosafe_sense_capabilities() };
+            let caps = llmosafe_sense_capabilities();
             if (caps & CAP_ROOT) == 0 {
                 return Err(crate::error::Error::Io(std::io::Error::other(
                     "Self-Aware Capability Alignment Error: CAP_ROOT (0x02) missing. Aborting root filesystem walk for Immune Defense."
@@ -257,13 +257,27 @@ impl Builder {
                 Ok(e) => e,
                 Err(e) => {
                     // Handle KernelError::BacktrackSignaled (-7) during the walk
-                    if let Some(io_err) = e.io_error() && io_err.raw_os_error() == Some(-7) {
-                        if let Some(path) = e.path() {
-                            tracing::warn!("Dead End encountered: {}", path.display());
-                            self.dead_ends.push(path.to_owned());
+                    let backtrack_path = match &e {
+                        ignore::Error::Io(io_err) if io_err.raw_os_error() == Some(-7) => Some(None),
+                        ignore::Error::WithPath { path, err } => {
+                            if let ignore::Error::Io(io_err) = err.as_ref() {
+                                if io_err.raw_os_error() == Some(-7) {
+                                    Some(Some(path.clone()))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
                         }
-                        it.skip_current_dir();
-                        continue;
+                        _ => None,
+                    };
+
+                    if let Some(path_opt) = backtrack_path {
+                        tracing::warn!("Immune Memory Triggered: Skipping path due to backtrack signal.");
+                        if let Some(path) = path_opt {
+                            self.dead_ends.push(path);
+                        }
                     }
                     continue;
                 }

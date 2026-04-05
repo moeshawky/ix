@@ -12,11 +12,19 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+
+
+
+
+
+
 #define Privilege_CAP_SANDBOX (1 << 0)
 
 #define Privilege_CAP_ROOT (1 << 1)
 
 #define Privilege_CAP_NETWORK (1 << 2)
+
+typedef struct Privilege Privilege;
 
 /**
  * The "Synapse" (Binary Cognitive Protocol).

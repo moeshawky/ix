@@ -11,8 +11,13 @@ pub mod llmosafe_memory;
 pub mod llmosafe_sifter;
 pub mod llmosafe_body;
 
-pub use llmosafe_kernel::{Synapse, KernelError, CognitiveEntropy, STABILITY_THRESHOLD};
+pub use llmosafe_kernel::{Synapse, KernelError, CognitiveEntropy, STABILITY_THRESHOLD, Privilege};
 pub use llmosafe_memory::WorkingMemory;
+
+pub const CAP_SANDBOX: u64 = Privilege::CAP_SANDBOX;
+pub const CAP_ROOT: u64 = Privilege::CAP_ROOT;
+pub const CAP_NETWORK: u64 = Privilege::CAP_NETWORK;
+
 pub use llmosafe_sifter::{sift_perceptions, calculate_halo_signal, calculate_utility};
 pub use llmosafe_body::ResourceGuard;
 

@@ -8,6 +8,7 @@ docs/guidelines/
 AGENTS.md
 PROMPT.md
 ignored_file.txt
+AGENTIC_README.md
 
 # Agentic testing and dev artifacts
 Testing IXD Safety In Docker.md

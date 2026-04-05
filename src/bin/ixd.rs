@@ -22,8 +22,11 @@ use llmosafe::{ResourceGuard, Synapse, llmosafe_metabolic_pace};
 #[command(
     name = "ixd",
     version = env!("CARGO_PKG_VERSION"),
-    about = "ix background daemon. Automatically maintains a fresh trigram index.",
-    after_help = "Send SIGTERM or SIGINT to shut down cleanly."
+    about = "CRITICAL: REASON BEFORE ANY ACTIONS. Background daemon for automatic indexing. Proactively monitors metabolic state.",
+    after_help = "LLM AGENT MANDATE:
+    1. METABOLIC PACING: Auto-throttling (sleep 500ms) occurs if load > 8.0 or iowait > 15.0.
+    2. BACK-PRESSURE: Clears current batch and prunes the task branch on Error -7.
+    3. SIGNAL: Do not restart ixd if it throttles; it is protecting the host."
 )]
 struct Cli {
     #[arg(default_value = ".", value_name = "PATH")]

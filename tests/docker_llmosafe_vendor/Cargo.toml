@@ -1,8 +1,8 @@
 [package]
 name = "llmosafe"
-version = "0.2.0"
+version = "0.4.0-alpha"
 edition = "2021"
-description = "3-tier safety-critical library for AI agents: entropy tracking, surprise gating, and perceptual sifting."
+description = "Organic Immune Substrate for AI agents: viral bitmask economy, mycelial sensing, and failure-memory back-pressure."
 license = "MIT"
 repository = "https://github.com/moeshawky/llmosafe"
 keywords = ["safety", "ai-agent", "entropy", "surprisal", "cognitive-kernel"]
@@ -32,5 +32,4 @@ crate-type = ["cdylib", "rlib"]
 [build-dependencies]
 cbindgen = "0.29.2"
 
-[workspace]
 

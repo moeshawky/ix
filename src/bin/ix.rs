@@ -14,25 +14,29 @@ use ix::scanner::Scanner;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::io::{self, Read, IsTerminal};
-
 #[derive(Parser)]
 #[command(
     name = "ix",
     version = "0.1.0",
-    about = "High-performance, trigram-indexed code search engine. Optimized for sub-millisecond retrieval and context-aware extraction for humans and AI agents.",
-    after_help = "AGENTIC RETRIEVAL (UTCP Schema):
-    Existence check:  ix -c \"pattern\"    → Single integer (count)
-    Location:         ix -l \"pattern\"    → Unique file paths
-    Contextual:       ix -C 3 \"pattern\"  → ±3 lines around match
-    Structured:       ix --json \"pattern\" → JSON Lines output
-    Deterministic:    ix --fresh \"pattern\" → Force rebuild + search
+    about = "CRITICAL: REASON BEFORE ANY ACTIONS. High-performance, safety-aware code search engine for humans and agents. Optimized for sub-millisecond retrieval and context-aware extraction.",
+    after_help = r#"LLM AGENT MANDATE:
+    1. REASON BEFORE ACTION: Analyze the project context and intent before executing search or indexing.
+    2. BACK-PRESSURE: Handle Error -7 (BacktrackSignaled) by immediately pruning the current search branch.
+    3. METABOLIC AWARENESS: This tool uses LLMOSafe v0.4.0. Respect the iowait/load signals.
+
+AGENTIC RETRIEVAL (UTCP Schema):
+    Existence check:  ix -c "pattern"    → Single integer (count)
+    Location:         ix -l "pattern"    → Unique file paths
+    Contextual:       ix -C 3 "pattern"  → ±3 lines around match
+    Structured:       ix --json "pattern" → JSON Lines output
+    Deterministic:    ix --fresh "pattern" → Force rebuild + search
 
 LLM AGENT USAGE:
-    Compressed:  ix -z \"pattern\"               → search .gz/.zst/.bz2/.xz
-    Multiline:   ix -r -U \"foo.*\\nbar\"         → cross-line regex
-    Piped:       cat log | ix \"error\"           → stdin search
-    Archives:    ix --archive \"pattern\" /path   → search inside .zip/.tar.gz
-    Parallel:    ix -j 8 \"pattern\"              → 8 search threads
+    Compressed:  ix -z "pattern"               → search .gz/.zst/.bz2/.xz
+    Multiline:   ix -r -U "foo.*\nbar"         → cross-line regex
+    Piped:       cat log | ix "error"           → stdin search
+    Archives:    ix --archive "pattern" /path   → search inside .zip/.tar.gz
+    Parallel:    ix -j 8 "pattern"              → 8 search threads
 
 CONSTRAINTS:
     - Max results default to 100 to prevent context flooding (use -n 0 for unlimited).
@@ -43,13 +47,13 @@ EXAMPLES:
         ix --build
 
     Search for a literal string:
-        ix \"ConnectionTimeout\"
+        ix "ConnectionTimeout"
 
     Search using a Regular Expression:
-        ix --regex \"err(or|no).*timeout\"
+        ix --regex "err(or|no).*timeout"
 
     Search in a specific directory without using the index:
-        ix --no-index \"TODO\" ./src"
+        ix --no-index "TODO" ./src"#
 )]
 struct Cli {
     /// The pattern to search for (literal string by default).
