@@ -21,7 +21,7 @@ fn test_edge_case_file_sizes() {
     // 4-byte file (two overlapping trigrams)
     fs::write(root.join("four.txt"), "abcd").unwrap();
 
-    let mut builder = Builder::new(root);
+    let mut builder = Builder::new(root).unwrap();
     builder.build().unwrap();
 
     let index_path = root.join(".ix/shard.ix");
@@ -51,7 +51,7 @@ fn test_repetitive_data_explosion() {
     let content = "abc\n".repeat(1000);
     fs::write(root.join("repetitive.txt"), content).unwrap();
 
-    let mut builder = Builder::new(root);
+    let mut builder = Builder::new(root).unwrap();
     builder.build().unwrap();
 
     let index_path = root.join(".ix/shard.ix");
@@ -91,7 +91,7 @@ fn test_context_merging_logic() {
     )
     .unwrap();
 
-    let mut builder = Builder::new(root);
+    let mut builder = Builder::new(root).unwrap();
     builder.build().unwrap();
 
     let index_path = root.join(".ix/shard.ix");
@@ -129,7 +129,7 @@ fn test_type_filtering_robustness() {
     fs::write(root.join("file.py"), "findme").unwrap();
     fs::write(root.join("file.txt"), "findme").unwrap();
 
-    let mut builder = Builder::new(root);
+    let mut builder = Builder::new(root).unwrap();
     builder.build().unwrap();
 
     let index_path = root.join(".ix/shard.ix");
@@ -176,7 +176,7 @@ fn test_large_file_streaming() {
     let file_path = root.join("large.txt");
     fs::write(&file_path, content).unwrap();
 
-    let mut builder = Builder::new(root);
+    let mut builder = Builder::new(root).unwrap();
     builder.build().unwrap();
 
     let index_path = root.join(".ix/shard.ix");

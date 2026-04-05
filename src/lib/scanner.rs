@@ -59,6 +59,20 @@ impl Scanner {
                     return false;
                 }
 
+                // Built-in file noise defaults
+                if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    if let Ok(metadata) = entry.metadata()
+                        && metadata.len() > 10 * 1024 * 1024
+                    {
+                        return false;
+                    }
+                    if name == "Cargo.lock" || name == "package-lock.json" || name == "pnpm-lock.yaml" || 
+                       name == "shard.ix" || name == "shard.ix.tmp"
+                    {
+                        return false;
+                    }
+                }
+
                 // Built-in file extension defaults
                 if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
                     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");

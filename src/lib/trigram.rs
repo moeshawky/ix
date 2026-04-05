@@ -43,6 +43,11 @@ impl Extractor {
 
             let tri = from_bytes(data[i], data[i + 1], data[i + 2]);
             self.trigram_offsets.push((tri, i as u32));
+
+            // Hard cap to prevent memory explosion (R-02)
+            if self.trigram_offsets.len() >= 1_000_000 {
+                break;
+            }
         }
 
         // 2. Sort for efficient grouping later

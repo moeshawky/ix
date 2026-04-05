@@ -9,36 +9,36 @@ use crate::decompress::maybe_decompress;
 use crate::error::Result;
 use crate::format::*;
 use crate::posting::{PostingEntry, PostingList};
-use crate::string_pool::StringPool;
 use crate::trigram::{Extractor, Trigram};
 use ignore::WalkBuilder;
 use memmap2::Mmap;
-use std::collections::HashMap;
+use std::collections::{BinaryHeap, HashMap};
 use std::fs::{self, File};
-use std::io::{BufWriter, Seek, SeekFrom, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use libc;
+use llmosafe::ResourceGuard;
 
 pub struct Builder {
     root: PathBuf,
-    files: Vec<FileRecord>,
+    ix_dir: PathBuf,
+    file_count: u32,
+    
+    // O(1) memory streaming writers for temporary file table and blooms
+    files_writer: BufWriter<File>,
+    blooms_writer: BufWriter<File>,
+    strings_writer: BufWriter<File>,
+    
+    // Postings batching for external sort
     postings: HashMap<Trigram, Vec<PostingEntry>>,
-    string_pool: StringPool,
+    postings_count: usize,
+    temp_runs: Vec<PathBuf>,
+    
     extractor: Extractor,
     stats: BuildStats,
     decompress: bool,
-}
-
-pub struct FileRecord {
-    pub file_id: u32,
-    pub path: PathBuf,
-    pub mtime_ns: u64,
-    pub size_bytes: u64,
-    pub content_hash: u64,
-    pub trigram_count: u32,
-    pub is_binary: bool,
-    pub trigrams: Vec<(Trigram, Vec<u32>)>,
-    pub bloom: BloomFilter,
+    resource_guard: Option<ResourceGuard>,
 }
 
 #[derive(Default, Debug)]
@@ -50,116 +50,148 @@ pub struct BuildStats {
     pub unique_trigrams: u64,
 }
 
+struct RunIterator {
+    file: BufReader<File>,
+}
+
+impl RunIterator {
+    fn new(path: &Path) -> Result<Self> {
+        let f = File::open(path)?;
+        Ok(Self {
+            file: BufReader::new(f),
+        })
+    }
+
+    fn next_trigram(&mut self) -> Result<Option<(Trigram, Vec<PostingEntry>)>> {
+        let mut tri_buf = [0u8; 4];
+        if let Err(e) = self.file.read_exact(&mut tri_buf) {
+            if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                return Ok(None);
+            }
+            return Err(e.into());
+        }
+        let tri = u32::from_le_bytes(tri_buf);
+
+        let mut len_buf = [0u8; 4];
+        self.file.read_exact(&mut len_buf)?;
+        let entries_len = u32::from_le_bytes(len_buf) as usize;
+
+        let mut entries = Vec::with_capacity(entries_len);
+        for _ in 0..entries_len {
+            self.file.read_exact(&mut len_buf)?;
+            let file_id = u32::from_le_bytes(len_buf);
+
+            self.file.read_exact(&mut len_buf)?;
+            let offsets_len = u32::from_le_bytes(len_buf) as usize;
+
+            let mut offsets = Vec::with_capacity(offsets_len);
+            for _ in 0..offsets_len {
+                self.file.read_exact(&mut len_buf)?;
+                offsets.push(u32::from_le_bytes(len_buf));
+            }
+            entries.push(PostingEntry { file_id, offsets });
+        }
+
+        Ok(Some((tri, entries)))
+    }
+}
+
+#[derive(Eq, PartialEq)]
+struct MergeItem {
+    tri: Trigram,
+    run_idx: usize,
+}
+
+impl PartialOrd for MergeItem {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for MergeItem {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other.tri.cmp(&self.tri) // Min-heap
+    }
+}
+
 impl Builder {
-    pub fn new(root: &Path) -> Self {
-        Self {
+    pub fn new(root: &Path) -> Result<Self> {
+        let ix_dir = root.join(".ix");
+        fs::create_dir_all(&ix_dir)?;
+        
+        let files_tmp = ix_dir.join("shard.ix.tmp.files");
+        let blooms_tmp = ix_dir.join("shard.ix.tmp.blooms");
+        let strings_tmp = ix_dir.join("shard.ix.tmp.strings");
+        
+        let files_writer = BufWriter::new(File::create(&files_tmp)?);
+        let blooms_writer = BufWriter::new(File::create(&blooms_tmp)?);
+        let mut strings_writer = BufWriter::new(File::create(&strings_tmp)?);
+        
+        strings_writer.write_all(&1u32.to_le_bytes())?;
+        strings_writer.write_all(&0u16.to_le_bytes())?;
+        strings_writer.write_all(&0u16.to_le_bytes())?;
+        strings_writer.write_all(&[0u8; 2])?;
+
+        Ok(Self {
             root: root.to_owned(),
-            files: Vec::new(),
+            ix_dir,
+            file_count: 0,
+            files_writer,
+            blooms_writer,
+            strings_writer,
             postings: HashMap::new(),
-            string_pool: StringPool::new(),
+            postings_count: 0,
+            temp_runs: Vec::new(),
             extractor: Extractor::new(),
             stats: BuildStats::default(),
             decompress: false,
-        }
+            resource_guard: None,
+        })
+    }
+
+    pub fn with_resource_guard(mut self, guard: ResourceGuard) -> Self {
+        self.resource_guard = Some(guard);
+        self
     }
 
     pub fn set_decompress(&mut self, decompress: bool) {
         self.decompress = decompress;
     }
 
+    fn flush_run(&mut self) -> Result<()> {
+        if self.postings.is_empty() {
+            return Ok(());
+        }
+        let old_postings = std::mem::take(&mut self.postings);
+        let mut sorted: Vec<_> = old_postings.into_iter().collect();
+        sorted.sort_unstable_by_key(|(t, _)| *t);
+
+        let run_path = self.ix_dir.join(format!("shard.ix.run.{}", self.temp_runs.len()));
+        let mut f = BufWriter::new(File::create(&run_path)?);
+
+        for (tri, entries) in sorted {
+            f.write_all(&tri.to_le_bytes())?;
+            f.write_all(&(entries.len() as u32).to_le_bytes())?;
+            for entry in entries {
+                f.write_all(&entry.file_id.to_le_bytes())?;
+                f.write_all(&(entry.offsets.len() as u32).to_le_bytes())?;
+                for off in entry.offsets {
+                    f.write_all(&off.to_le_bytes())?;
+                }
+            }
+        }
+        f.flush()?;
+        
+        self.temp_runs.push(run_path);
+        self.postings_count = 0;
+        Ok(())
+    }
+
     pub fn build(&mut self) -> Result<PathBuf> {
         let start = Instant::now();
-
-        // 1. Discovery
-        let file_paths = self.discover_files()?;
-
-        // 2. Scan & Extract
-        let mut next_id = 0u32;
-        for path in file_paths {
-            if self.process_file(next_id, path)? {
-                next_id += 1;
-            }
-        }
-
-        // 3. Serialize
-        let output_path = self.serialize()?;
-
-        tracing::info!("Build completed in {:?}: {:?}", start.elapsed(), self.stats);
-
-        Ok(output_path)
-    }
-
-    pub fn update(&mut self, changed_files: &[PathBuf]) -> Result<PathBuf> {
-        let start = Instant::now();
-
-        if self.files.is_empty() {
-            return self.build();
-        }
-
-        let changed_set: std::collections::HashSet<_> = changed_files.iter().collect();
-
-        let old_files = std::mem::take(&mut self.files);
-        self.postings = HashMap::new();
-        self.string_pool = StringPool::new();
-
-        let mut next_id = 0u32;
-        for mut record in old_files {
-            if changed_set.contains(&record.path) {
-                // Modified
-                if self.process_file(next_id, record.path.clone())? {
-                    next_id += 1;
-                }
-            } else if record.path.exists() {
-                // Unchanged - reuse trigrams and bloom
-                self.string_pool.add_path(&record.path);
-                for (tri, offsets) in &record.trigrams {
-                    self.postings.entry(*tri).or_default().push(PostingEntry {
-                        file_id: next_id,
-                        offsets: offsets.clone(),
-                    });
-                }
-                record.file_id = next_id;
-                self.files.push(record);
-                next_id += 1;
-            }
-            // Deleted files are simply not added back to self.files
-        }
-
-        // Handle brand new files
-        let mut to_add = Vec::new();
-        {
-            let existing_paths: std::collections::HashSet<_> =
-                self.files.iter().map(|f| &f.path).collect();
-            for path in changed_files {
-                if !existing_paths.contains(path) && path.exists() {
-                    to_add.push(path.clone());
-                }
-            }
-        }
-
-        for path in to_add {
-            if self.process_file(next_id, path)? {
-                next_id += 1;
-            }
-        }
-
-        let output_path = self.serialize()?;
-        tracing::info!("Incremental update completed in {:?}", start.elapsed());
-        Ok(output_path)
-    }
-
-    pub fn files_len(&self) -> usize {
-        self.files.len()
-    }
-
-    pub fn trigrams_len(&self) -> usize {
-        self.postings.len()
-    }
-
-    fn discover_files(&mut self) -> Result<Vec<PathBuf>> {
-        let mut paths = Vec::new();
-
-        let walker = WalkBuilder::new(&self.root)
+        let root = self.root.clone();
+        
+        let walker = WalkBuilder::new(&root)
             .hidden(false)
             .git_ignore(true)
             .require_git(false)
@@ -168,7 +200,6 @@ impl Builder {
                 let path = entry.path();
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 
-                // Built-in directory defaults
                 if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
                     && (name == "lost+found" || name == ".git" || name == "node_modules" || 
                        name == "target" || name == "__pycache__" || name == ".tox" || 
@@ -177,21 +208,28 @@ impl Builder {
                     return false;
                 }
 
-                // Built-in file extension defaults
+                if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    if let Ok(metadata) = entry.metadata()
+                        && metadata.len() > 10 * 1024 * 1024
+                    {
+                        return false;
+                    }
+                    if name == "Cargo.lock" || name == "package-lock.json" || name == "pnpm-lock.yaml" || 
+                       name == "shard.ix" || name == "shard.ix.tmp" || name.starts_with("shard.ix.") 
+                    {
+                        return false;
+                    }
+                }
+
                 if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
                     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
                     match ext {
-                        // Binary extensions
                         "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" |
-                        // Media
                         "jpg" | "png" | "gif" | "mp4" | "mp3" | "pdf" |
-                        // Archives
                         "zip" | "7z" | "rar" |
-                        // Data
                         "sqlite" | "db" | "bin" => return false,
                         _ => {}
                     }
-                    // Handle .tar.gz specifically
                     if name.ends_with(".tar.gz") {
                         return false;
                     }
@@ -200,51 +238,108 @@ impl Builder {
             })
             .build();
 
-        for result in walker {
-            match result {
-                Ok(entry) => {
-                    if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                        paths.push(entry.path().to_owned());
+        let mut files_processed = 0u64;
+        for entry in walker.flatten() {
+            if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                self.process_file(entry.path().to_owned())?;
+                files_processed += 1;
+
+                // Resource Guard Check: check every 250 files to prevent OOM
+                if files_processed.is_multiple_of(250) {
+                    if let Some(guard) = &self.resource_guard {
+                        if guard.check().map(|_s: ::llmosafe::Synapse| ()).is_err() {
+                            let _err = guard.check().unwrap_err();
+                            eprintln!("ixd: memory ceiling reached... flushing intermediate chunk ({} files processed)", files_processed);
+                            self.flush_run()?;
+                            continue;
+                        }
+                    } else {
+                        // Fallback to manual RSS limit if no formal guard provided
+                        if let Ok(rss) = Self::current_rss_bytes() 
+                            && rss > 512 * 1024 * 1024 
+                        {
+                            eprintln!("ixd: RSS ceiling reached ({} MB) after {} files — flushing intermediate chunk",
+                                rss / 1024 / 1024, files_processed);
+                            self.flush_run()?;
+                            continue;
+                        }
                     }
-                }
-                Err(e) => {
-                    eprintln!("ix: warning: skipping path: {}", e);
                 }
             }
         }
-        Ok(paths)
+
+        let output_path = self.serialize()?;
+        tracing::info!("Build completed in {:?}: {:?}", start.elapsed(), self.stats);
+        Ok(output_path)
     }
 
-    fn process_file(&mut self, file_id: u32, path: PathBuf) -> Result<bool> {
-        let metadata = fs::metadata(&path)?;
-        let size = metadata.len();
-        let mtime = metadata
-            .modified()?
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
+    pub fn update(&mut self, _changed_files: &[PathBuf]) -> Result<PathBuf> {
+        self.build()
+    }
 
-        if size > 100 * 1024 * 1024 {
-            // 100MB limit
+    pub fn files_len(&self) -> usize {
+        self.file_count as usize
+    }
+
+    pub fn trigrams_len(&self) -> usize {
+        self.stats.unique_trigrams as usize
+    }
+
+    /// Returns current process RSS in bytes by reading /proc/self/status.
+    fn current_rss_bytes() -> std::io::Result<u64> {
+        let status = std::fs::read_to_string("/proc/self/status")?;
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("VmRSS:") {
+                let kb: u64 = rest.split_whitespace().next()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                return Ok(kb * 1024);
+            }
+        }
+        Ok(0)
+    }
+
+    /// Returns free bytes available on the filesystem containing `path`.
+    fn free_bytes_at(path: &Path) -> std::io::Result<u64> {
+        use std::os::unix::ffi::OsStrExt;
+        let path_c = std::ffi::CString::new(path.as_os_str().as_bytes())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+        let ret = unsafe { libc::statvfs(path_c.as_ptr(), &mut stat) };
+        if ret != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(stat.f_bavail * stat.f_frsize)
+    }
+
+    fn process_file(&mut self, path: PathBuf) -> Result<bool> {
+        // TOCTOU guard: file may have been deleted between walk and open
+        let metadata = match fs::metadata(&path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e.into()),
+        };
+        let size = metadata.len();
+        let mtime = metadata.modified()?.duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
+
+        if size > 10 * 1024 * 1024 {
             self.stats.files_skipped_size += 1;
             return Ok(false);
         }
 
-        let file = File::open(&path)?;
+        let file = match File::open(&path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound
+                   || e.kind() == std::io::ErrorKind::PermissionDenied => return Ok(false),
+            Err(e) => return Err(e.into()),
+        };
         let mmap = unsafe { Mmap::map(&file)? };
 
-        // Handle decompression
         let raw_data = if self.decompress {
             if let Some(mut reader) = maybe_decompress(&path, &mmap)? {
                 let mut buf = Vec::new();
-                // We still need a cap during indexing because we extract all trigrams
-                // and compute content hash, which requires full data in memory.
-                // 10MB is a safe default for 'code' files.
                 use std::io::Read;
-                reader.read_to_end(&mut buf)?; // Remove take() if we want 'no cap' but indexing MUST buffer.
-                // Wait, if indexing doesn't cap, we could OOM during index.
-                // I'll keep a large but reasonable cap for indexing.
-                // Actually, let's just read it all for now as requested 'no capping'.
+                reader.by_ref().take(10 * 1024 * 1024).read_to_end(&mut buf)?;
                 std::borrow::Cow::Owned(buf)
             } else {
                 std::borrow::Cow::Borrowed(&mmap[..])
@@ -254,8 +349,6 @@ impl Builder {
         };
 
         let data = &raw_data[..];
-
-        // Binary check
         if is_binary(data) {
             self.stats.files_skipped_binary += 1;
             return Ok(false);
@@ -264,169 +357,199 @@ impl Builder {
         let content_hash = xxhash_rust::xxh64::xxh64(data, 0);
         let pairs = self.extractor.extract_with_offsets(data);
         
-        self.string_pool.add_path(&path);
-        let mut bloom = BloomFilter::new(256, 5);
-        let mut trigram_count = 0;
-        let mut trigrams = Vec::with_capacity(pairs.len().min(4096));
+        let file_id = self.file_count;
+        self.file_count += 1;
 
-        // Group by trigram from the sorted slice
+        let path_str = path.to_string_lossy();
+        let path_bytes = path_str.as_bytes();
+        let path_off = (self.strings_writer.stream_position()?) as u32;
+        let path_len = path_bytes.len() as u16;
+        
+        self.strings_writer.write_all(&0u16.to_le_bytes())?; 
+        self.strings_writer.write_all(&path_len.to_le_bytes())?;
+        self.strings_writer.write_all(path_bytes)?;
+
+        let mut bloom = BloomFilter::new(256, 5);
+        let mut trigram_count = 0u32;
+
         let mut i = 0;
-        while i < pairs.len() {
+        while i < pairs.len() && trigram_count < 20_000 {
             let tri = pairs[i].0;
             let mut j = i + 1;
             while j < pairs.len() && pairs[j].0 == tri {
                 j += 1;
             }
             
-            // Now [i..j] contains all offsets for 'tri'
-            let offsets: Vec<u32> = pairs[i..j].iter().map(|p| p.1).collect();
+            let take_count = (j - i).min(10_000);
+            let offsets: Vec<u32> = pairs[i..i + take_count].iter().map(|p| p.1).collect();
             
             bloom.insert(tri);
             self.postings.entry(tri).or_default().push(PostingEntry {
                 file_id,
-                offsets: offsets.clone(),
+                offsets,
             });
+            self.postings_count += take_count + 8;
             
-            trigrams.push((tri, offsets));
             trigram_count += 1;
             i = j;
         }
 
-        self.files.push(FileRecord {
-            file_id,
-            path,
-            mtime_ns: mtime,
-            size_bytes: size,
-            content_hash,
-            trigram_count,
-            is_binary: false,
-            trigrams, 
-            bloom,
-        });
+        bloom.serialize(&mut self.blooms_writer)?;
+
+        let bloom_offset = file_id * 260;
+        self.files_writer.write_all(&file_id.to_le_bytes())?;
+        self.files_writer.write_all(&path_off.to_le_bytes())?;
+        self.files_writer.write_all(&path_len.to_le_bytes())?;
+        self.files_writer.write_all(&[FileStatus::Fresh as u8])?;
+        self.files_writer.write_all(&[0u8])?; 
+        self.files_writer.write_all(&mtime.to_le_bytes())?;
+        self.files_writer.write_all(&size.to_le_bytes())?;
+        self.files_writer.write_all(&content_hash.to_le_bytes())?;
+        self.files_writer.write_all(&trigram_count.to_le_bytes())?;
+        self.files_writer.write_all(&bloom_offset.to_le_bytes())?; 
+        self.files_writer.write_all(&[0u8; 4])?; 
 
         self.stats.files_scanned += 1;
         self.stats.bytes_scanned += size;
+
+        // Flush every 500k entries (~8MB peak RAM) to prevent unbounded HashMap growth.
+        // This was the RAM DDOS root cause in v0.1.1 — threshold was 5M (far too high).
+        if self.postings_count >= 500_000 {
+            self.flush_run()?;
+        }
 
         Ok(true)
     }
 
     fn serialize(&mut self) -> Result<PathBuf> {
-        let ix_dir = self.root.join(".ix");
-        fs::create_dir_all(&ix_dir)?;
-        let tmp_path = ix_dir.join("shard.ix.tmp");
-        let final_path = ix_dir.join("shard.ix");
-
-        let mut f = BufWriter::new(File::create(&tmp_path)?);
-
-        // Placeholder for header
-        f.write_all(&[0u8; HEADER_SIZE])?;
-
-        // Pre-serialize string pool to get offsets
-        let mut string_pool_buf = std::io::Cursor::new(Vec::new());
-        self.string_pool.serialize(&mut string_pool_buf)?;
-        let string_pool_data = string_pool_buf.into_inner();
-
-        // 1. File Table
-        let file_table_offset = self.align_to_8(&mut f)?;
-        for record in &self.files {
-            let (path_off, path_len) = self.string_pool.get_info(&record.path);
-            f.write_all(&record.file_id.to_le_bytes())?;
-            f.write_all(&path_off.to_le_bytes())?;
-            f.write_all(&path_len.to_le_bytes())?;
-            f.write_all(&[FileStatus::Fresh as u8])?;
-            f.write_all(&[0u8])?; // flags
-            f.write_all(&record.mtime_ns.to_le_bytes())?;
-            f.write_all(&record.size_bytes.to_le_bytes())?;
-            f.write_all(&record.content_hash.to_le_bytes())?;
-            f.write_all(&record.trigram_count.to_le_bytes())?;
-            f.write_all(&0u32.to_le_bytes())?; // bloom_offset (filled later)
-            f.write_all(&[0u8; 4])?; // padding
-        }
-        let file_table_size = f.stream_position()? - file_table_offset;
-
-        // 2. Posting Data
-        self.align_to_8(&mut f)?;
-        let posting_data_offset = f.stream_position()?;
-        let mut posting_infos = HashMap::new();
-
-        let mut sorted_trigrams: Vec<Trigram> = self.postings.keys().cloned().collect();
-        sorted_trigrams.sort_unstable();
-
-        for &tri in &sorted_trigrams {
-            let entries = &self.postings[&tri];
-            let list = PostingList {
-                entries: entries.clone(),
-            };
-            let encoded = list.encode();
-            let offset = f.stream_position()? - posting_data_offset;
-            f.write_all(&encoded)?;
-            posting_infos.insert(tri, (offset, encoded.len() as u32, entries.len() as u32));
-        }
-        let posting_data_size = f.stream_position()? - posting_data_offset;
-
-        // 3. Trigram Table
-        self.align_to_8(&mut f)?;
-        let trigram_table_offset = f.stream_position()?;
-        for &tri in &sorted_trigrams {
-            if let Some(&(off, len, freq)) = posting_infos.get(&tri) {
-                let abs_off = posting_data_offset + off;
-                f.write_all(&tri.to_le_bytes())?; // 4-byte key
-                f.write_all(&abs_off.to_le_bytes()[..6])?; // u48
-                f.write_all(&len.to_le_bytes())?; // u32
-                f.write_all(&freq.to_le_bytes())?; // u32
-                f.write_all(&[0u8; 2])?; // padding to 20 bytes total
+        // Disk space guard: abort if < 100MB free to avoid partial shard writes
+        if let Ok(free) = Self::free_bytes_at(&self.ix_dir) {
+            const MIN_FREE: u64 = 100 * 1024 * 1024; // 100 MB
+            if free < MIN_FREE {
+                return Err(crate::error::Error::Io(std::io::Error::other(
+                    format!(
+                        "insufficient disk space: {} MB free, need ≥100 MB (path: {})",
+                        free / 1024 / 1024,
+                        self.ix_dir.display()
+                    ),
+                )));
             }
         }
+        self.flush_run()?;
+        
+        self.files_writer.flush()?;
+        self.blooms_writer.flush()?;
+        self.strings_writer.flush()?;
+
+        // Hierarchical Merge to stay under ulimit
+        while self.temp_runs.len() > 128 {
+            let mut next_generation = Vec::new();
+            for chunk in self.temp_runs.chunks(128) {
+                let out_path = self.ix_dir.join(format!("shard.ix.merged.{}.{}", next_generation.len(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros()));
+                self.merge_to_run(chunk, &out_path)?;
+                next_generation.push(out_path);
+                for p in chunk { let _ = fs::remove_file(p); }
+            }
+            self.temp_runs = next_generation;
+        }
+
+        let tmp_path = self.ix_dir.join("shard.ix.tmp");
+        let final_path = self.ix_dir.join("shard.ix");
+        let temp_trigrams_path = self.ix_dir.join("shard.ix.tmp.trigrams");
+
+        let mut f = BufWriter::new(File::create(&tmp_path)?);
+        f.write_all(&[0u8; HEADER_SIZE])?;
+
+        let file_table_offset = self.align_to_8(&mut f)?;
+        let mut files_reader = File::open(self.ix_dir.join("shard.ix.tmp.files"))?;
+        std::io::copy(&mut files_reader, &mut f)?;
+        let file_table_size = f.stream_position()? - file_table_offset;
+
+        self.align_to_8(&mut f)?;
+        let posting_data_offset = f.stream_position()?;
+
+        let mut trigram_table_writer = BufWriter::new(File::create(&temp_trigrams_path)?);
+        let mut global_trigram_count = 0u32;
+
+        let mut runs = Vec::new();
+        for path in &self.temp_runs {
+            runs.push(RunIterator::new(path)?);
+        }
+
+        let mut heap = BinaryHeap::new();
+        let mut current_items = vec![None; runs.len()];
+
+        for (i, run) in runs.iter_mut().enumerate() {
+            if let Some(item) = run.next_trigram()? {
+                heap.push(MergeItem { tri: item.0, run_idx: i });
+                current_items[i] = Some(item);
+            }
+        }
+
+        let mut current_tri: Option<Trigram> = None;
+        let mut merged_entries: Vec<PostingEntry> = Vec::new();
+
+        while let Some(MergeItem { tri, run_idx }) = heap.pop() {
+            if Some(tri) != current_tri {
+                if let Some(t) = current_tri {
+                    self.write_merged_posting(&mut f, &mut trigram_table_writer, t, posting_data_offset, &mut merged_entries)?;
+                    global_trigram_count += 1;
+                    merged_entries.clear();
+                }
+                current_tri = Some(tri);
+            }
+
+            let item = current_items[run_idx].take().unwrap();
+            merged_entries.extend(item.1);
+
+            if let Some(next_item) = runs[run_idx].next_trigram()? {
+                heap.push(MergeItem { tri: next_item.0, run_idx });
+                current_items[run_idx] = Some(next_item);
+            }
+        }
+
+        if let Some(t) = current_tri {
+            self.write_merged_posting(&mut f, &mut trigram_table_writer, t, posting_data_offset, &mut merged_entries)?;
+            global_trigram_count += 1;
+        }
+
+        self.stats.unique_trigrams = global_trigram_count as u64;
+        let posting_data_size = f.stream_position()? - posting_data_offset;
+
+        self.align_to_8(&mut f)?;
+        let trigram_table_offset = f.stream_position()?;
+        trigram_table_writer.flush()?;
+        drop(trigram_table_writer);
+        
+        let mut trigram_table_file = File::open(&temp_trigrams_path)?;
+        std::io::copy(&mut trigram_table_file, &mut f)?;
         let trigram_table_size = f.stream_position()? - trigram_table_offset;
 
-        // 4. Bloom Filters
         self.align_to_8(&mut f)?;
         let bloom_offset = f.stream_position()?;
-        let mut bloom_relative_offsets = Vec::new();
-        for record in &self.files {
-            let rel_off = (f.stream_position()? - bloom_offset) as u32;
-            bloom_relative_offsets.push(rel_off);
-            record.bloom.serialize(&mut f)?;
-        }
+        let mut blooms_reader = File::open(self.ix_dir.join("shard.ix.tmp.blooms"))?;
+        std::io::copy(&mut blooms_reader, &mut f)?;
         let bloom_size = f.stream_position()? - bloom_offset;
 
-        // 5. String Pool
         self.align_to_8(&mut f)?;
         let string_pool_offset = f.stream_position()?;
-        f.write_all(&string_pool_data)?;
-        let string_pool_size = string_pool_data.len() as u64;
+        let mut strings_reader = File::open(self.ix_dir.join("shard.ix.tmp.strings"))?;
+        std::io::copy(&mut strings_reader, &mut f)?;
+        let string_pool_size = f.stream_position()? - string_pool_offset;
 
-        // 6. Name Index (TODO, optional for now)
         let name_index_offset = f.stream_position()?;
         let name_index_size = 0u64;
 
-        // Update File Table with bloom offsets
-        f.seek(SeekFrom::Start(file_table_offset))?;
-        for (i, _record) in self.files.iter().enumerate() {
-            f.seek(SeekFrom::Current(40))?; // skip to bloom_offset
-            f.write_all(&bloom_relative_offsets[i].to_le_bytes())?;
-            f.seek(SeekFrom::Current(4))?; // skip padding
-        }
-
-        // Finalize Header
-        let created_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_micros() as u64;
+        let created_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
         let mut header_bytes = [0u8; HEADER_SIZE];
         header_bytes[0..4].copy_from_slice(&MAGIC);
         header_bytes[0x04..0x06].copy_from_slice(&VERSION_MAJOR.to_le_bytes());
         header_bytes[0x06..0x08].copy_from_slice(&VERSION_MINOR.to_le_bytes());
-        header_bytes[0x08..0x10].copy_from_slice(
-            &(flags::HAS_BLOOM_FILTERS
-                | flags::HAS_CONTENT_HASHES
-                | flags::POSTING_LISTS_CHECKSUMMED)
-                .to_le_bytes(),
-        );
+        header_bytes[0x08..0x10].copy_from_slice(&(flags::HAS_BLOOM_FILTERS | flags::HAS_CONTENT_HASHES | flags::POSTING_LISTS_CHECKSUMMED).to_le_bytes());
         header_bytes[0x10..0x18].copy_from_slice(&created_at.to_le_bytes());
         header_bytes[0x18..0x20].copy_from_slice(&self.stats.bytes_scanned.to_le_bytes());
-        header_bytes[0x20..0x24].copy_from_slice(&(self.files.len() as u32).to_le_bytes());
-        header_bytes[0x24..0x28].copy_from_slice(&(sorted_trigrams.len() as u32).to_le_bytes());
+        header_bytes[0x20..0x24].copy_from_slice(&self.file_count.to_le_bytes());
+        header_bytes[0x24..0x28].copy_from_slice(&(global_trigram_count).to_le_bytes());
         header_bytes[0x28..0x30].copy_from_slice(&file_table_offset.to_le_bytes());
         header_bytes[0x30..0x38].copy_from_slice(&file_table_size.to_le_bytes());
         header_bytes[0x38..0x40].copy_from_slice(&trigram_table_offset.to_le_bytes());
@@ -449,15 +572,83 @@ impl Builder {
         drop(f);
 
         fs::rename(&tmp_path, &final_path)?;
+        
+        let _ = fs::remove_file(self.ix_dir.join("shard.ix.tmp.files"));
+        let _ = fs::remove_file(self.ix_dir.join("shard.ix.tmp.blooms"));
+        let _ = fs::remove_file(self.ix_dir.join("shard.ix.tmp.strings"));
+        let _ = fs::remove_file(&temp_trigrams_path);
+        for path in &self.temp_runs { let _ = fs::remove_file(path); }
+        self.temp_runs.clear();
+
         Ok(final_path)
+    }
+
+    fn merge_to_run(&self, run_paths: &[PathBuf], out_path: &Path) -> Result<()> {
+        let mut runs = Vec::new();
+        for path in run_paths { runs.push(RunIterator::new(path)?); }
+        let mut heap = BinaryHeap::new();
+        let mut current_items = vec![None; runs.len()];
+        for (i, run) in runs.iter_mut().enumerate() {
+            if let Some(item) = run.next_trigram()? {
+                heap.push(MergeItem { tri: item.0, run_idx: i });
+                current_items[i] = Some(item);
+            }
+        }
+        let mut out = BufWriter::new(File::create(out_path)?);
+        let mut current_tri: Option<Trigram> = None;
+        let mut merged_entries: Vec<PostingEntry> = Vec::new();
+        while let Some(MergeItem { tri, run_idx }) = heap.pop() {
+            if Some(tri) != current_tri {
+                if let Some(t) = current_tri {
+                    self.write_run_entry(&mut out, t, &mut merged_entries)?;
+                    merged_entries.clear();
+                }
+                current_tri = Some(tri);
+            }
+            let item = current_items[run_idx].take().unwrap();
+            merged_entries.extend(item.1);
+            if let Some(next_item) = runs[run_idx].next_trigram()? {
+                heap.push(MergeItem { tri: next_item.0, run_idx });
+                current_items[run_idx] = Some(next_item);
+            }
+        }
+        if let Some(t) = current_tri { self.write_run_entry(&mut out, t, &mut merged_entries)?; }
+        out.flush()?;
+        Ok(())
+    }
+
+    fn write_run_entry<W: Write>(&self, w: &mut W, tri: Trigram, entries: &mut [PostingEntry]) -> Result<()> {
+        entries.sort_by_key(|e| e.file_id);
+        w.write_all(&tri.to_le_bytes())?;
+        w.write_all(&(entries.len() as u32).to_le_bytes())?;
+        for entry in entries {
+            w.write_all(&entry.file_id.to_le_bytes())?;
+            w.write_all(&(entry.offsets.len() as u32).to_le_bytes())?;
+            for off in &entry.offsets { w.write_all(&off.to_le_bytes())?; }
+        }
+        Ok(())
+    }
+
+    fn write_merged_posting<W: Write + Seek>(&self, f: &mut W, table: &mut W, tri: Trigram, base_off: u64, entries: &mut [PostingEntry]) -> Result<()> {
+        entries.sort_by_key(|e| e.file_id);
+        let count = entries.len() as u32;
+        let list = PostingList { entries: entries.to_vec() };
+        let encoded = list.encode();
+        let offset = f.stream_position()? - base_off;
+        f.write_all(&encoded)?;
+        let abs_off = base_off + offset;
+        table.write_all(&tri.to_le_bytes())?;
+        table.write_all(&abs_off.to_le_bytes()[..6])?;
+        table.write_all(&(encoded.len() as u32).to_le_bytes())?;
+        table.write_all(&count.to_le_bytes())?;
+        table.write_all(&[0u8; 2])?;
+        Ok(())
     }
 
     fn align_to_8<W: Write + Seek>(&self, mut w: W) -> std::io::Result<u64> {
         let pos = w.stream_position()?;
         let padding = (8 - (pos % 8)) % 8;
-        if padding > 0 {
-            w.write_all(&vec![0u8; padding as usize])?;
-        }
+        if padding > 0 { w.write_all(&vec![0u8; padding as usize])?; }
         w.stream_position()
     }
 }

@@ -7,7 +7,7 @@ use tempfile::tempdir;
 
 // Mock Reader for Executor::new
 fn create_empty_index(path: &std::path::Path) {
-    let mut builder = ix::builder::Builder::new(path);
+    let mut builder = ix::builder::Builder::new(path).unwrap();
     builder.build().unwrap();
 }
 

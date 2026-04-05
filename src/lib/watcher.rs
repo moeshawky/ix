@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+use llmosafe::llmosafe_kernel::ReasoningLoop;
+use llmosafe::{CognitiveEntropy, ResourceGuard, Synapse};
 
 pub struct Watcher {
     root: PathBuf,
@@ -30,60 +32,89 @@ impl Watcher {
 
         let mut watcher = RecommendedWatcher::new(event_tx, Config::default())?;
         
-        // Instead of recursive watch which crashes on permission denied, 
-        // we walk and add non-recursive watches to each directory.
-        let walker = ignore::WalkBuilder::new(&self.root)
-            .hidden(false)
-            .git_ignore(true)
-            .require_git(false)
-            .add_custom_ignore_filename(".ixignore")
-            .filter_entry(move |entry| {
-                let path = entry.path();
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                
-                // Built-in directory defaults
-                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
-                    && (name == "lost+found" || name == ".git" || name == "node_modules" || 
-                       name == "target" || name == "__pycache__" || name == ".tox" || 
-                       name == ".venv" || name == "venv" || name == ".ix") 
-                {
-                    return false;
-                }
-
-                // Built-in file extension defaults
-                if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                    match ext {
-                        // Binary extensions
-                        "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" |
-                        // Media
-                        "jpg" | "png" | "gif" | "mp4" | "mp3" | "pdf" |
-                        // Archives
-                        "zip" | "7z" | "rar" |
-                        // Data
-                        "sqlite" | "db" | "bin" => return false,
-                        _ => {}
-                    }
-                    if name.ends_with(".tar.gz") {
+        // Attempt recursive watch on root first (most efficient)
+        if let Err(err) = watcher.watch(&self.root, RecursiveMode::Recursive) {
+            eprintln!("ix: warning: recursive watch failed: {}. Falling back to manual walk.", err);
+            
+            let walker = ignore::WalkBuilder::new(&self.root)
+                .hidden(false)
+                .git_ignore(true)
+                .require_git(false)
+                .add_custom_ignore_filename(".ixignore")
+                .filter_entry(move |entry| {
+                    let path = entry.path();
+                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    
+                    // Built-in directory defaults
+                    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                        && (name == "lost+found" || name == ".git" || name == "node_modules" || 
+                           name == "target" || name == "__pycache__" || name == ".tox" || 
+                           name == ".venv" || name == "venv" || name == ".ix") 
+                    {
                         return false;
                     }
-                }
-                true
-            })
-            .build();
 
-        for result in walker {
-            match result {
-                Ok(entry) => {
-                    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                        let path = entry.path();
-                        if let Err(e) = watcher.watch(path, RecursiveMode::NonRecursive) {
-                            eprintln!("ix: warning: watcher failed for {}: {}", path.display(), e);
+                    // Built-in file noise defaults
+                    if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                        if let Ok(metadata) = entry.metadata()
+                            && metadata.len() > 10 * 1024 * 1024
+                        {
+                            return false;
+                        }
+                        if name == "Cargo.lock" || name == "package-lock.json" || name == "pnpm-lock.yaml" || 
+                           name == "shard.ix" || name == "shard.ix.tmp"
+                        {
+                            return false;
                         }
                     }
+
+                    // Built-in file extension defaults
+                    if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                        match ext {
+                            // Binary extensions
+                            "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" |
+                            // Media
+                            "jpg" | "png" | "gif" | "mp4" | "mp3" | "pdf" |
+                            // Archives
+                            "zip" | "7z" | "rar" |
+                            // Data
+                            "sqlite" | "db" | "bin" => return false,
+                            _ => {}
+                        }
+                        if name.ends_with(".tar.gz") {
+                            return false;
+                        }
+                    }
+                    true
+                })
+                .build();
+            
+            let mut loop_guard = ReasoningLoop::<20000>::new();
+            let guard = ResourceGuard::auto(0.5);
+
+            for result in walker {
+                // Cognitive Stability check: entropy must be stable (RSS < 50% ceiling for the walk)
+                let entropy = guard.check()
+                    .map(|s: Synapse| s.entropy())
+                    .unwrap_or(CognitiveEntropy::new(2000));
+                if let Err(e) = loop_guard.next_step(entropy) {
+                    eprintln!("ix: critical safety halt during watcher walk: {:?}. Directory tree too large or RAM low.", e);
+                    break;
                 }
-                Err(e) => {
-                    eprintln!("ix: warning: watcher skipping path: {}", e);
+
+                match result {
+                    Ok(entry) => {
+                        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                            let path = entry.path();
+                            if let Err(e) = watcher.watch(path, RecursiveMode::NonRecursive) {
+                                eprintln!("ix: warning: watcher failed for {}: {}", path.display(), e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("ix: warning: watcher skipping path: {}", e);
+                    }
                 }
             }
         }

@@ -24,7 +24,7 @@ fn integration_search_literal() {
     fs::write(root.join("binary.dat"), b"some data\0with null byte").unwrap();
 
     // Build index
-    let mut builder = Builder::new(root);
+    let mut builder = Builder::new(root).unwrap();
     builder.build().unwrap();
 
     let index_path = root.join(".ix/shard.ix");
@@ -51,7 +51,7 @@ fn integration_search_regex() {
     )
     .unwrap();
 
-    let mut builder = Builder::new(root);
+    let mut builder = Builder::new(root).unwrap();
     builder.build().unwrap();
 
     let index_path = root.join(".ix/shard.ix");

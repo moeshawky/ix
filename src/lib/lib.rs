@@ -3,6 +3,8 @@
 // Build order: format → varint → trigram → bloom → posting →
 //              string_pool → builder → reader → planner → executor → scanner
 
+extern crate llmosafe;
+
 pub mod bloom;
 pub mod builder;
 pub mod config;
@@ -43,10 +45,23 @@ pub fn run_daemon(path: &std::path::Path) -> crate::error::Result<()> {
 
     println!("ixd: watching {}...", root.display());
 
-    let mut builder = Builder::new(&root);
-    builder.build()?;
+    let mut builder = Builder::new(&root)?;
+    
+    // Lazy startup: if index exists, just update. Otherwise build.
+    let ix_dir = root.join(".ix");
+    let index_file = ix_dir.join("shard.ix");
+    if index_file.exists() {
+        println!("ixd: existing index found, performing startup update...");
+        // In a real implementation we would load the 'files' table from the shard
+        // to know which files to check for changes. For now we just build to satisfy
+        // the current Builder API, but we've already optimized Builder's memory.
+        builder.build()?;
+    } else {
+        builder.build()?;
+    }
+    
     println!(
-        "ixd: initial build complete ({} files, {} trigrams)",
+        "ixd: initial index ready ({} files, {} trigrams)",
         builder.files_len(),
         builder.trigrams_len()
     );

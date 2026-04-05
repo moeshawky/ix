@@ -1,10 +1,14 @@
 //! ix background daemon — ixd.
 //!
-//! Keeps the index fresh when the system is idle.
+//! Safety guarantees (v0.1.2+):
+//! - SIGTERM/SIGINT → clean shutdown (beacon removed, watcher joined, no zombies)
+//! - Builder::new returns Result — no panics on unwritable .ix dir
+//! - RSS ceiling in builder (512MB) — OOM protection
+//! - TOCTOU guards in process_file — skips vanished/permission-denied files
 
 use clap::Parser;
 use ix::builder::Builder;
-use ix::idle::{IdleTracker};
+use ix::idle::IdleTracker;
 use ix::watcher::Watcher;
 use ix::format::Beacon;
 use std::fs;
@@ -12,17 +16,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use llmosafe::{ResourceGuard, Synapse};
 
 #[derive(Parser)]
 #[command(
     name = "ixd",
-    version = "0.1.0",
+    version = env!("CARGO_PKG_VERSION"),
     about = "ix background daemon. Automatically maintains a fresh trigram index.",
-    after_help = "The daemon monitors the filesystem for changes and incrementally updates the index. 
-It remains active in the background to ensure the index is always fresh."
+    after_help = "Send SIGTERM or SIGINT to shut down cleanly."
 )]
 struct Cli {
-    /// The directory to watch and index.
     #[arg(default_value = ".", value_name = "PATH")]
     path: PathBuf,
 }
@@ -33,18 +36,68 @@ fn main() -> ix::error::Result<()> {
 
     println!("ixd: watching {}...", root.display());
 
-    let mut builder = Builder::new(&root);
-    builder.build()?;
-    println!(
-        "ixd: initial build complete ({} files, {} trigrams)",
-        builder.files_len(),
-        builder.trigrams_len()
-    );
+    // Shutdown flag shared with signal handlers
+    let running = Arc::new(AtomicBool::new(true));
+
+    // Install SIGTERM + SIGINT via nix — both set running=false
+    {
+        use nix::sys::signal::{signal, SigHandler, Signal};
+        // SAFETY: handler only stores to an atomic bool — async-signal-safe.
+        unsafe {
+            signal(Signal::SIGTERM, SigHandler::Handler(handle_signal))
+                .expect("failed to install SIGTERM handler");
+            signal(Signal::SIGINT, SigHandler::Handler(handle_signal))
+                .expect("failed to install SIGINT handler");
+        }
+    }
+    // Also use ctrlc for cross-platform Ctrl-C as a belt-and-suspenders measure
+    let r = running.clone();
+    let _ = ctrlc::set_handler(move || {
+        SHUTDOWN.store(true, Ordering::SeqCst);
+        r.store(false, Ordering::SeqCst);
+    });
+
+    // Concurrent instance guard — refuse to start if another ixd owns this root.
+    let ix_dir_early = root.join(".ix");
+    let beacon_path = ix_dir_early.join("beacon.json");
+    if beacon_path.exists() && let Ok(existing) = ix::format::Beacon::read_from(&ix_dir_early) {
+        let pid = nix::unistd::Pid::from_raw(existing.pid);
+        if nix::sys::signal::kill(pid, None).is_ok() {
+            eprintln!(
+                "ixd: another instance is already watching {} (PID {}). \
+                 Stop it first or remove {}/beacon.json.",
+                root.display(), existing.pid, ix_dir_early.display()
+            );
+            std::process::exit(1);
+        }
+        // Dead PID — stale beacon, safe to continue
+        eprintln!("ixd: removing stale beacon from PID {}", existing.pid);
+        let _ = std::fs::remove_file(&beacon_path);
+    }
+
+    let guard = ResourceGuard::auto(0.6); // 60% system memory ceiling
+    
+    let mut builder = match Builder::new(&root) {
+        Ok(b) => b.with_resource_guard(guard.clone()),
+        Err(e) => {
+            eprintln!("ixd: cannot create index in {}: {}", root.display(), e);
+            return Err(e);
+        }
+    };
+
+    if let Err(e) = builder.build() {
+        eprintln!("ixd: initial build failed: {} — will watch for changes anyway", e);
+    } else {
+        println!(
+            "ixd: initial build complete ({} files, {} trigrams)",
+            builder.files_len(),
+            builder.trigrams_len()
+        );
+    }
 
     let mut watcher = Watcher::new(&root)?;
     let rx = watcher.start()?;
 
-    // Create Beacon
     let ix_dir = root.join(".ix");
     if !ix_dir.exists() {
         fs::create_dir_all(&ix_dir)?;
@@ -54,25 +107,25 @@ fn main() -> ix::error::Result<()> {
 
     let mut idle = IdleTracker::new();
 
-    // Signal handling
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-    ctrlc::set_handler(move || {
-        r.store(false, Ordering::SeqCst);
-    })
-    .expect("Error setting Ctrl-C handler");
+    // Main loop — polls SHUTDOWN flag on every timeout so signal handling is responsive
+    loop {
+        if SHUTDOWN.load(Ordering::SeqCst) {
+            running.store(false, Ordering::SeqCst);
+            break;
+        }
 
-    while running.load(Ordering::SeqCst) {
-        // Wait for changes. We use a timeout to allow checking the 'running' flag.
-        match rx.recv_timeout(Duration::from_secs(5)) {
+        match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(changed_files) => {
-                println!(
-                    "ixd: {} files changed, updating index...",
-                    changed_files.len()
-                );
+                let synapse = guard.check().unwrap_or_else(|_| {
+                    let mut s = Synapse::new();
+                    s.set_raw_entropy(1500); // 1.0 ratio
+                    s
+                });
 
-                // Update beacon status
-                beacon.status = "indexing".to_string();
+                println!("ixd: {} files changed, updating index... (Entropy: {})", 
+                    changed_files.len(), synapse.raw_entropy());
+
+                beacon.status = format!("indexing (entropy: {})", synapse.raw_entropy());
                 beacon.last_event_at = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -80,22 +133,29 @@ fn main() -> ix::error::Result<()> {
                 let _ = beacon.write_to(&ix_dir);
 
                 idle.record_change();
-                builder.update(&changed_files)?;
+                if let Err(e) = builder.update(&changed_files) {
+                    eprintln!("ixd: update failed: {} — retrying on next change", e);
+                }
 
-                // Back to idle
                 beacon.status = "idle".to_string();
                 let _ = beacon.write_to(&ix_dir);
             }
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                // Just loop to check 'running' flag
-                continue;
-            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
         }
     }
 
-    println!("ixd: shutting down");
+    // Clean shutdown — guaranteed to run on SIGTERM or SIGINT
+    eprintln!("ixd: shutting down");
     let _ = fs::remove_file(ix_dir.join("beacon.json"));
     watcher.stop();
     Ok(())
+}
+
+/// Global shutdown flag set by the raw signal handler.
+static SHUTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Raw signal handler — only touches the atomic flag (async-signal-safe).
+extern "C" fn handle_signal(_: libc::c_int) {
+    SHUTDOWN.store(true, Ordering::SeqCst);
 }

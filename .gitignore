@@ -7,3 +7,13 @@ Cargo.lock
 docs/guidelines/
 AGENTS.md
 PROMPT.md
+ignored_file.txt
+
+# Agentic testing and dev artifacts
+Testing IXD Safety In Docker.md
+mcp_config.json
+*.sh
+Dockerfile.*
+test_results/
+tests/docker/
+tests/docker_llmosafe_vendor/

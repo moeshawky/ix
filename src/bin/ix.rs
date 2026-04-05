@@ -472,7 +472,7 @@ fn do_build(path: &Path, decompress: bool, force: bool) -> ix::error::Result<()>
         std::process::exit(1);
     }
     println!("Building index for {}...", path.display());
-    let mut builder = Builder::new(path);
+    let mut builder = Builder::new(path)?;
     builder.set_decompress(decompress);
     let out = builder.build()?;
     println!("Index built at {}", out.display());
@@ -625,6 +625,11 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
 
     let mut final_stats = stats;
     final_stats.total_matches = matches.len() as u32;
+
+    let mut matches = matches;
+    matches.sort_by(|a, b| {
+        a.file_path.cmp(&b.file_path).then(a.line_number.cmp(&b.line_number))
+    });
 
     if options.count_only {
         if params.json {
