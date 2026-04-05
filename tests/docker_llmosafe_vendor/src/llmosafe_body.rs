@@ -118,11 +118,26 @@ pub struct EnvironmentalVitals {
     pub load_avg_1min: f64,
 }
 
+/// VitalsReport (C-compatible) for the Mycelial Introspection ABI.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VitalsReport {
+    pub iowait_percent: f64,
+    pub load_avg_1min: f64,
+}
+
 impl EnvironmentalVitals {
     pub fn now() -> Self {
         Self {
             iowait_percent: Self::read_iowait().unwrap_or(0.0),
             load_avg_1min: Self::read_loadavg().unwrap_or(0.0),
+        }
+    }
+
+    pub fn report(&self) -> VitalsReport {
+        VitalsReport {
+            iowait_percent: self.iowait_percent,
+            load_avg_1min: self.load_avg_1min,
         }
     }
 

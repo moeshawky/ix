@@ -1,0 +1,31 @@
+# LLMSAFE Workspace Protection
+# Managed by WD-40 Protocol
+
+# Rust Artifacts
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Python Artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+venv/
+ENV/
+
+# Integrated Tools
+.ix/
+.gemini/
+AGENTS.md
+PROMPT.md
+
+# System / Bridge
+stability_packet.json
+sniper_test.txt
+
+# Compliance / Logs
+*.log
+*.so
+*.dylib
+*.dll

@@ -1,0 +1,181 @@
+//! LLMSAFE Tier 1 Cognitive Kernel Prototype
+//! 
+//! This module implements the "Law" of the LLMSAFE meta-pattern.
+//! It uses the SCRUST foundation (Deterministic memory, Bounded execution)
+//! to enforce Cognitive Stability invariants derived from the research corpus.
+//!
+//! Research Grounds:
+//! - RMPC (Knowledge Mechanisms): Concentric Containers for uncertainty.
+//! - Titans (Neural Memory): Surprise-based gating.
+//! - Focal Attention (Livšic Equation): Flow stability.
+
+/// Repurposed FixedDecimal from SCRUST for Cognitive Entropy tracking.
+/// Precision 28, Scale 2 ensures COBOL-level deterministic arithmetic
+/// for Agent Surprise metrics, preventing "Floating Point Hallucinations."
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
+pub struct CognitiveEntropy<const P: u32, const S: u32> {
+    mantissa: i128,
+}
+
+pub const STABILITY_THRESHOLD: i128 = 800;
+
+impl<const P: u32, const S: u32> CognitiveEntropy<P, S> {
+    pub const fn new(mantissa: i128) -> Self {
+        Self { mantissa }
+    }
+
+    /// The "Hard Guard" threshold. If entropy exceeds this, reasoning must halt.
+    pub const fn is_stable(&self, threshold: i128) -> bool {
+        self.mantissa <= threshold
+    }
+}
+
+/// The "Reasoning Step" container. 
+/// Implements the LLMSAFE Axiom of Determinism.
+pub struct ReasoningLoop<const MAX_STEPS: usize> {
+    current_step: usize,
+}
+
+impl<const MAX_STEPS: usize> ReasoningLoop<MAX_STEPS> {
+    pub const fn new() -> Self {
+        Self { current_step: 0 }
+    }
+
+    /// Validates a reasoning transition against the stability kernel.
+    /// Derived from Knowledge Mechanisms (CC-VT RMPC).
+    pub fn next_step(&mut self, current_entropy: CognitiveEntropy<28, 2>) -> Result<(), KernelError> {
+        if self.current_step >= MAX_STEPS {
+            return Err(KernelError::DepthExceeded);
+        }
+
+        // Concentric Container Check: Is the cognitive flow still within stable bounds?
+        // (Inspired by Robust Model Predictive Control)
+        if !current_entropy.is_stable(STABILITY_THRESHOLD) {
+            return Err(KernelError::CognitiveInstability);
+        }
+
+        self.current_step += 1;
+        Ok(())
+    }
+}
+
+use modular_bitfield::prelude::*;
+
+/// The "Synapse" (Binary Cognitive Protocol).
+/// A bit-packed u64 carrying the entire stability state.
+/// [Entropy: 16][Surprise: 16][Bias: 1][Hash: 31]
+#[bitfield]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Synapse {
+    pub raw_entropy: B16,
+    pub raw_surprise: B16,
+    pub has_bias: bool,
+    pub anchor_hash: B31,
+}
+
+impl Synapse {
+    pub fn from_raw_u64(bits: u64) -> Self {
+        Self::from_bytes(bits.to_le_bytes())
+    }
+
+    pub fn entropy(&self) -> CognitiveEntropy<28, 2> {
+        CognitiveEntropy::new(self.raw_entropy() as i128)
+    }
+
+    pub fn surprise(&self) -> i128 {
+        self.raw_surprise() as i128
+    }
+
+    /// The "Receptor" validation logic.
+    pub fn validate(&self) -> Result<(), KernelError> {
+        if self.has_bias() {
+            return Err(KernelError::BiasHaloDetected);
+        }
+        if !self.entropy().is_stable(STABILITY_THRESHOLD) {
+            return Err(KernelError::CognitiveInstability);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[test]
+    fn test_stability_boundary() {
+        let stable = CognitiveEntropy::<28, 2>::new(STABILITY_THRESHOLD);
+        let unstable = CognitiveEntropy::<28, 2>::new(STABILITY_THRESHOLD + 1);
+        
+        assert!(stable.is_stable(STABILITY_THRESHOLD));
+        assert!(!unstable.is_stable(STABILITY_THRESHOLD));
+    }
+
+    #[test]
+    fn test_synapse_validation() {
+        // Valid Synapse: Entropy 500, No Bias
+        let valid_bits = 500u64 | (0u64 << 32);
+        let synapse = Synapse::from_raw_u64(valid_bits);
+        assert!(synapse.validate().is_ok());
+
+        // Invalid Synapse: Bias detected
+        let biased_bits = 500u64 | (1u64 << 32);
+        let synapse = Synapse::from_raw_u64(biased_bits);
+        assert_eq!(synapse.validate().unwrap_err(), KernelError::BiasHaloDetected);
+
+        // Invalid Synapse: High Entropy
+        let unstable_bits = (STABILITY_THRESHOLD + 1) as u64;
+        let synapse = Synapse::from_raw_u64(unstable_bits);
+        assert_eq!(synapse.validate().unwrap_err(), KernelError::CognitiveInstability);
+    }
+
+    proptest! {
+        #[test]
+        fn test_synapse_roundtrip(entropy in 0u16..0xFFFF, surprise in 0u16..0xFFFF, bias in any::<bool>(), hash in 0u32..0x7FFFFFFF) {
+            let mut synapse = Synapse::new();
+            synapse.set_raw_entropy(entropy);
+            synapse.set_raw_surprise(surprise);
+            synapse.set_has_bias(bias);
+            synapse.set_anchor_hash(hash);
+
+            let bits = u64::from_le_bytes(synapse.into_bytes());
+            let decoded = Synapse::from_raw_u64(bits);
+
+            prop_assert_eq!(decoded.raw_entropy(), entropy);
+            prop_assert_eq!(decoded.raw_surprise(), surprise);
+            prop_assert_eq!(decoded.has_bias(), bias);
+            prop_assert_eq!(decoded.anchor_hash(), hash);
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum KernelError {
+    DepthExceeded,
+    CognitiveInstability,
+    BiasHaloDetected,
+    HallucinationDetected,
+}
+
+/// TIER 1 SAFETY INVARIANTS:
+/// - Stack bounded: Enforced by no_std / no_alloc.
+/// - Loop bounds: Enforced by ReasoningLoop<MAX_STEPS>.
+/// - Stability: Enforced by CognitiveEntropy (RMPC Concentric Containers).
+/// - Unsafe: Forbidden.
+// #[crate::scrust::tier(1)] - Dummy macro doesn't work as an attribute macro, commenting out for prototype compilation
+pub mod cognitive_kernel {
+    use super::*;
+
+    pub fn execute_reasoning_flow() -> Result<bool, KernelError> {
+        let mut loop_guard = ReasoningLoop::<10>::new();
+        let entropy = CognitiveEntropy::<28, 2>::new(500); // 5.00 entropy
+
+        // Execute reasoning steps with hard stability gates
+        loop_guard.next_step(entropy)?;
+        
+        // ... Core reasoning logic here ...
+        
+        Ok(true)
+    }
+}

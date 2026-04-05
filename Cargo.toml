@@ -50,7 +50,7 @@ archive = ["zip", "tar"]
 full = ["decompress", "notify", "archive"]
 
 [dependencies]
-llmosafe = { version = "0.2.1", path = "../llmosafe" }
+llmosafe = { version = "0.4.0", path = "../llmosafe" }
 memmap2 = "0.9"
 crc32c = "0.6"
 xxhash-rust = { version = "0.8", features = ["xxh64"] }

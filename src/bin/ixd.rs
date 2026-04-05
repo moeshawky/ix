@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use llmosafe::{ResourceGuard, Synapse};
+use llmosafe::{ResourceGuard, Synapse, llmosafe_metabolic_pace};
 
 #[derive(Parser)]
 #[command(
@@ -116,6 +116,14 @@ fn main() -> ix::error::Result<()> {
 
         match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(changed_files) => {
+                // Metabolic Pacing: Enforce 100ms minimum interval between major indexing steps
+                if llmosafe_metabolic_pace(100) == -2 {
+                    eprintln!("ixd: metabolic pressure detected — backing off");
+                    beacon.status = "metabolic backoff".to_string();
+                    let _ = beacon.write_to(&ix_dir);
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+
                 let synapse = guard.check().unwrap_or_else(|_| {
                     let mut s = Synapse::new();
                     s.set_raw_entropy(1500); // 1.0 ratio

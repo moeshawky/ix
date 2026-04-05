@@ -18,7 +18,7 @@ use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use libc;
-use llmosafe::ResourceGuard;
+use llmosafe::{ResourceGuard, llmosafe_sense_capabilities, CAP_ROOT};
 
 pub struct Builder {
     root: PathBuf,
@@ -39,6 +39,7 @@ pub struct Builder {
     stats: BuildStats,
     decompress: bool,
     resource_guard: Option<ResourceGuard>,
+    dead_ends: Vec<PathBuf>,
 }
 
 #[derive(Default, Debug)]
@@ -146,6 +147,7 @@ impl Builder {
             stats: BuildStats::default(),
             decompress: false,
             resource_guard: None,
+            dead_ends: Vec::new(),
         })
     }
 
@@ -191,6 +193,16 @@ impl Builder {
         let start = Instant::now();
         let root = self.root.clone();
         
+        // Self-Aware Capability Alignment
+        if root.to_string_lossy() == "/" {
+            let caps = unsafe { llmosafe_sense_capabilities() };
+            if (caps & CAP_ROOT) == 0 {
+                return Err(crate::error::Error::Io(std::io::Error::other(
+                    "Self-Aware Capability Alignment Error: CAP_ROOT (0x02) missing. Aborting root filesystem walk for Immune Defense."
+                )));
+            }
+        }
+
         let walker = WalkBuilder::new(&root)
             .hidden(false)
             .git_ignore(true)
@@ -239,7 +251,24 @@ impl Builder {
             .build();
 
         let mut files_processed = 0u64;
-        for entry in walker.flatten() {
+        let mut it = walker.into_iter();
+        while let Some(entry_res) = it.next() {
+            let entry = match entry_res {
+                Ok(e) => e,
+                Err(e) => {
+                    // Handle KernelError::BacktrackSignaled (-7) during the walk
+                    if let Some(io_err) = e.io_error() && io_err.raw_os_error() == Some(-7) {
+                        if let Some(path) = e.path() {
+                            tracing::warn!("Dead End encountered: {}", path.display());
+                            self.dead_ends.push(path.to_owned());
+                        }
+                        it.skip_current_dir();
+                        continue;
+                    }
+                    continue;
+                }
+            };
+
             if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
                 self.process_file(entry.path().to_owned())?;
                 files_processed += 1;

@@ -161,7 +161,7 @@ pub fn sift_perceptions(observations: &[&str], objective: &str) -> Synapse {
     
     // Hash the anchor for integrity
     let anchor_hash = adler32::adler32(top_anchor.0.as_bytes());
-    synapse.set_anchor_hash(anchor_hash & 0x7FFFFFFF);
+    synapse.set_anchor_hash(anchor_hash & 0x3FFFFFFF);
 
     synapse
 }

@@ -56,6 +56,7 @@ pub extern "C" fn llmosafe_check_resources(ceiling_mb: u32) -> i32 {
         Err(KernelError::BiasHaloDetected) => -3,
         Err(KernelError::HallucinationDetected) => -4,
         Err(KernelError::PermissionDenied) => -6,
+        Err(KernelError::BacktrackSignaled) => -7,
     }
 }
 
@@ -71,13 +72,27 @@ pub extern "C" fn llmosafe_authorize_action(action_id: i32) -> i32 {
         _ => ActionRequest::StandardProcessing,
     };
 
-    // Use default global memory for authorization check
-    let memory = llmosafe_memory::WorkingMemory::<64>::new(500);
+    // Use global memory for authorization check
+    let mut memory = llmosafe_memory::cognitive_memory::get_global_memory().lock().unwrap();
     match memory.authorize(action) {
         Ok(_) => 0,
         Err(KernelError::PermissionDenied) => -6,
+        Err(KernelError::BacktrackSignaled) => -7,
         _ => -6,
     }
+}
+
+/// Mycelial Sense: Query current system vitals.
+#[no_mangle]
+pub extern "C" fn llmosafe_sense_vitals() -> llmosafe_body::VitalsReport {
+    llmosafe_body::EnvironmentalVitals::now().report()
+}
+
+/// Mycelial Sense: Query current capability bitmask.
+#[no_mangle]
+pub extern "C" fn llmosafe_sense_capabilities() -> u64 {
+    let memory = llmosafe_memory::cognitive_memory::get_global_memory().lock().unwrap();
+    memory.capability_mask
 }
 
 /// Metabolic Law: Enforce pacing of reasoning steps.

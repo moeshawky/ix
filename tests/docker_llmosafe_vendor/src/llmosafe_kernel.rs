@@ -121,7 +121,8 @@ pub struct Synapse {
     pub raw_entropy: B16,
     pub raw_surprise: B16,
     pub has_bias: bool,
-    pub anchor_hash: B31,
+    pub backtrack_requested: bool,
+    pub anchor_hash: B30,
 }
 
 impl Synapse {
@@ -155,6 +156,9 @@ impl Synapse {
     /// assert!(synapse.validate().is_ok());
     /// ```
     pub fn validate(&self) -> Result<(), KernelError> {
+        if self.backtrack_requested() {
+            return Err(KernelError::BacktrackSignaled);
+        }
         if self.has_bias() {
             return Err(KernelError::BiasHaloDetected);
         }
@@ -242,15 +246,16 @@ mod tests {
 
     #[test]
     fn test_synapse_from_raw_u64_max_values() {
-        // [Entropy: 16][Surprise: 16][Bias: 1][Hash: 31]
+        // [Entropy: 16][Surprise: 16][Bias: 1][Backtrack: 1][Hash: 30]
         // u16::MAX is 0xFFFF
-        // Hash B31 max is 0x7FFFFFFF
+        // Hash B30 max is 0x3FFFFFFF
         let max_bits = 0xFFFFFFFFFFFFFFFFu64;
         let synapse = Synapse::from_raw_u64(max_bits);
         assert_eq!(synapse.raw_entropy(), 0xFFFF);
         assert_eq!(synapse.raw_surprise(), 0xFFFF);
         assert!(synapse.has_bias());
-        assert_eq!(synapse.anchor_hash(), 0x7FFFFFFF);
+        assert!(synapse.backtrack_requested());
+        assert_eq!(synapse.anchor_hash(), 0x3FFFFFFF);
     }
 
     #[test]
@@ -308,8 +313,9 @@ mod tests {
     #[test]
     fn test_synapse_hash_boundary() {
         let mut synapse = Synapse::new();
-        synapse.set_anchor_hash(0x7FFFFFFF);
-        assert_eq!(synapse.anchor_hash(), 0x7FFFFFFF);
+        // 30-bit boundary
+        synapse.set_anchor_hash(0x3FFFFFFF);
+        assert_eq!(synapse.anchor_hash(), 0x3FFFFFFF);
         
         // modular-bitfield panics on out-of-bounds values, so we don't test 0xFFFFFFFF here.
     }
@@ -333,19 +339,30 @@ mod tests {
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)] 
-pub enum Privilege { 
-    #[default]
-    Sandbox, 
-    Root, 
-    Network, 
-} 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Privilege(pub u64);
+
+impl Privilege {
+    pub const CAP_SANDBOX: u64 = 1 << 0;
+    pub const CAP_ROOT: u64 = 1 << 1;
+    pub const CAP_NETWORK: u64 = 1 << 2;
+}
 
 pub enum ActionRequest { 
     IndexRoot, 
     ExternalApiCall, 
     StandardProcessing, 
 } 
+
+impl ActionRequest {
+    pub fn required_privilege(&self) -> u64 {
+        match self {
+            ActionRequest::IndexRoot => Privilege::CAP_ROOT,
+            ActionRequest::ExternalApiCall => Privilege::CAP_NETWORK,
+            ActionRequest::StandardProcessing => Privilege::CAP_SANDBOX,
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum KernelError {
@@ -355,6 +372,7 @@ pub enum KernelError {
     HallucinationDetected,
     ResourceExhaustion,
     PermissionDenied,
+    BacktrackSignaled,
 }
 
 /// TIER 1 SAFETY INVARIANTS:

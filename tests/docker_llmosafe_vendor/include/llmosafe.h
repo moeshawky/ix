@@ -12,6 +12,12 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#define Privilege_CAP_SANDBOX (1 << 0)
+
+#define Privilege_CAP_ROOT (1 << 1)
+
+#define Privilege_CAP_NETWORK (1 << 2)
+
 /**
  * The "Synapse" (Binary Cognitive Protocol).
  * A bit-packed u64 carrying the entire stability state.
@@ -25,6 +31,14 @@
  * ```
  */
 typedef struct Synapse Synapse;
+
+/**
+ * VitalsReport (C-compatible) for the Mycelial Introspection ABI.
+ */
+typedef struct VitalsReport {
+    double iowait_percent;
+    double load_avg_1min;
+} VitalsReport;
 
 #define STABILITY_THRESHOLD 1000
 
@@ -57,6 +71,16 @@ int32_t llmosafe_check_resources(uint32_t ceiling_mb);
  * Returns 0 if authorized, or -6 if PermissionDenied.
  */
 int32_t llmosafe_authorize_action(int32_t action_id);
+
+/**
+ * Mycelial Sense: Query current system vitals.
+ */
+struct VitalsReport llmosafe_sense_vitals(void);
+
+/**
+ * Mycelial Sense: Query current capability bitmask.
+ */
+uint64_t llmosafe_sense_capabilities(void);
 
 /**
  * Metabolic Law: Enforce pacing of reasoning steps.
