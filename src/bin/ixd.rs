@@ -16,7 +16,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use llmosafe::{ResourceGuard, Synapse, llmosafe_metabolic_pace, llmosafe_sense_vitals};
+use llmosafe::{ResourceGuard, Synapse, SafetyDecision, EscalationPolicy};
+use llmosafe::llmosafe_body::EnvironmentalVitals;
 
 #[derive(Parser)]
 #[command(
@@ -124,23 +125,27 @@ fn main() -> ix::error::Result<()> {
 
         match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(changed_files) => {
-                let vitals = llmosafe_sense_vitals();
+                let vitals = EnvironmentalVitals::capture();
+                let policy = EscalationPolicy::default();
                 
                 // Mycelial Sensing: Adaptive metabolic backoff
-                if vitals.iowait_percent > 15.0 || vitals.load_avg_1min > 8.0 {
-                    eprintln!("ixd: metabolic pressure detected (iowait: {:.1}%, load: {:.2}) — entering back-pressure mode", 
-                        vitals.iowait_percent, vitals.load_avg_1min);
-                    beacon.status = format!("metabolic backoff (iowait: {:.1}%)", vitals.iowait_percent);
+                if vitals.load_avg > 8.0 {
+                    eprintln!("ixd: metabolic pressure detected (load: {:.2}) — entering back-pressure mode", 
+                        vitals.load_avg);
+                    beacon.status = format!("metabolic backoff (load: {:.2})", vitals.load_avg);
                     let _ = beacon.write_to(&ix_dir);
                     std::thread::sleep(Duration::from_millis(1000));
                     // Continue to next turn to re-evaluate after sleep
                     continue;
                 }
 
-                // Metabolic Law: Enforce 100ms minimum interval
-                if llmosafe_metabolic_pace(100) == -2 {
-                    eprintln!("ixd: pace violation detected — throttling");
-                    std::thread::sleep(Duration::from_millis(200));
+                let entropy = guard.raw_entropy();
+                let decision = policy.decide(entropy, 0, false);
+
+                // Metabolic Law: Handle instability or high entropy
+                if decision.must_halt() || decision.severity() >= 2 {
+                    eprintln!("ixd: safety decision {:?} — throttling", decision);
+                    std::thread::sleep(Duration::from_millis(500));
                 }
 
                 let synapse = guard.check().unwrap_or_else(|_| {
@@ -150,9 +155,9 @@ fn main() -> ix::error::Result<()> {
                 });
 
                 println!("ixd: {} files changed, updating index... (Entropy: {})", 
-                    changed_files.len(), synapse.raw_entropy());
+                    changed_files.len(), entropy);
 
-                beacon.status = format!("indexing (entropy: {})", synapse.raw_entropy());
+                beacon.status = format!("indexing (entropy: {})", entropy);
                 beacon.last_event_at = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()

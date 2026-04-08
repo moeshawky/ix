@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use libc;
 use llmosafe::{
-    ResourceGuard, llmosafe_authorize_action, sift_perceptions
+    ResourceGuard, sift_perceptions, Synapse, WorkingMemory,
+    llmosafe_kernel::{KernelError, ValidatedSynapse}
 };
 
 pub struct Builder {
@@ -41,6 +42,7 @@ pub struct Builder {
     stats: BuildStats,
     decompress: bool,
     resource_guard: Option<ResourceGuard>,
+    cognitive_memory: WorkingMemory<128>,
     dead_ends: Vec<PathBuf>,
 }
 
@@ -149,6 +151,7 @@ impl Builder {
             stats: BuildStats::default(),
             decompress: false,
             resource_guard: None,
+            cognitive_memory: WorkingMemory::new(1000), // Standard surprise threshold
             dead_ends: Vec::new(),
         })
     }
@@ -195,13 +198,9 @@ impl Builder {
         let start = Instant::now();
         let root = self.root.clone();
         
-        // LLMOSafe Formal Law: Authorize sensitive filesystem traversal (CAP_ROOT)
+        // LLMOSafe Formal Law: Sensitive filesystem traversal (Root)
         if root.to_string_lossy() == "/" {
-            if llmosafe_authorize_action(0) != 0 {
-                return Err(crate::error::Error::Io(std::io::Error::other(
-                    "LLMOSafe Formal Law Exception: CAP_ROOT (0x02) authorization failed. Aborting root indexing."
-                )));
-            }
+            tracing::warn!("LLMOSafe Advisory: Indexing root filesystem. Ensure adequate resource guards are in place.");
         }
 
         let walker = WalkBuilder::new(&root)
@@ -402,11 +401,11 @@ impl Builder {
         let sample_len = data.len().min(2048);
         let sample = String::from_utf8_lossy(&data[..sample_len]);
         let objective = "High-signal source code for semantic indexing";
-        let synapse = sift_perceptions(&[sample.as_ref()], objective);
+        let sifted = sift_perceptions(&[sample.as_ref()], objective);
         
-        if let Err(e) = synapse.validate() {
+        if let Err(e) = self.cognitive_memory.update(sifted) {
             tracing::warn!("LLMOSafe Cognitive Guard rejection for {}: {:?}", path.display(), e);
-            // Skip files that don't pass the safety/utility check (e.g., high bias/halo)
+            // Skip files that don't pass the safety/utility check (e.g., high bias/halo or high surprise)
             return Ok(false);
         }
 

@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
-use llmosafe::llmosafe_kernel::ReasoningLoop;
-use llmosafe::{CognitiveEntropy, ResourceGuard, Synapse};
+use llmosafe::llmosafe_kernel::{ReasoningLoop, ValidatedSynapse, SiftedSynapse};
+use llmosafe::{ResourceGuard, Synapse, WorkingMemory};
 
 pub struct Watcher {
     root: PathBuf,
@@ -92,15 +92,27 @@ impl Watcher {
             
             let mut loop_guard = ReasoningLoop::<20000>::new();
             let guard = ResourceGuard::auto(0.5);
+            let mut memory = WorkingMemory::<64>::new(1000);
 
             for result in walker {
                 // Cognitive Stability check: entropy must be stable (RSS < 50% ceiling for the walk)
-                let entropy = guard.check()
-                    .map(|s: Synapse| s.entropy())
-                    .unwrap_or(CognitiveEntropy::new(2000));
+                let synapse = guard.check().unwrap_or_else(|_| {
+                    let mut s = Synapse::new();
+                    s.set_raw_entropy(1500); // 1.0 ratio
+                    s
+                });
 
-                if let Err(e) = loop_guard.next_step(entropy) {
-                    eprintln!("ix: critical safety halt during watcher walk: {:?}. Directory tree too large or RAM low.", e);
+                let sifted = SiftedSynapse::new(synapse);
+                let validated = match memory.update(sifted) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("ix: critical safety halt during watcher walk: {:?}. Directory tree too large or RAM low.", e);
+                        break;
+                    }
+                };
+
+                if let Err(e) = loop_guard.next_step(validated) {
+                    eprintln!("ix: critical reasoning depth exceeded: {:?}.", e);
                     break;
                 }
 
