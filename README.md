@@ -30,7 +30,7 @@ ix search "Mycelial Sensing"
 - `ix`: The CLI search tool.
 - `ixd`: The background daemon for continuous indexing.
 
-Both are integrated with the LLMOSafe v0.4.0 Immune Substrate for proactive metabolic pacing and capability-aware execution.
+Both are integrated with the LLMOSafe v0.4.2 Immune Substrate for proactive metabolic pacing and capability-aware execution.
 
 ## The Engine
 `ix` uses a highly optimized trigram index and sparse tables. It relies on `llmosafe` for recursive filesystem traversal safety (`CAP_ROOT` checks) and back-pressure handling (Error -7).

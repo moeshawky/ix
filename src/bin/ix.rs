@@ -22,7 +22,7 @@ use std::io::{self, Read, IsTerminal};
     after_help = r#"LLM AGENT MANDATE:
     1. REASON BEFORE ACTION: Analyze the project context and intent before executing search or indexing.
     2. BACK-PRESSURE: Handle Error -7 (BacktrackSignaled) by immediately pruning the current search branch.
-    3. METABOLIC AWARENESS: This tool uses LLMOSafe v0.4.0. Respect the iowait/load signals.
+    3. METABOLIC AWARENESS: This tool uses LLMOSafe v0.4.2. Respect the iowait/load signals.
 
 AGENTIC RETRIEVAL (UTCP Schema):
     Existence check:  ix -c "pattern"    → Single integer (count)

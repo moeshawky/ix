@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use llmosafe::{ResourceGuard, Synapse, llmosafe_metabolic_pace};
+use llmosafe::{ResourceGuard, Synapse, llmosafe_metabolic_pace, llmosafe_sense_vitals};
 
 #[derive(Parser)]
 #[command(
@@ -42,14 +42,19 @@ fn main() -> ix::error::Result<()> {
     // Shutdown flag shared with signal handlers
     let running = Arc::new(AtomicBool::new(true));
 
-    // Install SIGTERM + SIGINT via nix — both set running=false
+    // Install SIGTERM + SIGINT via sigaction — reliable, handler persists across deliveries
     {
-        use nix::sys::signal::{signal, SigHandler, Signal};
+        use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+        let action = SigAction::new(
+            SigHandler::Handler(handle_signal),
+            SaFlags::empty(),
+            SigSet::empty(),
+        );
         // SAFETY: handler only stores to an atomic bool — async-signal-safe.
         unsafe {
-            signal(Signal::SIGTERM, SigHandler::Handler(handle_signal))
+            sigaction(Signal::SIGTERM, &action)
                 .expect("failed to install SIGTERM handler");
-            signal(Signal::SIGINT, SigHandler::Handler(handle_signal))
+            sigaction(Signal::SIGINT, &action)
                 .expect("failed to install SIGINT handler");
         }
     }
@@ -119,12 +124,23 @@ fn main() -> ix::error::Result<()> {
 
         match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(changed_files) => {
-                // Metabolic Pacing: Enforce 100ms minimum interval between major indexing steps
-                if llmosafe_metabolic_pace(100) == -2 {
-                    eprintln!("ixd: metabolic pressure detected — backing off");
-                    beacon.status = "metabolic backoff".to_string();
+                let vitals = llmosafe_sense_vitals();
+                
+                // Mycelial Sensing: Adaptive metabolic backoff
+                if vitals.iowait_percent > 15.0 || vitals.load_avg_1min > 8.0 {
+                    eprintln!("ixd: metabolic pressure detected (iowait: {:.1}%, load: {:.2}) — entering back-pressure mode", 
+                        vitals.iowait_percent, vitals.load_avg_1min);
+                    beacon.status = format!("metabolic backoff (iowait: {:.1}%)", vitals.iowait_percent);
                     let _ = beacon.write_to(&ix_dir);
-                    std::thread::sleep(Duration::from_millis(100));
+                    std::thread::sleep(Duration::from_millis(1000));
+                    // Continue to next turn to re-evaluate after sleep
+                    continue;
+                }
+
+                // Metabolic Law: Enforce 100ms minimum interval
+                if llmosafe_metabolic_pace(100) == -2 {
+                    eprintln!("ixd: pace violation detected — throttling");
+                    std::thread::sleep(Duration::from_millis(200));
                 }
 
                 let synapse = guard.check().unwrap_or_else(|_| {
@@ -157,9 +173,21 @@ fn main() -> ix::error::Result<()> {
     }
 
     // Clean shutdown — guaranteed to run on SIGTERM or SIGINT
-    eprintln!("ixd: shutting down");
-    let _ = fs::remove_file(ix_dir.join("beacon.json"));
+    eprintln!("ixd: shutting down...");
     watcher.stop();
+    let _ = fs::remove_file(ix_dir.join("beacon.json"));
+
+    // Reap any zombie child processes (belt-and-suspenders — ixd doesn't fork,
+    // but a library or watcher backend might)
+    loop {
+        use nix::sys::wait::{waitpid, WaitPidFlag};
+        use nix::unistd::Pid;
+        match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
+            Ok(nix::sys::wait::WaitStatus::StillAlive) | Err(_) => break,
+            Ok(_) => continue, // reaped one, try again
+        }
+    }
+
     Ok(())
 }
 

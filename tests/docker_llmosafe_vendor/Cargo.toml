@@ -1,6 +1,6 @@
 [package]
 name = "llmosafe"
-version = "0.4.0-alpha"
+version = "0.4.2"
 edition = "2021"
 description = "Organic Immune Substrate for AI agents: viral bitmask economy, mycelial sensing, and failure-memory back-pressure."
 license = "MIT"

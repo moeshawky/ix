@@ -98,6 +98,7 @@ impl Watcher {
                 let entropy = guard.check()
                     .map(|s: Synapse| s.entropy())
                     .unwrap_or(CognitiveEntropy::new(2000));
+
                 if let Err(e) = loop_guard.next_step(entropy) {
                     eprintln!("ix: critical safety halt during watcher walk: {:?}. Directory tree too large or RAM low.", e);
                     break;

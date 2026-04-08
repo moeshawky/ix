@@ -18,7 +18,9 @@ use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use libc;
-use llmosafe::{ResourceGuard, llmosafe_sense_capabilities, CAP_ROOT};
+use llmosafe::{
+    ResourceGuard, llmosafe_authorize_action, sift_perceptions
+};
 
 pub struct Builder {
     root: PathBuf,
@@ -193,12 +195,11 @@ impl Builder {
         let start = Instant::now();
         let root = self.root.clone();
         
-        // Self-Aware Capability Alignment
+        // LLMOSafe Formal Law: Authorize sensitive filesystem traversal (CAP_ROOT)
         if root.to_string_lossy() == "/" {
-            let caps = llmosafe_sense_capabilities();
-            if (caps & CAP_ROOT) == 0 {
+            if llmosafe_authorize_action(0) != 0 {
                 return Err(crate::error::Error::Io(std::io::Error::other(
-                    "Self-Aware Capability Alignment Error: CAP_ROOT (0x02) missing. Aborting root filesystem walk for Immune Defense."
+                    "LLMOSafe Formal Law Exception: CAP_ROOT (0x02) authorization failed. Aborting root indexing."
                 )));
             }
         }
@@ -251,8 +252,7 @@ impl Builder {
             .build();
 
         let mut files_processed = 0u64;
-        let mut it = walker.into_iter();
-        while let Some(entry_res) = it.next() {
+        for entry_res in walker {
             let entry = match entry_res {
                 Ok(e) => e,
                 Err(e) => {
@@ -394,6 +394,19 @@ impl Builder {
         let data = &raw_data[..];
         if is_binary(data) {
             self.stats.files_skipped_binary += 1;
+            return Ok(false);
+        }
+
+        // LLMOSafe Tier 3: Perceptual Sifting (Cognitive Layer)
+        // Evaluate file utility and bias (Halo signal)
+        let sample_len = data.len().min(2048);
+        let sample = String::from_utf8_lossy(&data[..sample_len]);
+        let objective = "High-signal source code for semantic indexing";
+        let synapse = sift_perceptions(&[sample.as_ref()], objective);
+        
+        if let Err(e) = synapse.validate() {
+            tracing::warn!("LLMOSafe Cognitive Guard rejection for {}: {:?}", path.display(), e);
+            // Skip files that don't pass the safety/utility check (e.g., high bias/halo)
             return Ok(false);
         }
 
