@@ -20,14 +20,13 @@ use llmosafe::{ResourceGuard, EscalationPolicy, SafetyDecision};
 use llmosafe::llmosafe_body::EnvironmentalVitals;
 
 // Safety policy constants — explicit timing for backpressure mechanisms
-// These are LOAD-BEARING (safety depends on them) — naming documents WHY each value
+// ENTROPY thresholds are load-bearing (safety depends on them)
+// PRE_BUILD_WAIT and METABOLIC are not provided by llmosafe (system-specific)
 const ENTROPY_SAFE_THRESHOLD: u16 = 800;      // Skip updates above 80% ceiling
 const ENTROPY_CRITICAL: u16 = 1000;            // Treat as escalation on check error
 const PRE_BUILD_WAIT_SECS: u64 = 5;            // Wait for memory to stabilize before build
-const METABOLIC_BACKOFF_MS: u64 = 1000;       // Wait when load avg > 8.0
-const HALT_COOLDOWN_MS: u64 = 2000;           // Safety halt pause
-const ESCALATE_COOLDOWN_MS: u64 = 500;        // Throttling pause
-const WARN_COOLDOWN_MS: u64 = 300;            // Warning pause
+const METABOLIC_BACKOFF_MS: u64 = 1000;       // Wait when load avg > 8.0 (not in llmosafe)
+const WARN_COOLDOWN_MS: u64 = 300;            // Warning pause (not in llmosafe decision)
 
 #[derive(Parser)]
 #[command(
@@ -161,7 +160,7 @@ fn main() -> ix::error::Result<()> {
                 let (entropy, safety_decision) = match check_result {
                     Ok(synapse) => {
                         let raw = synapse.raw_entropy();
-                        let entropy_val = u16::from(raw);
+                        let entropy_val = raw;
                         let policy = EscalationPolicy::default();
                         let decision = policy.decide(entropy_val, 0, false);
                         (entropy_val, decision)
@@ -171,25 +170,32 @@ fn main() -> ix::error::Result<()> {
                         (ENTROPY_CRITICAL, SafetyDecision::Escalate {
                             entropy: ENTROPY_CRITICAL,
                             reason: llmosafe::llmosafe_integration::EscalationReason::ResourcePressure,
+                            cooldown_ms: ENTROPY_CRITICAL as u32,
                         })
                     }
                 };
 
                 // Act on safety decision
                 match &safety_decision {
-                    SafetyDecision::Halt(err) => {
+                    SafetyDecision::Halt(err, cooldown) => {
                         eprintln!("ixd: critical safety decision (Halt: {:?}) — pausing operations", err);
                         beacon.status = "safety halt".to_string();
                         let _ = beacon.write_to(&ix_dir);
-                        std::thread::sleep(Duration::from_millis(HALT_COOLDOWN_MS));
+                        std::thread::sleep(Duration::from_millis(*cooldown as u64));
                         continue;
                     }
-                    SafetyDecision::Escalate { entropy, reason } => {
+                    SafetyDecision::Exit(err) => {
+                        eprintln!("ixd: SAFETY EXIT (unrecoverable: {:?}) — terminating", err);
+                        beacon.status = "safety exit".to_string();
+                        let _ = beacon.write_to(&ix_dir);
+                        std::process::exit(1);
+                    }
+                    SafetyDecision::Escalate { entropy, reason, cooldown_ms } => {
                         eprintln!("ixd: safety escalation (entropy: {}, reason: {:?}) — throttling",
                             entropy, reason);
                         beacon.status = format!("escalated (entropy: {})", entropy);
                         let _ = beacon.write_to(&ix_dir);
-                        std::thread::sleep(Duration::from_millis(ESCALATE_COOLDOWN_MS));
+                        std::thread::sleep(Duration::from_millis(*cooldown_ms as u64));
                         continue; // CRITICAL FIX: skip builder.update() when escalating
                     }
                     SafetyDecision::Warn(reason) => {
