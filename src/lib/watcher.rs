@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
-use llmosafe::llmosafe_kernel::{ReasoningLoop, ValidatedSynapse, SiftedSynapse};
+use llmosafe::llmosafe_kernel::{ReasoningLoop, SiftedSynapse};
 use llmosafe::{ResourceGuard, Synapse, WorkingMemory};
 
 pub struct Watcher {

@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use llmosafe::{ResourceGuard, Synapse, SafetyDecision, EscalationPolicy};
+use llmosafe::{ResourceGuard, EscalationPolicy, SafetyDecision};
 use llmosafe::llmosafe_body::EnvironmentalVitals;
 
 #[derive(Parser)]
@@ -126,36 +126,69 @@ fn main() -> ix::error::Result<()> {
         match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(changed_files) => {
                 let vitals = EnvironmentalVitals::capture();
-                let policy = EscalationPolicy::default();
-                
-                // Mycelial Sensing: Adaptive metabolic backoff
+
+                // Mycelial Sensing: Adaptive metabolic backoff based on system load
                 if vitals.load_avg > 8.0 {
-                    eprintln!("ixd: metabolic pressure detected (load: {:.2}) — entering back-pressure mode", 
+                    eprintln!("ixd: metabolic pressure detected (load: {:.2}) — entering back-pressure mode",
                         vitals.load_avg);
                     beacon.status = format!("metabolic backoff (load: {:.2})", vitals.load_avg);
                     let _ = beacon.write_to(&ix_dir);
                     std::thread::sleep(Duration::from_millis(1000));
-                    // Continue to next turn to re-evaluate after sleep
                     continue;
                 }
 
-                let entropy = guard.raw_entropy();
-                let decision = policy.decide(entropy, 0, false);
+                // Resource check: get Synapse with mapped entropy from actual resource metrics
+                // This reads /proc/stat twice (100ms apart) for delta-based CPU/IO measurement
+                let check_result = guard.check();
 
-                // Metabolic Law: Handle instability or high entropy
-                if decision.must_halt() || decision.severity() >= 2 {
-                    eprintln!("ixd: safety decision {:?} — throttling", decision);
-                    std::thread::sleep(Duration::from_millis(500));
+                let (entropy, safety_decision) = match check_result {
+                    Ok(synapse) => {
+                        let raw = synapse.raw_entropy();
+                        let entropy_val = u16::from(raw);
+                        let policy = EscalationPolicy::default();
+                        let decision = policy.decide(entropy_val, 0, false);
+                        (entropy_val, decision)
+                    }
+                    Err(e) => {
+                        eprintln!("ixd: resource check error: {:?} — proceeding with elevated caution", e);
+                        (1000u16, SafetyDecision::Escalate {
+                            entropy: 1000,
+                            reason: llmosafe::llmosafe_integration::EscalationReason::ResourcePressure,
+                        })
+                    }
+                };
+
+                // Act on safety decision
+                match &safety_decision {
+                    SafetyDecision::Halt(err) => {
+                        eprintln!("ixd: critical safety decision (Halt: {:?}) — pausing operations", err);
+                        beacon.status = "safety halt".to_string();
+                        let _ = beacon.write_to(&ix_dir);
+                        std::thread::sleep(Duration::from_millis(2000));
+                        continue;
+                    }
+                    SafetyDecision::Escalate { entropy, reason } => {
+                        eprintln!("ixd: safety escalation (entropy: {}, reason: {:?}) — throttling",
+                            entropy, reason);
+                        beacon.status = format!("escalated (entropy: {})", entropy);
+                        let _ = beacon.write_to(&ix_dir);
+                        std::thread::sleep(Duration::from_millis(500));
+                    }
+                    SafetyDecision::Warn(reason) => {
+                        if safety_decision.severity() >= 2 {
+                            eprintln!("ixd: safety warning (severity {}): {}", safety_decision.severity(), reason);
+                            beacon.status = format!("warned: {}", reason);
+                            let _ = beacon.write_to(&ix_dir);
+                            std::thread::sleep(Duration::from_millis(300));
+                        }
+                    }
+                    SafetyDecision::Proceed => {
+                        // Normal operation
+                    }
                 }
 
-                let synapse = guard.check().unwrap_or_else(|_| {
-                    let mut s = Synapse::new();
-                    s.set_raw_entropy(1500); // 1.0 ratio
-                    s
-                });
-
-                println!("ixd: {} files changed, updating index... (Entropy: {})", 
-                    changed_files.len(), entropy);
+                println!("ixd: {} files changed, updating index... (Entropy: {}, Decision: {:?})",
+                    changed_files.len(), entropy, safety_decision);
 
                 beacon.status = format!("indexing (entropy: {})", entropy);
                 beacon.last_event_at = std::time::SystemTime::now()

@@ -19,8 +19,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use libc;
 use llmosafe::{
-    ResourceGuard, sift_perceptions, Synapse, WorkingMemory,
-    llmosafe_kernel::{KernelError, ValidatedSynapse}
+    ResourceGuard, sift_perceptions, WorkingMemory,
 };
 
 pub struct Builder {
