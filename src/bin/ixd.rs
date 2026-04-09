@@ -94,6 +94,13 @@ fn main() -> ix::error::Result<()> {
         }
     };
 
+    // FIX 2: Pre-check memory before initial build — prevents OOM on large repos
+    // Check entropy before starting expensive build
+    if let Err(e) = guard.check() {
+        eprintln!("ixd: memory pressure before initial build: {:?} — waiting for safe state", e);
+        std::thread::sleep(Duration::from_secs(5));
+    }
+
     if let Err(e) = builder.build() {
         eprintln!("ixd: initial build failed: {} — will watch for changes anyway", e);
     } else {
@@ -173,6 +180,7 @@ fn main() -> ix::error::Result<()> {
                         beacon.status = format!("escalated (entropy: {})", entropy);
                         let _ = beacon.write_to(&ix_dir);
                         std::thread::sleep(Duration::from_millis(500));
+                        continue; // CRITICAL FIX: skip builder.update() when escalating
                     }
                     SafetyDecision::Warn(reason) => {
                         if safety_decision.severity() >= 2 {
@@ -198,6 +206,15 @@ fn main() -> ix::error::Result<()> {
                 let _ = beacon.write_to(&ix_dir);
 
                 idle.record_change();
+
+                // FIX 3: Defense in depth — skip update if entropy too high
+                if entropy > 800 {
+                    eprintln!("ixd: entropy too high ({}), deferring update", entropy);
+                    beacon.status = format!("deferred (entropy: {})", entropy);
+                    let _ = beacon.write_to(&ix_dir);
+                    continue;
+                }
+
                 if let Err(e) = builder.update(&changed_files) {
                     eprintln!("ixd: update failed: {} — retrying on next change", e);
                 }
