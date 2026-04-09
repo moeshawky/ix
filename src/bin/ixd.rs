@@ -19,6 +19,16 @@ use std::time::Duration;
 use llmosafe::{ResourceGuard, EscalationPolicy, SafetyDecision};
 use llmosafe::llmosafe_body::EnvironmentalVitals;
 
+// Safety policy constants — explicit timing for backpressure mechanisms
+// These are LOAD-BEARING (safety depends on them) — naming documents WHY each value
+const ENTROPY_SAFE_THRESHOLD: u16 = 800;      // Skip updates above 80% ceiling
+const ENTROPY_CRITICAL: u16 = 1000;            // Treat as escalation on check error
+const PRE_BUILD_WAIT_SECS: u64 = 5;            // Wait for memory to stabilize before build
+const METABOLIC_BACKOFF_MS: u64 = 1000;       // Wait when load avg > 8.0
+const HALT_COOLDOWN_MS: u64 = 2000;           // Safety halt pause
+const ESCALATE_COOLDOWN_MS: u64 = 500;        // Throttling pause
+const WARN_COOLDOWN_MS: u64 = 300;            // Warning pause
+
 #[derive(Parser)]
 #[command(
     name = "ixd",
@@ -98,7 +108,7 @@ fn main() -> ix::error::Result<()> {
     // Check entropy before starting expensive build
     if let Err(e) = guard.check() {
         eprintln!("ixd: memory pressure before initial build: {:?} — waiting for safe state", e);
-        std::thread::sleep(Duration::from_secs(5));
+        std::thread::sleep(Duration::from_secs(PRE_BUILD_WAIT_SECS));
     }
 
     if let Err(e) = builder.build() {
@@ -140,7 +150,7 @@ fn main() -> ix::error::Result<()> {
                         vitals.load_avg);
                     beacon.status = format!("metabolic backoff (load: {:.2})", vitals.load_avg);
                     let _ = beacon.write_to(&ix_dir);
-                    std::thread::sleep(Duration::from_millis(1000));
+                    std::thread::sleep(Duration::from_millis(METABOLIC_BACKOFF_MS));
                     continue;
                 }
 
@@ -158,8 +168,8 @@ fn main() -> ix::error::Result<()> {
                     }
                     Err(e) => {
                         eprintln!("ixd: resource check error: {:?} — proceeding with elevated caution", e);
-                        (1000u16, SafetyDecision::Escalate {
-                            entropy: 1000,
+                        (ENTROPY_CRITICAL, SafetyDecision::Escalate {
+                            entropy: ENTROPY_CRITICAL,
                             reason: llmosafe::llmosafe_integration::EscalationReason::ResourcePressure,
                         })
                     }
@@ -171,7 +181,7 @@ fn main() -> ix::error::Result<()> {
                         eprintln!("ixd: critical safety decision (Halt: {:?}) — pausing operations", err);
                         beacon.status = "safety halt".to_string();
                         let _ = beacon.write_to(&ix_dir);
-                        std::thread::sleep(Duration::from_millis(2000));
+                        std::thread::sleep(Duration::from_millis(HALT_COOLDOWN_MS));
                         continue;
                     }
                     SafetyDecision::Escalate { entropy, reason } => {
@@ -179,7 +189,7 @@ fn main() -> ix::error::Result<()> {
                             entropy, reason);
                         beacon.status = format!("escalated (entropy: {})", entropy);
                         let _ = beacon.write_to(&ix_dir);
-                        std::thread::sleep(Duration::from_millis(500));
+                        std::thread::sleep(Duration::from_millis(ESCALATE_COOLDOWN_MS));
                         continue; // CRITICAL FIX: skip builder.update() when escalating
                     }
                     SafetyDecision::Warn(reason) => {
@@ -187,7 +197,7 @@ fn main() -> ix::error::Result<()> {
                             eprintln!("ixd: safety warning (severity {}): {}", safety_decision.severity(), reason);
                             beacon.status = format!("warned: {}", reason);
                             let _ = beacon.write_to(&ix_dir);
-                            std::thread::sleep(Duration::from_millis(300));
+                            std::thread::sleep(Duration::from_millis(WARN_COOLDOWN_MS));
                         }
                     }
                     SafetyDecision::Proceed => {
@@ -208,7 +218,7 @@ fn main() -> ix::error::Result<()> {
                 idle.record_change();
 
                 // FIX 3: Defense in depth — skip update if entropy too high
-                if entropy > 800 {
+                if entropy > ENTROPY_SAFE_THRESHOLD {
                     eprintln!("ixd: entropy too high ({}), deferring update", entropy);
                     beacon.status = format!("deferred (entropy: {})", entropy);
                     let _ = beacon.write_to(&ix_dir);
