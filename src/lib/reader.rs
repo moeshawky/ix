@@ -13,10 +13,21 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+
+#[derive(Debug, Clone, Copy)]
+pub struct ShardMetadata {
+    pub shard_timestamp: u64,
+    pub file_count: u32,
+    pub trigram_count: u32,
+}
+
 pub struct Reader {
     mmap: Mmap,
     pub header: Header,
     string_pool: StringPoolReader<'static>,
+    inode: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -39,6 +50,10 @@ pub struct FileInfo {
 impl Reader {
     pub fn open(path: &Path) -> Result<Self> {
         let file = File::open(path)?;
+
+        // SAFETY: Mmap::map wraps the mmap(2) syscall. The file handle is kept alive
+        // by Mmap's internal Arc<File>, ensuring the underlying data remains valid
+        // for the lifetime of the mmap.
         let mmap = unsafe { Mmap::map(&file)? };
 
         if mmap.len() < HEADER_SIZE {
@@ -48,12 +63,22 @@ impl Reader {
         let header = Header::parse(&mmap[0..HEADER_SIZE])?;
         header.validate_bounds(mmap.len() as u64)?;
 
-        // Safety: we are extending the lifetime of the slice to 'static.
-        // This is okay because 'Reader' owns the 'Mmap' which owns the data.
+        #[cfg(unix)]
+        let inode = Some(file.metadata()?.ino());
+
+        #[cfg(not(unix))]
+        let inode = None;
+
+        // SAFETY: We transmute the slice lifetime to 'static. This is sound because:
+        // INVARIANT: Reader owns the Mmap, which owns the underlying memory.
+        // INVARIANT: Mmap's data remains valid for the entire lifetime of Reader.
+        // INVARIANT: No mutable access to mmap occurs after construction.
+        // INVARIANT: StringPoolReader<'static> cannot outlive Reader (it's a field).
+        // This is the standard pattern for self-referential mmap structs in Rust.
         let string_pool_data: &'static [u8] = unsafe {
-            let slice = &mmap[header.string_pool_offset as usize
-                ..(header.string_pool_offset + header.string_pool_size) as usize];
-            std::mem::transmute(slice)
+            let start = header.string_pool_offset as usize;
+            let end = (header.string_pool_offset + header.string_pool_size) as usize;
+            std::mem::transmute::<&[u8], &'static [u8]>(&mmap[start..end])
         };
         let string_pool = StringPoolReader::new(string_pool_data)?;
 
@@ -61,6 +86,7 @@ impl Reader {
             mmap,
             header,
             string_pool,
+            inode,
         })
     }
 
@@ -74,31 +100,48 @@ impl Reader {
             .filter_entry(move |entry| {
                 let path = entry.path();
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                
-                // Built-in directory defaults
+
                 if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
-                    && (name == "lost+found" || name == ".git" || name == "node_modules" || 
-                       name == "target" || name == "__pycache__" || name == ".tox" || 
-                       name == ".venv" || name == "venv" || name == ".ix") 
+                    && matches!(
+                        name,
+                        "lost+found"
+                            | ".git"
+                            | "node_modules"
+                            | "target"
+                            | "__pycache__"
+                            | ".tox"
+                            | ".venv"
+                            | "venv"
+                            | ".ix"
+                    )
                 {
                     return false;
                 }
 
-                // Built-in file extension defaults
                 if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
                     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                    match ext {
-                        // Binary extensions
-                        "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" |
-                        // Media
-                        "jpg" | "png" | "gif" | "mp4" | "mp3" | "pdf" |
-                        // Archives
-                        "zip" | "7z" | "rar" |
-                        // Data
-                        "sqlite" | "db" | "bin" => return false,
-                        _ => {}
-                    }
-                    if name.ends_with(".tar.gz") {
+                    if matches!(
+                        ext,
+                        "so" | "o"
+                            | "dylib"
+                            | "a"
+                            | "dll"
+                            | "exe"
+                            | "pyc"
+                            | "jpg"
+                            | "png"
+                            | "gif"
+                            | "mp4"
+                            | "mp3"
+                            | "pdf"
+                            | "zip"
+                            | "7z"
+                            | "rar"
+                            | "sqlite"
+                            | "db"
+                            | "bin"
+                    ) || name.ends_with(".tar.gz")
+                    {
                         return false;
                     }
                 }
@@ -110,7 +153,8 @@ impl Reader {
             match result {
                 Ok(entry) => {
                     if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                        let metadata = entry.metadata().map_err(|e| Error::Config(e.to_string()))?;
+                        let metadata =
+                            entry.metadata().map_err(|e| Error::Config(e.to_string()))?;
                         let mtime = metadata
                             .modified()
                             .and_then(|t| {
@@ -143,14 +187,12 @@ impl Reader {
             let mid = low + (high - low) / 2;
             let entry_off = table_start + mid * TRIGRAM_ENTRY_SIZE;
 
-            // Read trigram key (first 4 bytes)
             let key_bytes = self.mmap.get(entry_off..entry_off + 4)?;
             let key = u32::from_le_bytes(key_bytes.try_into().ok()?);
 
             if key == trigram {
                 let entry = self.mmap.get(entry_off..entry_off + TRIGRAM_ENTRY_SIZE)?;
 
-                // Read posting_offset (u48, bytes 4..10)
                 let mut off_bytes = [0u8; 8];
                 off_bytes[..6].copy_from_slice(&entry[4..10]);
                 let posting_offset = u64::from_le_bytes(off_bytes);
@@ -158,13 +200,12 @@ impl Reader {
                 let posting_length = entry
                     .get(10..14)
                     .and_then(|s| s.try_into().ok())
-                    .map(u32::from_le_bytes)
-                    .unwrap_or(0);
+                    .map(u32::from_le_bytes)?;
+
                 let doc_frequency = entry
                     .get(14..18)
                     .and_then(|s| s.try_into().ok())
-                    .map(u32::from_le_bytes)
-                    .unwrap_or(0);
+                    .map(u32::from_le_bytes)?;
 
                 return Some(TrigramInfo {
                     posting_offset,
@@ -246,32 +287,69 @@ impl Reader {
         }
 
         let entry_off = self.header.file_table_offset as usize + file_id as usize * FILE_ENTRY_SIZE;
-        let bloom_rel_off_bytes = self.mmap.get(entry_off + 40..entry_off + 44);
-        if bloom_rel_off_bytes.is_none() {
+        let Some(bloom_bytes) = self.mmap.get(entry_off + 40..entry_off + 44) else {
             return true;
-        }
+        };
 
-        let bloom_rel_off = bloom_rel_off_bytes
-            .and_then(|b| b.try_into().ok())
-            .map(u32::from_le_bytes)
-            .unwrap_or(0);
-
-        let bloom_abs_off = self.header.bloom_offset as usize + bloom_rel_off as usize;
-        if bloom_abs_off + 4 > self.mmap.len() {
-            return true;
-        }
-
-        let size = u16::from_le_bytes(
-            self.mmap[bloom_abs_off..bloom_abs_off + 2]
+        let bloom_rel_off = u32::from_le_bytes(
+            bloom_bytes
                 .try_into()
-                .unwrap_or([0u8; 2]),
+                .expect("bloom_bytes is exactly 4 bytes"),
+        );
+        let bloom_abs_off = self.header.bloom_offset as usize + bloom_rel_off as usize;
+
+        let Some(size_bytes) = self.mmap.get(bloom_abs_off..bloom_abs_off + 2) else {
+            return true;
+        };
+        let size = u16::from_le_bytes(
+            size_bytes
+                .try_into()
+                .expect("size_bytes is exactly 2 bytes"),
         ) as usize;
-        let num_hashes = self.mmap[bloom_abs_off + 2];
-        let bits = match self.mmap.get(bloom_abs_off + 4..bloom_abs_off + 4 + size) {
-            Some(b) => b,
-            None => return true,
+
+        let num_hashes = self.mmap.get(bloom_abs_off + 2).copied().unwrap_or(0);
+        let Some(bits) = self.mmap.get(bloom_abs_off + 4..bloom_abs_off + 4 + size) else {
+            return true;
         };
 
         BloomFilter::slice_contains(bits, num_hashes, trigram)
+    }
+
+    pub fn metadata(&self) -> ShardMetadata {
+        ShardMetadata {
+            shard_timestamp: self.header.created_at,
+            file_count: self.header.file_count,
+            trigram_count: self.header.trigram_count,
+        }
+    }
+
+    /// Detect whether the shard file on disk has been rebuilt under this live mmap.
+    ///
+    /// Returns `true` if the inode or file size differs, or if the file no longer exists.
+    /// A stale reader should be dropped and reopened.
+    ///
+    /// On Unix: uses inode comparison (inode changes on atomic rename).
+    /// On non-Unix: uses file size comparison only (Windows file locking prevents
+    /// rebuild under live mmap, so size-only detection is sufficient).
+    pub fn is_stale(&self, path: &Path) -> bool {
+        let current = match std::fs::metadata(path) {
+            Ok(m) => m,
+            Err(_) => return true,
+        };
+
+        if current.len() as usize != self.mmap.len() {
+            return true;
+        }
+
+        #[cfg(unix)]
+        {
+            if let Some(stored_inode) = self.inode
+                && current.ino() != stored_inode
+            {
+                return true;
+            }
+        }
+
+        false
     }
 }

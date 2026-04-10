@@ -13,7 +13,7 @@ use regex::Regex;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Read};
-use std::path::{PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 #[derive(Debug)]
@@ -146,7 +146,9 @@ impl<'a> Executor<'a> {
         let mut all_matches: Vec<Match> = candidate_list
             .into_par_iter()
             .filter_map(|fid| {
-                if options.max_results > 0 && matches_found.load(Ordering::Relaxed) >= options.max_results as u32 {
+                if options.max_results > 0
+                    && matches_found.load(Ordering::Relaxed) >= options.max_results as u32
+                {
                     return None;
                 }
 
@@ -184,8 +186,7 @@ impl<'a> Executor<'a> {
         stats.total_matches = all_matches.len() as u32;
 
         Ok((all_matches, stats))
-        }
-
+    }
 
     fn execute_regex_indexed(
         &self,
@@ -502,8 +503,10 @@ impl<'a> Executor<'a> {
             pending_matches = still_pending;
 
             if let Some(m) = regex.find(&line) {
-                let context_before_vec: Vec<String> =
-                    context_before.iter().map(|s: &String| s.trim_end().to_string()).collect();
+                let context_before_vec: Vec<String> = context_before
+                    .iter()
+                    .map(|s: &String| s.trim_end().to_string())
+                    .collect();
 
                 let new_match = Match {
                     file_path: path.clone(),
@@ -544,7 +547,7 @@ impl<'a> Executor<'a> {
             byte_offset += line_len;
             line.clear();
         }
-        
+
         matches.extend(pending_matches);
         Ok(matches)
     }
@@ -559,7 +562,8 @@ impl<'a> Executor<'a> {
         let mmap = unsafe { memmap2::Mmap::map(&file)? };
 
         if options.decompress
-            && let Some(reader) = maybe_decompress(&info.path, &mmap)? {
+            && let Some(reader) = maybe_decompress(&info.path, &mmap)?
+        {
             return self.verify_stream(reader, info.path.clone(), regex, options);
         }
 

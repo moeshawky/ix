@@ -55,7 +55,8 @@ impl Planner {
 
             if trigrams.is_empty() {
                 // Pattern too short for trigrams (< 3 bytes)
-                let regex = Regex::new(&regex::escape(&final_pattern)).unwrap_or_else(|_| Regex::new("").unwrap());
+                let regex = Regex::new(&regex::escape(&final_pattern))
+                    .unwrap_or_else(|_| Regex::new("").unwrap());
                 return QueryPlan::FullScan { regex };
             }
 
@@ -76,7 +77,7 @@ impl Planner {
                 Err(_) => {
                     return QueryPlan::FullScan {
                         regex: Regex::new("").unwrap(),
-                    }
+                    };
                 }
             };
 

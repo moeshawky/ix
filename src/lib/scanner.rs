@@ -4,8 +4,8 @@
 
 use crate::decompress::maybe_decompress;
 use crate::error::Result;
-use crate::format::is_binary;
 use crate::executor::{Match, QueryOptions};
+use crate::format::is_binary;
 use ignore::WalkBuilder;
 use memmap2::Mmap;
 use rayon::prelude::*;
@@ -38,7 +38,11 @@ impl Scanner {
         } else {
             regex::escape(pattern)
         };
-        let regex_pat = if ignore_case { format!("(?i){raw}") } else { raw };
+        let regex_pat = if ignore_case {
+            format!("(?i){raw}")
+        } else {
+            raw
+        };
         let regex = Regex::new(&regex_pat)?;
 
         let walker = WalkBuilder::new(&self.root)
@@ -49,12 +53,18 @@ impl Scanner {
             .filter_entry(move |entry| {
                 let path = entry.path();
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                
+
                 // Built-in directory defaults
                 if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
-                    && (name == "lost+found" || name == ".git" || name == "node_modules" || 
-                       name == "target" || name == "__pycache__" || name == ".tox" || 
-                       name == ".venv" || name == "venv" || name == ".ix") 
+                    && (name == "lost+found"
+                        || name == ".git"
+                        || name == "node_modules"
+                        || name == "target"
+                        || name == "__pycache__"
+                        || name == ".tox"
+                        || name == ".venv"
+                        || name == "venv"
+                        || name == ".ix")
                 {
                     return false;
                 }
@@ -66,8 +76,11 @@ impl Scanner {
                     {
                         return false;
                     }
-                    if name == "Cargo.lock" || name == "package-lock.json" || name == "pnpm-lock.yaml" || 
-                       name == "shard.ix" || name == "shard.ix.tmp"
+                    if name == "Cargo.lock"
+                        || name == "package-lock.json"
+                        || name == "pnpm-lock.yaml"
+                        || name == "shard.ix"
+                        || name == "shard.ix.tmp"
                     {
                         return false;
                     }
@@ -96,13 +109,11 @@ impl Scanner {
             .build();
 
         let paths: Vec<PathBuf> = walker
-            .filter_map(|result| {
-                match result {
-                    Ok(entry) => Some(entry),
-                    Err(e) => {
-                        eprintln!("ix: warning: scanner skipping path: {}", e);
-                        None
-                    }
+            .filter_map(|result| match result {
+                Ok(entry) => Some(entry),
+                Err(e) => {
+                    eprintln!("ix: warning: scanner skipping path: {}", e);
+                    None
                 }
             })
             .filter(|entry| entry.file_type().map(|t| t.is_file()).unwrap_or(false))
@@ -130,19 +141,26 @@ impl Scanner {
                 // Archive support
                 if options.archive {
                     let _ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                    let _is_tar_gz = path.to_str().map(|s| s.ends_with(".tar.gz")).unwrap_or(false);
+                    let _is_tar_gz = path
+                        .to_str()
+                        .map(|s| s.ends_with(".tar.gz"))
+                        .unwrap_or(false);
 
                     #[cfg(feature = "archive")]
                     {
                         if _ext == "zip"
-                            && let Ok(archive_matches) = crate::archive::scan_zip(&path, &regex, options)
+                            && let Ok(archive_matches) =
+                                crate::archive::scan_zip(&path, &regex, options)
                         {
-                            matches_found.fetch_add(archive_matches.len() as u32, Ordering::Relaxed);
+                            matches_found
+                                .fetch_add(archive_matches.len() as u32, Ordering::Relaxed);
                             return Some(archive_matches);
                         } else if _is_tar_gz
-                            && let Ok(archive_matches) = crate::archive::scan_tar_gz(&path, &regex, options)
+                            && let Ok(archive_matches) =
+                                crate::archive::scan_tar_gz(&path, &regex, options)
                         {
-                            matches_found.fetch_add(archive_matches.len() as u32, Ordering::Relaxed);
+                            matches_found
+                                .fetch_add(archive_matches.len() as u32, Ordering::Relaxed);
                             return Some(archive_matches);
                         }
                     }
@@ -210,8 +228,10 @@ impl Scanner {
             pending_matches = still_pending;
 
             if let Some(m) = regex.find(&line) {
-                let context_before_vec: Vec<String> =
-                    context_before.iter().map(|s: &String| s.trim_end().to_string()).collect();
+                let context_before_vec: Vec<String> = context_before
+                    .iter()
+                    .map(|s: &String| s.trim_end().to_string())
+                    .collect();
 
                 let new_match = Match {
                     file_path: path.to_owned(),
@@ -257,12 +277,7 @@ impl Scanner {
         Ok(matches)
     }
 
-    fn scan_file(
-        &self,
-        path: &Path,
-        regex: &Regex,
-        options: &QueryOptions,
-    ) -> Result<Vec<Match>> {
+    fn scan_file(&self, path: &Path, regex: &Regex, options: &QueryOptions) -> Result<Vec<Match>> {
         let file = File::open(path)?;
         let metadata = file.metadata()?;
         if metadata.len() > 100 * 1024 * 1024 && !options.decompress {
@@ -273,7 +288,8 @@ impl Scanner {
         let mmap = unsafe { Mmap::map(&file)? };
 
         if options.decompress
-            && let Some(reader) = maybe_decompress(path, &mmap)? {
+            && let Some(reader) = maybe_decompress(path, &mmap)?
+        {
             return self.scan_stream(reader, path, regex, options);
         }
 

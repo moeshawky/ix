@@ -5,11 +5,11 @@
 
 extern crate llmosafe;
 
+pub mod archive;
 pub mod bloom;
 pub mod builder;
 pub mod config;
 pub mod decompress;
-pub mod archive;
 pub mod error;
 pub mod executor;
 pub mod format;
@@ -26,13 +26,13 @@ pub mod varint;
 pub mod watcher;
 
 #[cfg(feature = "notify")]
-pub use crate::watcher::Watcher;
-#[cfg(feature = "notify")]
-pub use crate::idle::IdleTracker;
-#[cfg(feature = "notify")]
 pub use crate::builder::Builder;
 #[cfg(feature = "notify")]
 pub use crate::format::Beacon;
+#[cfg(feature = "notify")]
+pub use crate::idle::IdleTracker;
+#[cfg(feature = "notify")]
+pub use crate::watcher::Watcher;
 
 #[cfg(feature = "notify")]
 pub fn run_daemon(path: &std::path::Path) -> crate::error::Result<()> {
@@ -46,7 +46,7 @@ pub fn run_daemon(path: &std::path::Path) -> crate::error::Result<()> {
     println!("ixd: watching {}...", root.display());
 
     let mut builder = Builder::new(&root)?;
-    
+
     // Lazy startup: if index exists, just update. Otherwise build.
     let ix_dir = root.join(".ix");
     let index_file = ix_dir.join("shard.ix");
@@ -59,7 +59,7 @@ pub fn run_daemon(path: &std::path::Path) -> crate::error::Result<()> {
     } else {
         builder.build()?;
     }
-    
+
     println!(
         "ixd: initial index ready ({} files, {} trigrams)",
         builder.files_len(),

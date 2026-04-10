@@ -191,7 +191,7 @@ fn test_large_file_streaming() {
 
     // This should succeed quickly and with constant memory
     let (matches, stats) = executor.execute(&plan, &options).unwrap();
-    
+
     assert_eq!(matches.len(), 10);
     assert!(stats.files_verified >= 1);
 }

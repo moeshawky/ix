@@ -156,7 +156,7 @@ mod tests {
         let abc = from_bytes(b'a', b'b', b'c');
         let bca = from_bytes(b'b', b'c', b'a');
         let cab = from_bytes(b'c', b'a', b'b');
-        
+
         assert_eq!(result.len(), 4);
         assert_eq!(result[0], (abc, 0));
         assert_eq!(result[1], (abc, 3));

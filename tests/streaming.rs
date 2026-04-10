@@ -23,18 +23,34 @@ fn test_streaming_edge_cases() {
 
     // 1. Empty stream
     let data: &[u8] = b"";
-    let matches = executor.verify_stream_for_test(Cursor::new(data), PathBuf::from("test"), &regex, &options).unwrap();
+    let matches = executor
+        .verify_stream_for_test(Cursor::new(data), PathBuf::from("test"), &regex, &options)
+        .unwrap();
     assert_eq!(matches.len(), 0);
 
     // 2. Large line
     let large_line = "a".repeat(100_000) + "pattern" + &"b".repeat(100_000);
-    let matches = executor.verify_stream_for_test(Cursor::new(large_line.as_bytes()), PathBuf::from("test"), &regex, &options).unwrap();
+    let matches = executor
+        .verify_stream_for_test(
+            Cursor::new(large_line.as_bytes()),
+            PathBuf::from("test"),
+            &regex,
+            &options,
+        )
+        .unwrap();
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].byte_offset, 100_000);
 
     // 3. Multiple matches one line
     let multi_match = "pattern 1 pattern 2";
-    let matches = executor.verify_stream_for_test(Cursor::new(multi_match.as_bytes()), PathBuf::from("test"), &regex, &options).unwrap();
+    let matches = executor
+        .verify_stream_for_test(
+            Cursor::new(multi_match.as_bytes()),
+            PathBuf::from("test"),
+            &regex,
+            &options,
+        )
+        .unwrap();
     // Currently returns 1 because we use regex.find()
     assert_eq!(matches.len(), 1);
 }
@@ -51,12 +67,26 @@ fn test_streaming_binary_detection() {
 
     // 1. Binary stream (mostly nulls)
     let binary_data: Vec<u8> = vec![0u8; 1000];
-    let matches = executor.verify_stream_for_test(Cursor::new(binary_data), PathBuf::from("test"), &regex, &options).unwrap();
+    let matches = executor
+        .verify_stream_for_test(
+            Cursor::new(binary_data),
+            PathBuf::from("test"),
+            &regex,
+            &options,
+        )
+        .unwrap();
     assert_eq!(matches.len(), 0);
 
     // 2. Not binary (mostly text)
     let text_data = "This is a text file with pattern in it.\n".repeat(100);
-    let matches = executor.verify_stream_for_test(Cursor::new(text_data.as_bytes()), PathBuf::from("test"), &regex, &options).unwrap();
+    let matches = executor
+        .verify_stream_for_test(
+            Cursor::new(text_data.as_bytes()),
+            PathBuf::from("test"),
+            &regex,
+            &options,
+        )
+        .unwrap();
     assert_eq!(matches.len(), 100);
 }
 
@@ -75,14 +105,28 @@ fn test_streaming_context_lookahead() {
 
     // Match with context_after near EOF
     let data = "line1\nline2\nmatch\nline4\n";
-    let matches = executor.verify_stream_for_test(Cursor::new(data.as_bytes()), PathBuf::from("test"), &regex, &options).unwrap();
+    let matches = executor
+        .verify_stream_for_test(
+            Cursor::new(data.as_bytes()),
+            PathBuf::from("test"),
+            &regex,
+            &options,
+        )
+        .unwrap();
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].context_before, vec!["line1", "line2"]);
     assert_eq!(matches[0].context_after, vec!["line4"]);
 
     // Overlapping matches
     let data = "match1\nline2\nmatch2\nline4\nline5";
-    let matches = executor.verify_stream_for_test(Cursor::new(data.as_bytes()), PathBuf::from("test"), &Regex::new("match").unwrap(), &options).unwrap();
+    let matches = executor
+        .verify_stream_for_test(
+            Cursor::new(data.as_bytes()),
+            PathBuf::from("test"),
+            &Regex::new("match").unwrap(),
+            &options,
+        )
+        .unwrap();
     assert_eq!(matches.len(), 2);
     assert_eq!(matches[0].context_after, vec!["line2", "match2"]);
     assert_eq!(matches[1].context_before, vec!["match1", "line2"]);
@@ -103,8 +147,13 @@ fn test_streaming_crlf_offsets() {
     // line1 is 5 chars + 2 line ending = 7 bytes.
     // "match" starts at byte offset 7.
     let data = b"line1\r\nmatch\r\n";
-    let matches = executor.verify_stream_for_test(Cursor::new(data), PathBuf::from("test"), &regex, &options).unwrap();
-    
+    let matches = executor
+        .verify_stream_for_test(Cursor::new(data), PathBuf::from("test"), &regex, &options)
+        .unwrap();
+
     assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0].byte_offset, 7, "Offset should account for CRLF (2 bytes)");
+    assert_eq!(
+        matches[0].byte_offset, 7,
+        "Offset should account for CRLF (2 bytes)"
+    );
 }

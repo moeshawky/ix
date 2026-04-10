@@ -1,19 +1,19 @@
 //! Archive searching support (.zip, .tar.gz).
 
 #[cfg(feature = "archive")]
+use crate::error::Result;
+#[cfg(feature = "archive")]
+use crate::executor::{Match, QueryOptions};
+#[cfg(feature = "archive")]
 use crate::format::is_binary;
+#[cfg(feature = "archive")]
+use regex::Regex;
 #[cfg(feature = "archive")]
 use std::fs::File;
 #[cfg(feature = "archive")]
 use std::io::{BufRead, BufReader, Read};
 #[cfg(feature = "archive")]
 use std::path::{Path, PathBuf};
-#[cfg(feature = "archive")]
-use crate::error::Result;
-#[cfg(feature = "archive")]
-use crate::executor::{Match, QueryOptions};
-#[cfg(feature = "archive")]
-use regex::Regex;
 
 #[cfg(feature = "archive")]
 pub fn scan_zip(path: &Path, regex: &Regex, options: &QueryOptions) -> Result<Vec<Match>> {
@@ -29,8 +29,9 @@ pub fn scan_zip(path: &Path, regex: &Regex, options: &QueryOptions) -> Result<Ve
 
         let entry_name = entry.name().to_string();
         let display_path = format!("{}:{}", path.display(), entry_name);
-        let entry_matches = match_content_stream(entry, &PathBuf::from(display_path), regex, options)?;
-        
+        let entry_matches =
+            match_content_stream(entry, &PathBuf::from(display_path), regex, options)?;
+
         for m in entry_matches {
             matches.push(m);
             if options.max_results > 0 && matches.len() >= options.max_results {
@@ -115,8 +116,10 @@ fn match_content_stream<R: Read>(
         pending_matches = still_pending;
 
         if let Some(m) = regex.find(&line) {
-            let context_before_vec: Vec<String> =
-                context_before.iter().map(|s: &String| s.trim_end().to_string()).collect();
+            let context_before_vec: Vec<String> = context_before
+                .iter()
+                .map(|s: &String| s.trim_end().to_string())
+                .collect();
 
             let new_match = Match {
                 file_path: path.to_owned(),

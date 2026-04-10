@@ -120,18 +120,18 @@ mod tests {
             }],
         };
         let mut encoded = list.encode();
-        
+
         // Flip a bit in the payload (not the CRC)
         encoded[0] ^= 0xFF;
-        
+
         let result = PostingList::decode(&encoded);
         assert!(result.is_err(), "Decoding corrupted payload should fail");
-        
+
         // Restore payload, flip a bit in CRC
         encoded[0] ^= 0xFF;
         let last_idx = encoded.len() - 1;
         encoded[last_idx] ^= 0xFF;
-        
+
         let result = PostingList::decode(&encoded);
         assert!(result.is_err(), "Decoding with corrupted CRC should fail");
     }

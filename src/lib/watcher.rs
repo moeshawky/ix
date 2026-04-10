@@ -2,14 +2,14 @@
 
 use crate::error::Result;
 use crossbeam_channel::Receiver;
+use llmosafe::llmosafe_kernel::{ReasoningLoop, SiftedSynapse};
+use llmosafe::{ResourceGuard, Synapse, WorkingMemory};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher as _};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
-use llmosafe::llmosafe_kernel::{ReasoningLoop, SiftedSynapse};
-use llmosafe::{ResourceGuard, Synapse, WorkingMemory};
 
 pub struct Watcher {
     root: PathBuf,
@@ -31,11 +31,14 @@ impl Watcher {
         let (event_tx, event_rx) = mpsc::channel();
 
         let mut watcher = RecommendedWatcher::new(event_tx, Config::default())?;
-        
+
         // Attempt recursive watch on root first (most efficient)
         if let Err(err) = watcher.watch(&self.root, RecursiveMode::Recursive) {
-            eprintln!("ix: warning: recursive watch failed: {}. Falling back to manual walk.", err);
-            
+            eprintln!(
+                "ix: warning: recursive watch failed: {}. Falling back to manual walk.",
+                err
+            );
+
             let walker = ignore::WalkBuilder::new(&self.root)
                 .hidden(false)
                 .git_ignore(true)
@@ -44,12 +47,18 @@ impl Watcher {
                 .filter_entry(move |entry| {
                     let path = entry.path();
                     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    
+
                     // Built-in directory defaults
                     if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
-                        && (name == "lost+found" || name == ".git" || name == "node_modules" || 
-                           name == "target" || name == "__pycache__" || name == ".tox" || 
-                           name == ".venv" || name == "venv" || name == ".ix") 
+                        && (name == "lost+found"
+                            || name == ".git"
+                            || name == "node_modules"
+                            || name == "target"
+                            || name == "__pycache__"
+                            || name == ".tox"
+                            || name == ".venv"
+                            || name == "venv"
+                            || name == ".ix")
                     {
                         return false;
                     }
@@ -61,8 +70,11 @@ impl Watcher {
                         {
                             return false;
                         }
-                        if name == "Cargo.lock" || name == "package-lock.json" || name == "pnpm-lock.yaml" || 
-                           name == "shard.ix" || name == "shard.ix.tmp"
+                        if name == "Cargo.lock"
+                            || name == "package-lock.json"
+                            || name == "pnpm-lock.yaml"
+                            || name == "shard.ix"
+                            || name == "shard.ix.tmp"
                         {
                             return false;
                         }
@@ -89,7 +101,7 @@ impl Watcher {
                     true
                 })
                 .build();
-            
+
             let mut loop_guard = ReasoningLoop::<20000>::new();
             let guard = ResourceGuard::auto(0.5);
             let mut memory = WorkingMemory::<64>::new(1000);
@@ -106,7 +118,10 @@ impl Watcher {
                 let validated = match memory.update(sifted) {
                     Ok(v) => v,
                     Err(e) => {
-                        eprintln!("ix: critical safety halt during watcher walk: {:?}. Directory tree too large or RAM low.", e);
+                        eprintln!(
+                            "ix: critical safety halt during watcher walk: {:?}. Directory tree too large or RAM low.",
+                            e
+                        );
                         break;
                     }
                 };
@@ -121,7 +136,11 @@ impl Watcher {
                         if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                             let path = entry.path();
                             if let Err(e) = watcher.watch(path, RecursiveMode::NonRecursive) {
-                                eprintln!("ix: warning: watcher failed for {}: {}", path.display(), e);
+                                eprintln!(
+                                    "ix: warning: watcher failed for {}: {}",
+                                    path.display(),
+                                    e
+                                );
                             }
                         }
                     }

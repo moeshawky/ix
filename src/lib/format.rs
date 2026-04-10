@@ -203,7 +203,7 @@ impl Beacon {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        
+
         Self {
             pid,
             root: root.to_path_buf(),
@@ -214,7 +214,7 @@ impl Beacon {
     }
 
     pub fn is_live(&self) -> bool {
-        use nix::sys::signal::{kill};
+        use nix::sys::signal::kill;
         use nix::unistd::Pid;
 
         // Check if process exists

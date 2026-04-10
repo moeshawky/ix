@@ -8,25 +8,25 @@
 
 use clap::Parser;
 use ix::builder::Builder;
+use ix::format::Beacon;
 use ix::idle::IdleTracker;
 use ix::watcher::Watcher;
-use ix::format::Beacon;
+use llmosafe::llmosafe_body::EnvironmentalVitals;
+use llmosafe::{EscalationPolicy, ResourceGuard, SafetyDecision};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use llmosafe::{ResourceGuard, EscalationPolicy, SafetyDecision};
-use llmosafe::llmosafe_body::EnvironmentalVitals;
 
 // Safety policy constants — explicit timing for backpressure mechanisms
 // ENTROPY thresholds are load-bearing (safety depends on them)
 // PRE_BUILD_WAIT and METABOLIC are not provided by llmosafe (system-specific)
-const ENTROPY_SAFE_THRESHOLD: u16 = 800;      // Skip updates above 80% ceiling
-const ENTROPY_CRITICAL: u16 = 1000;            // Treat as escalation on check error
-const PRE_BUILD_WAIT_SECS: u64 = 5;            // Wait for memory to stabilize before build
-const METABOLIC_BACKOFF_MS: u64 = 1000;       // Wait when load avg > 8.0 (not in llmosafe)
-const WARN_COOLDOWN_MS: u64 = 300;            // Warning pause (not in llmosafe decision)
+const ENTROPY_SAFE_THRESHOLD: u16 = 800; // Skip updates above 80% ceiling
+const ENTROPY_CRITICAL: u16 = 1000; // Treat as escalation on check error
+const PRE_BUILD_WAIT_SECS: u64 = 5; // Wait for memory to stabilize before build
+const METABOLIC_BACKOFF_MS: u64 = 1000; // Wait when load avg > 8.0 (not in llmosafe)
+const WARN_COOLDOWN_MS: u64 = 300; // Warning pause (not in llmosafe decision)
 
 #[derive(Parser)]
 #[command(
@@ -54,7 +54,7 @@ fn main() -> ix::error::Result<()> {
 
     // Install SIGTERM + SIGINT via sigaction — reliable, handler persists across deliveries
     {
-        use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+        use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
         let action = SigAction::new(
             SigHandler::Handler(handle_signal),
             SaFlags::empty(),
@@ -62,10 +62,8 @@ fn main() -> ix::error::Result<()> {
         );
         // SAFETY: handler only stores to an atomic bool — async-signal-safe.
         unsafe {
-            sigaction(Signal::SIGTERM, &action)
-                .expect("failed to install SIGTERM handler");
-            sigaction(Signal::SIGINT, &action)
-                .expect("failed to install SIGINT handler");
+            sigaction(Signal::SIGTERM, &action).expect("failed to install SIGTERM handler");
+            sigaction(Signal::SIGINT, &action).expect("failed to install SIGINT handler");
         }
     }
     // Also use ctrlc for cross-platform Ctrl-C as a belt-and-suspenders measure
@@ -78,13 +76,17 @@ fn main() -> ix::error::Result<()> {
     // Concurrent instance guard — refuse to start if another ixd owns this root.
     let ix_dir_early = root.join(".ix");
     let beacon_path = ix_dir_early.join("beacon.json");
-    if beacon_path.exists() && let Ok(existing) = ix::format::Beacon::read_from(&ix_dir_early) {
+    if beacon_path.exists()
+        && let Ok(existing) = ix::format::Beacon::read_from(&ix_dir_early)
+    {
         let pid = nix::unistd::Pid::from_raw(existing.pid);
         if nix::sys::signal::kill(pid, None).is_ok() {
             eprintln!(
                 "ixd: another instance is already watching {} (PID {}). \
                  Stop it first or remove {}/beacon.json.",
-                root.display(), existing.pid, ix_dir_early.display()
+                root.display(),
+                existing.pid,
+                ix_dir_early.display()
             );
             std::process::exit(1);
         }
@@ -94,7 +96,7 @@ fn main() -> ix::error::Result<()> {
     }
 
     let guard = ResourceGuard::auto(0.6); // 60% system memory ceiling
-    
+
     let mut builder = match Builder::new(&root) {
         Ok(b) => b.with_resource_guard(guard.clone()),
         Err(e) => {
@@ -106,12 +108,18 @@ fn main() -> ix::error::Result<()> {
     // FIX 2: Pre-check memory before initial build — prevents OOM on large repos
     // Check entropy before starting expensive build
     if let Err(e) = guard.check() {
-        eprintln!("ixd: memory pressure before initial build: {:?} — waiting for safe state", e);
+        eprintln!(
+            "ixd: memory pressure before initial build: {:?} — waiting for safe state",
+            e
+        );
         std::thread::sleep(Duration::from_secs(PRE_BUILD_WAIT_SECS));
     }
 
     if let Err(e) = builder.build() {
-        eprintln!("ixd: initial build failed: {} — will watch for changes anyway", e);
+        eprintln!(
+            "ixd: initial build failed: {} — will watch for changes anyway",
+            e
+        );
     } else {
         println!(
             "ixd: initial build complete ({} files, {} trigrams)",
@@ -145,8 +153,10 @@ fn main() -> ix::error::Result<()> {
 
                 // Mycelial Sensing: Adaptive metabolic backoff based on system load
                 if vitals.load_avg > 8.0 {
-                    eprintln!("ixd: metabolic pressure detected (load: {:.2}) — entering back-pressure mode",
-                        vitals.load_avg);
+                    eprintln!(
+                        "ixd: metabolic pressure detected (load: {:.2}) — entering back-pressure mode",
+                        vitals.load_avg
+                    );
                     beacon.status = format!("metabolic backoff (load: {:.2})", vitals.load_avg);
                     let _ = beacon.write_to(&ix_dir);
                     std::thread::sleep(Duration::from_millis(METABOLIC_BACKOFF_MS));
@@ -166,7 +176,10 @@ fn main() -> ix::error::Result<()> {
                         (entropy_val, decision)
                     }
                     Err(e) => {
-                        eprintln!("ixd: resource check error: {:?} — proceeding with elevated caution", e);
+                        eprintln!(
+                            "ixd: resource check error: {:?} — proceeding with elevated caution",
+                            e
+                        );
                         (ENTROPY_CRITICAL, SafetyDecision::Escalate {
                             entropy: ENTROPY_CRITICAL,
                             reason: llmosafe::llmosafe_integration::EscalationReason::ResourcePressure,
@@ -178,7 +191,10 @@ fn main() -> ix::error::Result<()> {
                 // Act on safety decision
                 match &safety_decision {
                     SafetyDecision::Halt(err, cooldown) => {
-                        eprintln!("ixd: critical safety decision (Halt: {:?}) — pausing operations", err);
+                        eprintln!(
+                            "ixd: critical safety decision (Halt: {:?}) — pausing operations",
+                            err
+                        );
                         beacon.status = "safety halt".to_string();
                         let _ = beacon.write_to(&ix_dir);
                         std::thread::sleep(Duration::from_millis(*cooldown as u64));
@@ -190,9 +206,15 @@ fn main() -> ix::error::Result<()> {
                         let _ = beacon.write_to(&ix_dir);
                         std::process::exit(1);
                     }
-                    SafetyDecision::Escalate { entropy, reason, cooldown_ms } => {
-                        eprintln!("ixd: safety escalation (entropy: {}, reason: {:?}) — throttling",
-                            entropy, reason);
+                    SafetyDecision::Escalate {
+                        entropy,
+                        reason,
+                        cooldown_ms,
+                    } => {
+                        eprintln!(
+                            "ixd: safety escalation (entropy: {}, reason: {:?}) — throttling",
+                            entropy, reason
+                        );
                         beacon.status = format!("escalated (entropy: {})", entropy);
                         let _ = beacon.write_to(&ix_dir);
                         std::thread::sleep(Duration::from_millis(*cooldown_ms as u64));
@@ -200,7 +222,11 @@ fn main() -> ix::error::Result<()> {
                     }
                     SafetyDecision::Warn(reason) => {
                         if safety_decision.severity() >= 2 {
-                            eprintln!("ixd: safety warning (severity {}): {}", safety_decision.severity(), reason);
+                            eprintln!(
+                                "ixd: safety warning (severity {}): {}",
+                                safety_decision.severity(),
+                                reason
+                            );
                             beacon.status = format!("warned: {}", reason);
                             let _ = beacon.write_to(&ix_dir);
                             std::thread::sleep(Duration::from_millis(WARN_COOLDOWN_MS));
@@ -211,8 +237,12 @@ fn main() -> ix::error::Result<()> {
                     }
                 }
 
-                println!("ixd: {} files changed, updating index... (Entropy: {}, Decision: {:?})",
-                    changed_files.len(), entropy, safety_decision);
+                println!(
+                    "ixd: {} files changed, updating index... (Entropy: {}, Decision: {:?})",
+                    changed_files.len(),
+                    entropy,
+                    safety_decision
+                );
 
                 beacon.status = format!("indexing (entropy: {})", entropy);
                 beacon.last_event_at = std::time::SystemTime::now()
@@ -251,7 +281,7 @@ fn main() -> ix::error::Result<()> {
     // Reap any zombie child processes (belt-and-suspenders — ixd doesn't fork,
     // but a library or watcher backend might)
     loop {
-        use nix::sys::wait::{waitpid, WaitPidFlag};
+        use nix::sys::wait::{WaitPidFlag, waitpid};
         use nix::unistd::Pid;
         match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
             Ok(nix::sys::wait::WaitStatus::StillAlive) | Err(_) => break,

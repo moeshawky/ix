@@ -12,8 +12,8 @@ use ix::planner::Planner;
 use ix::reader::Reader;
 use ix::scanner::Scanner;
 use regex::Regex;
+use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
-use std::io::{self, Read, IsTerminal};
 #[derive(Parser)]
 #[command(
     name = "ix",
@@ -216,7 +216,9 @@ fn main() {
     #[cfg(not(feature = "notify"))]
     {
         if cli.daemon {
-            eprintln!("Error: daemon mode requires the 'notify' feature. Install with: cargo install moeix --features notify");
+            eprintln!(
+                "Error: daemon mode requires the 'notify' feature. Install with: cargo install moeix --features notify"
+            );
             std::process::exit(1);
         }
     }
@@ -296,7 +298,8 @@ fn main() {
 fn handle_service(cmd: ServiceCommand) -> ix::error::Result<()> {
     #[cfg(target_os = "linux")]
     {
-        let home = std::env::var("HOME").map_err(|_| ix::error::Error::Config("HOME not set".into()))?;
+        let home =
+            std::env::var("HOME").map_err(|_| ix::error::Error::Config("HOME not set".into()))?;
         let service_dir = PathBuf::from(&home).join(".config/systemd/user");
         let service_file = service_dir.join("ixd.service");
 
@@ -304,14 +307,14 @@ fn handle_service(cmd: ServiceCommand) -> ix::error::Result<()> {
             ServiceCommand::Install { path } => {
                 let watch_path = path.unwrap_or_else(|| PathBuf::from(&home));
                 let watch_path_abs = watch_path.canonicalize().unwrap_or(watch_path);
-                
+
                 std::fs::create_dir_all(&service_dir)?;
-                
+
                 let ix_path = std::env::current_exe()?;
                 let daemon_cmd = format!("{} --daemon", ix_path.display());
-                
+
                 let service_content = format!(
-r#"[Unit]
+                    r#"[Unit]
 Description=ix background daemon
 After=network.target
 
@@ -326,18 +329,23 @@ StartLimitIntervalSec=60
 
 [Install]
 WantedBy=default.target
-"#, daemon_cmd, watch_path_abs.display());
+"#,
+                    daemon_cmd,
+                    watch_path_abs.display()
+                );
 
                 std::fs::write(&service_file, service_content)?;
-                
+
                 // Reload systemd
                 let status = std::process::Command::new("systemctl")
                     .args(["--user", "daemon-reload"])
                     .status()?;
                 if !status.success() {
-                    return Err(ix::error::Error::Config("systemctl daemon-reload failed".into()));
+                    return Err(ix::error::Error::Config(
+                        "systemctl daemon-reload failed".into(),
+                    ));
                 }
-                
+
                 println!("ixd service installed at {}", service_file.display());
                 println!("Watch path: {}", watch_path_abs.display());
                 println!("Run 'ix service start' to start the daemon.");
@@ -347,7 +355,9 @@ WantedBy=default.target
                     .args(["--user", "enable", "--now", "ixd"])
                     .status()?;
                 if !status.success() {
-                    return Err(ix::error::Error::Config("Failed to start ixd service".into()));
+                    return Err(ix::error::Error::Config(
+                        "Failed to start ixd service".into(),
+                    ));
                 }
                 println!("ixd service started.");
             }
@@ -356,7 +366,9 @@ WantedBy=default.target
                     .args(["--user", "stop", "ixd"])
                     .status()?;
                 if !status.success() {
-                    return Err(ix::error::Error::Config("Failed to stop ixd service".into()));
+                    return Err(ix::error::Error::Config(
+                        "Failed to stop ixd service".into(),
+                    ));
                 }
                 println!("ixd service stopped.");
             }
@@ -471,8 +483,13 @@ fn do_stdin_search(pattern: &str, cli: &Cli) -> ix::error::Result<()> {
 fn do_build(path: &Path, decompress: bool, force: bool) -> ix::error::Result<()> {
     // Beacon check
     if let Some((_, _, Some(beacon))) = find_index(path)
-        && beacon.is_live() && !force {
-        eprintln!("Error: Search root is managed by ixd (PID {}). Updates are automatic. Use --force to override.", beacon.pid);
+        && beacon.is_live()
+        && !force
+    {
+        eprintln!(
+            "Error: Search root is managed by ixd (PID {}). Updates are automatic. Use --force to override.",
+            beacon.pid
+        );
         std::process::exit(1);
     }
     println!("Building index for {}...", path.display());
@@ -619,7 +636,12 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
         (filtered_matches, s)
     } else {
         let scanner = Scanner::new(params.path);
-        let matches = scanner.scan(params.pattern, params.is_regex, params.ignore_case, &options)?;
+        let matches = scanner.scan(
+            params.pattern,
+            params.is_regex,
+            params.ignore_case,
+            &options,
+        )?;
         let stats = QueryStats {
             total_matches: matches.len() as u32,
             ..Default::default()
@@ -632,7 +654,9 @@ fn do_search(params: SearchParams) -> ix::error::Result<()> {
 
     let mut matches = matches;
     matches.sort_by(|a, b| {
-        a.file_path.cmp(&b.file_path).then(a.line_number.cmp(&b.line_number))
+        a.file_path
+            .cmp(&b.file_path)
+            .then(a.line_number.cmp(&b.line_number))
     });
 
     if options.count_only {

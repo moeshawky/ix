@@ -11,32 +11,30 @@ use crate::format::*;
 use crate::posting::{PostingEntry, PostingList};
 use crate::trigram::{Extractor, Trigram};
 use ignore::WalkBuilder;
+use libc;
+use llmosafe::{ResourceGuard, WorkingMemory, sift_perceptions};
 use memmap2::Mmap;
 use std::collections::{BinaryHeap, HashMap};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use libc;
-use llmosafe::{
-    ResourceGuard, sift_perceptions, WorkingMemory,
-};
 
 pub struct Builder {
     root: PathBuf,
     ix_dir: PathBuf,
     file_count: u32,
-    
+
     // O(1) memory streaming writers for temporary file table and blooms
     files_writer: BufWriter<File>,
     blooms_writer: BufWriter<File>,
     strings_writer: BufWriter<File>,
-    
+
     // Postings batching for external sort
     postings: HashMap<Trigram, Vec<PostingEntry>>,
     postings_count: usize,
     temp_runs: Vec<PathBuf>,
-    
+
     extractor: Extractor,
     stats: BuildStats,
     decompress: bool,
@@ -122,15 +120,15 @@ impl Builder {
     pub fn new(root: &Path) -> Result<Self> {
         let ix_dir = root.join(".ix");
         fs::create_dir_all(&ix_dir)?;
-        
+
         let files_tmp = ix_dir.join("shard.ix.tmp.files");
         let blooms_tmp = ix_dir.join("shard.ix.tmp.blooms");
         let strings_tmp = ix_dir.join("shard.ix.tmp.strings");
-        
+
         let files_writer = BufWriter::new(File::create(&files_tmp)?);
         let blooms_writer = BufWriter::new(File::create(&blooms_tmp)?);
         let mut strings_writer = BufWriter::new(File::create(&strings_tmp)?);
-        
+
         strings_writer.write_all(&1u32.to_le_bytes())?;
         strings_writer.write_all(&0u16.to_le_bytes())?;
         strings_writer.write_all(&0u16.to_le_bytes())?;
@@ -172,7 +170,9 @@ impl Builder {
         let mut sorted: Vec<_> = old_postings.into_iter().collect();
         sorted.sort_unstable_by_key(|(t, _)| *t);
 
-        let run_path = self.ix_dir.join(format!("shard.ix.run.{}", self.temp_runs.len()));
+        let run_path = self
+            .ix_dir
+            .join(format!("shard.ix.run.{}", self.temp_runs.len()));
         let mut f = BufWriter::new(File::create(&run_path)?);
 
         for (tri, entries) in sorted {
@@ -187,7 +187,7 @@ impl Builder {
             }
         }
         f.flush()?;
-        
+
         self.temp_runs.push(run_path);
         self.postings_count = 0;
         Ok(())
@@ -196,10 +196,12 @@ impl Builder {
     pub fn build(&mut self) -> Result<PathBuf> {
         let start = Instant::now();
         let root = self.root.clone();
-        
+
         // LLMOSafe Formal Law: Sensitive filesystem traversal (Root)
         if root.to_string_lossy() == "/" {
-            tracing::warn!("LLMOSafe Advisory: Indexing root filesystem. Ensure adequate resource guards are in place.");
+            tracing::warn!(
+                "LLMOSafe Advisory: Indexing root filesystem. Ensure adequate resource guards are in place."
+            );
         }
 
         let walker = WalkBuilder::new(&root)
@@ -210,11 +212,17 @@ impl Builder {
             .filter_entry(move |entry| {
                 let path = entry.path();
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                
+
                 if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
-                    && (name == "lost+found" || name == ".git" || name == "node_modules" || 
-                       name == "target" || name == "__pycache__" || name == ".tox" || 
-                       name == ".venv" || name == "venv" || name == ".ix") 
+                    && (name == "lost+found"
+                        || name == ".git"
+                        || name == "node_modules"
+                        || name == "target"
+                        || name == "__pycache__"
+                        || name == ".tox"
+                        || name == ".venv"
+                        || name == "venv"
+                        || name == ".ix")
                 {
                     return false;
                 }
@@ -225,8 +233,12 @@ impl Builder {
                     {
                         return false;
                     }
-                    if name == "Cargo.lock" || name == "package-lock.json" || name == "pnpm-lock.yaml" || 
-                       name == "shard.ix" || name == "shard.ix.tmp" || name.starts_with("shard.ix.") 
+                    if name == "Cargo.lock"
+                        || name == "package-lock.json"
+                        || name == "pnpm-lock.yaml"
+                        || name == "shard.ix"
+                        || name == "shard.ix.tmp"
+                        || name.starts_with("shard.ix.")
                     {
                         return false;
                     }
@@ -235,10 +247,9 @@ impl Builder {
                 if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
                     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
                     match ext {
-                        "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" |
-                        "jpg" | "png" | "gif" | "mp4" | "mp3" | "pdf" |
-                        "zip" | "7z" | "rar" |
-                        "sqlite" | "db" | "bin" => return false,
+                        "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" | "jpg" | "png"
+                        | "gif" | "mp4" | "mp3" | "pdf" | "zip" | "7z" | "rar" | "sqlite"
+                        | "db" | "bin" => return false,
                         _ => {}
                     }
                     if name.ends_with(".tar.gz") {
@@ -256,7 +267,9 @@ impl Builder {
                 Err(e) => {
                     // Handle KernelError::BacktrackSignaled (-7) during the walk
                     let backtrack_path = match &e {
-                        ignore::Error::Io(io_err) if io_err.raw_os_error() == Some(-7) => Some(None),
+                        ignore::Error::Io(io_err) if io_err.raw_os_error() == Some(-7) => {
+                            Some(None)
+                        }
                         ignore::Error::WithPath { path, err } => {
                             if let ignore::Error::Io(io_err) = err.as_ref() {
                                 if io_err.raw_os_error() == Some(-7) {
@@ -272,7 +285,9 @@ impl Builder {
                     };
 
                     if let Some(path_opt) = backtrack_path {
-                        tracing::warn!("Immune Memory Triggered: Skipping path due to backtrack signal.");
+                        tracing::warn!(
+                            "Immune Memory Triggered: Skipping path due to backtrack signal."
+                        );
                         if let Some(path) = path_opt {
                             self.dead_ends.push(path);
                         }
@@ -290,17 +305,23 @@ impl Builder {
                     if let Some(guard) = &self.resource_guard {
                         if guard.check().map(|_s: ::llmosafe::Synapse| ()).is_err() {
                             let _err = guard.check().unwrap_err();
-                            eprintln!("ixd: memory ceiling reached... flushing intermediate chunk ({} files processed)", files_processed);
+                            eprintln!(
+                                "ixd: memory ceiling reached... flushing intermediate chunk ({} files processed)",
+                                files_processed
+                            );
                             self.flush_run()?;
                             continue;
                         }
                     } else {
                         // Fallback to manual RSS limit if no formal guard provided
-                        if let Ok(rss) = Self::current_rss_bytes() 
-                            && rss > 512 * 1024 * 1024 
+                        if let Ok(rss) = Self::current_rss_bytes()
+                            && rss > 512 * 1024 * 1024
                         {
-                            eprintln!("ixd: RSS ceiling reached ({} MB) after {} files — flushing intermediate chunk",
-                                rss / 1024 / 1024, files_processed);
+                            eprintln!(
+                                "ixd: RSS ceiling reached ({} MB) after {} files — flushing intermediate chunk",
+                                rss / 1024 / 1024,
+                                files_processed
+                            );
                             self.flush_run()?;
                             continue;
                         }
@@ -331,7 +352,9 @@ impl Builder {
         let status = std::fs::read_to_string("/proc/self/status")?;
         for line in status.lines() {
             if let Some(rest) = line.strip_prefix("VmRSS:") {
-                let kb: u64 = rest.split_whitespace().next()
+                let kb: u64 = rest
+                    .split_whitespace()
+                    .next()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(0);
                 return Ok(kb * 1024);
@@ -361,7 +384,11 @@ impl Builder {
             Err(e) => return Err(e.into()),
         };
         let size = metadata.len();
-        let mtime = metadata.modified()?.duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
+        let mtime = metadata
+            .modified()?
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
 
         if size > 10 * 1024 * 1024 {
             self.stats.files_skipped_size += 1;
@@ -370,8 +397,12 @@ impl Builder {
 
         let file = match File::open(&path) {
             Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound
-                   || e.kind() == std::io::ErrorKind::PermissionDenied => return Ok(false),
+            Err(e)
+                if e.kind() == std::io::ErrorKind::NotFound
+                    || e.kind() == std::io::ErrorKind::PermissionDenied =>
+            {
+                return Ok(false);
+            }
             Err(e) => return Err(e.into()),
         };
         let mmap = unsafe { Mmap::map(&file)? };
@@ -380,7 +411,10 @@ impl Builder {
             if let Some(mut reader) = maybe_decompress(&path, &mmap)? {
                 let mut buf = Vec::new();
                 use std::io::Read;
-                reader.by_ref().take(10 * 1024 * 1024).read_to_end(&mut buf)?;
+                reader
+                    .by_ref()
+                    .take(10 * 1024 * 1024)
+                    .read_to_end(&mut buf)?;
                 std::borrow::Cow::Owned(buf)
             } else {
                 std::borrow::Cow::Borrowed(&mmap[..])
@@ -401,16 +435,20 @@ impl Builder {
         let sample = String::from_utf8_lossy(&data[..sample_len]);
         let objective = "High-signal source code for semantic indexing";
         let sifted = sift_perceptions(&[sample.as_ref()], objective);
-        
+
         if let Err(e) = self.cognitive_memory.update(sifted) {
-            tracing::warn!("LLMOSafe Cognitive Guard rejection for {}: {:?}", path.display(), e);
+            tracing::warn!(
+                "LLMOSafe Cognitive Guard rejection for {}: {:?}",
+                path.display(),
+                e
+            );
             // Skip files that don't pass the safety/utility check (e.g., high bias/halo or high surprise)
             return Ok(false);
         }
 
         let content_hash = xxhash_rust::xxh64::xxh64(data, 0);
         let pairs = self.extractor.extract_with_offsets(data);
-        
+
         let file_id = self.file_count;
         self.file_count += 1;
 
@@ -418,8 +456,8 @@ impl Builder {
         let path_bytes = path_str.as_bytes();
         let path_off = (self.strings_writer.stream_position()?) as u32;
         let path_len = path_bytes.len() as u16;
-        
-        self.strings_writer.write_all(&0u16.to_le_bytes())?; 
+
+        self.strings_writer.write_all(&0u16.to_le_bytes())?;
         self.strings_writer.write_all(&path_len.to_le_bytes())?;
         self.strings_writer.write_all(path_bytes)?;
 
@@ -433,17 +471,17 @@ impl Builder {
             while j < pairs.len() && pairs[j].0 == tri {
                 j += 1;
             }
-            
+
             let take_count = (j - i).min(10_000);
             let offsets: Vec<u32> = pairs[i..i + take_count].iter().map(|p| p.1).collect();
-            
+
             bloom.insert(tri);
-            self.postings.entry(tri).or_default().push(PostingEntry {
-                file_id,
-                offsets,
-            });
+            self.postings
+                .entry(tri)
+                .or_default()
+                .push(PostingEntry { file_id, offsets });
             self.postings_count += take_count + 8;
-            
+
             trigram_count += 1;
             i = j;
         }
@@ -455,13 +493,13 @@ impl Builder {
         self.files_writer.write_all(&path_off.to_le_bytes())?;
         self.files_writer.write_all(&path_len.to_le_bytes())?;
         self.files_writer.write_all(&[FileStatus::Fresh as u8])?;
-        self.files_writer.write_all(&[0u8])?; 
+        self.files_writer.write_all(&[0u8])?;
         self.files_writer.write_all(&mtime.to_le_bytes())?;
         self.files_writer.write_all(&size.to_le_bytes())?;
         self.files_writer.write_all(&content_hash.to_le_bytes())?;
         self.files_writer.write_all(&trigram_count.to_le_bytes())?;
-        self.files_writer.write_all(&bloom_offset.to_le_bytes())?; 
-        self.files_writer.write_all(&[0u8; 4])?; 
+        self.files_writer.write_all(&bloom_offset.to_le_bytes())?;
+        self.files_writer.write_all(&[0u8; 4])?;
 
         self.stats.files_scanned += 1;
         self.stats.bytes_scanned += size;
@@ -480,17 +518,15 @@ impl Builder {
         if let Ok(free) = Self::free_bytes_at(&self.ix_dir) {
             const MIN_FREE: u64 = 100 * 1024 * 1024; // 100 MB
             if free < MIN_FREE {
-                return Err(crate::error::Error::Io(std::io::Error::other(
-                    format!(
-                        "insufficient disk space: {} MB free, need ≥100 MB (path: {})",
-                        free / 1024 / 1024,
-                        self.ix_dir.display()
-                    ),
-                )));
+                return Err(crate::error::Error::Io(std::io::Error::other(format!(
+                    "insufficient disk space: {} MB free, need ≥100 MB (path: {})",
+                    free / 1024 / 1024,
+                    self.ix_dir.display()
+                ))));
             }
         }
         self.flush_run()?;
-        
+
         self.files_writer.flush()?;
         self.blooms_writer.flush()?;
         self.strings_writer.flush()?;
@@ -499,10 +535,19 @@ impl Builder {
         while self.temp_runs.len() > 128 {
             let mut next_generation = Vec::new();
             for chunk in self.temp_runs.chunks(128) {
-                let out_path = self.ix_dir.join(format!("shard.ix.merged.{}.{}", next_generation.len(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros()));
+                let out_path = self.ix_dir.join(format!(
+                    "shard.ix.merged.{}.{}",
+                    next_generation.len(),
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_micros()
+                ));
                 self.merge_to_run(chunk, &out_path)?;
                 next_generation.push(out_path);
-                for p in chunk { let _ = fs::remove_file(p); }
+                for p in chunk {
+                    let _ = fs::remove_file(p);
+                }
             }
             self.temp_runs = next_generation;
         }
@@ -535,7 +580,10 @@ impl Builder {
 
         for (i, run) in runs.iter_mut().enumerate() {
             if let Some(item) = run.next_trigram()? {
-                heap.push(MergeItem { tri: item.0, run_idx: i });
+                heap.push(MergeItem {
+                    tri: item.0,
+                    run_idx: i,
+                });
                 current_items[i] = Some(item);
             }
         }
@@ -546,7 +594,13 @@ impl Builder {
         while let Some(MergeItem { tri, run_idx }) = heap.pop() {
             if Some(tri) != current_tri {
                 if let Some(t) = current_tri {
-                    self.write_merged_posting(&mut f, &mut trigram_table_writer, t, posting_data_offset, &mut merged_entries)?;
+                    self.write_merged_posting(
+                        &mut f,
+                        &mut trigram_table_writer,
+                        t,
+                        posting_data_offset,
+                        &mut merged_entries,
+                    )?;
                     global_trigram_count += 1;
                     merged_entries.clear();
                 }
@@ -557,13 +611,22 @@ impl Builder {
             merged_entries.extend(item.1);
 
             if let Some(next_item) = runs[run_idx].next_trigram()? {
-                heap.push(MergeItem { tri: next_item.0, run_idx });
+                heap.push(MergeItem {
+                    tri: next_item.0,
+                    run_idx,
+                });
                 current_items[run_idx] = Some(next_item);
             }
         }
 
         if let Some(t) = current_tri {
-            self.write_merged_posting(&mut f, &mut trigram_table_writer, t, posting_data_offset, &mut merged_entries)?;
+            self.write_merged_posting(
+                &mut f,
+                &mut trigram_table_writer,
+                t,
+                posting_data_offset,
+                &mut merged_entries,
+            )?;
             global_trigram_count += 1;
         }
 
@@ -574,7 +637,7 @@ impl Builder {
         let trigram_table_offset = f.stream_position()?;
         trigram_table_writer.flush()?;
         drop(trigram_table_writer);
-        
+
         let mut trigram_table_file = File::open(&temp_trigrams_path)?;
         std::io::copy(&mut trigram_table_file, &mut f)?;
         let trigram_table_size = f.stream_position()? - trigram_table_offset;
@@ -594,12 +657,20 @@ impl Builder {
         let name_index_offset = f.stream_position()?;
         let name_index_size = 0u64;
 
-        let created_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
+        let created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
         let mut header_bytes = [0u8; HEADER_SIZE];
         header_bytes[0..4].copy_from_slice(&MAGIC);
         header_bytes[0x04..0x06].copy_from_slice(&VERSION_MAJOR.to_le_bytes());
         header_bytes[0x06..0x08].copy_from_slice(&VERSION_MINOR.to_le_bytes());
-        header_bytes[0x08..0x10].copy_from_slice(&(flags::HAS_BLOOM_FILTERS | flags::HAS_CONTENT_HASHES | flags::POSTING_LISTS_CHECKSUMMED).to_le_bytes());
+        header_bytes[0x08..0x10].copy_from_slice(
+            &(flags::HAS_BLOOM_FILTERS
+                | flags::HAS_CONTENT_HASHES
+                | flags::POSTING_LISTS_CHECKSUMMED)
+                .to_le_bytes(),
+        );
         header_bytes[0x10..0x18].copy_from_slice(&created_at.to_le_bytes());
         header_bytes[0x18..0x20].copy_from_slice(&self.stats.bytes_scanned.to_le_bytes());
         header_bytes[0x20..0x24].copy_from_slice(&self.file_count.to_le_bytes());
@@ -626,12 +697,14 @@ impl Builder {
         drop(f);
 
         fs::rename(&tmp_path, &final_path)?;
-        
+
         let _ = fs::remove_file(self.ix_dir.join("shard.ix.tmp.files"));
         let _ = fs::remove_file(self.ix_dir.join("shard.ix.tmp.blooms"));
         let _ = fs::remove_file(self.ix_dir.join("shard.ix.tmp.strings"));
         let _ = fs::remove_file(&temp_trigrams_path);
-        for path in &self.temp_runs { let _ = fs::remove_file(path); }
+        for path in &self.temp_runs {
+            let _ = fs::remove_file(path);
+        }
         self.temp_runs.clear();
 
         Ok(final_path)
@@ -639,12 +712,17 @@ impl Builder {
 
     fn merge_to_run(&self, run_paths: &[PathBuf], out_path: &Path) -> Result<()> {
         let mut runs = Vec::new();
-        for path in run_paths { runs.push(RunIterator::new(path)?); }
+        for path in run_paths {
+            runs.push(RunIterator::new(path)?);
+        }
         let mut heap = BinaryHeap::new();
         let mut current_items = vec![None; runs.len()];
         for (i, run) in runs.iter_mut().enumerate() {
             if let Some(item) = run.next_trigram()? {
-                heap.push(MergeItem { tri: item.0, run_idx: i });
+                heap.push(MergeItem {
+                    tri: item.0,
+                    run_idx: i,
+                });
                 current_items[i] = Some(item);
             }
         }
@@ -662,31 +740,52 @@ impl Builder {
             let item = current_items[run_idx].take().unwrap();
             merged_entries.extend(item.1);
             if let Some(next_item) = runs[run_idx].next_trigram()? {
-                heap.push(MergeItem { tri: next_item.0, run_idx });
+                heap.push(MergeItem {
+                    tri: next_item.0,
+                    run_idx,
+                });
                 current_items[run_idx] = Some(next_item);
             }
         }
-        if let Some(t) = current_tri { self.write_run_entry(&mut out, t, &mut merged_entries)?; }
+        if let Some(t) = current_tri {
+            self.write_run_entry(&mut out, t, &mut merged_entries)?;
+        }
         out.flush()?;
         Ok(())
     }
 
-    fn write_run_entry<W: Write>(&self, w: &mut W, tri: Trigram, entries: &mut [PostingEntry]) -> Result<()> {
+    fn write_run_entry<W: Write>(
+        &self,
+        w: &mut W,
+        tri: Trigram,
+        entries: &mut [PostingEntry],
+    ) -> Result<()> {
         entries.sort_by_key(|e| e.file_id);
         w.write_all(&tri.to_le_bytes())?;
         w.write_all(&(entries.len() as u32).to_le_bytes())?;
         for entry in entries {
             w.write_all(&entry.file_id.to_le_bytes())?;
             w.write_all(&(entry.offsets.len() as u32).to_le_bytes())?;
-            for off in &entry.offsets { w.write_all(&off.to_le_bytes())?; }
+            for off in &entry.offsets {
+                w.write_all(&off.to_le_bytes())?;
+            }
         }
         Ok(())
     }
 
-    fn write_merged_posting<W: Write + Seek>(&self, f: &mut W, table: &mut W, tri: Trigram, base_off: u64, entries: &mut [PostingEntry]) -> Result<()> {
+    fn write_merged_posting<W: Write + Seek>(
+        &self,
+        f: &mut W,
+        table: &mut W,
+        tri: Trigram,
+        base_off: u64,
+        entries: &mut [PostingEntry],
+    ) -> Result<()> {
         entries.sort_by_key(|e| e.file_id);
         let count = entries.len() as u32;
-        let list = PostingList { entries: entries.to_vec() };
+        let list = PostingList {
+            entries: entries.to_vec(),
+        };
         let encoded = list.encode();
         let offset = f.stream_position()? - base_off;
         f.write_all(&encoded)?;
@@ -702,7 +801,9 @@ impl Builder {
     fn align_to_8<W: Write + Seek>(&self, mut w: W) -> std::io::Result<u64> {
         let pos = w.stream_position()?;
         let padding = (8 - (pos % 8)) % 8;
-        if padding > 0 { w.write_all(&vec![0u8; padding as usize])?; }
+        if padding > 0 {
+            w.write_all(&vec![0u8; padding as usize])?;
+        }
         w.stream_position()
     }
 }

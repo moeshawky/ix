@@ -1,15 +1,16 @@
 //! Transparent decompression by file extension.
 
+use crate::error::Result;
 use std::io::Read;
 use std::path::Path;
-use crate::error::Result;
 
 /// Detect compression from extension, return streaming reader.
 /// Returns None if not a compressed file or feature not enabled.
-pub fn maybe_decompress<'a>(path: &Path, raw: &'a [u8]) -> Result<Option<Box<dyn Read + Send + 'a>>> {
-    let ext = path.extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+pub fn maybe_decompress<'a>(
+    path: &Path,
+    raw: &'a [u8],
+) -> Result<Option<Box<dyn Read + Send + 'a>>> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     match ext {
         #[cfg(feature = "decompress")]
         "gz" => {
