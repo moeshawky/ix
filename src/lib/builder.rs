@@ -425,7 +425,7 @@ impl Builder {
         if ret != 0 {
             return Err(std::io::Error::last_os_error());
         }
-        Ok(stat.f_bavail * stat.f_frsize)
+        Ok((stat.f_bavail as u64) * (stat.f_frsize as u64))
     }
 
     fn process_file(&mut self, path: PathBuf) -> Result<bool> {
