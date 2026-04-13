@@ -116,10 +116,36 @@ impl Ord for MergeItem {
     }
 }
 
+impl Drop for Builder {
+    fn drop(&mut self) {
+        let _ = Self::cleanup_tmp_files(&self.ix_dir);
+    }
+}
+
 impl Builder {
+    fn cleanup_tmp_files(ix_dir: &Path) -> Result<()> {
+        if !ix_dir.exists() {
+            return Ok(());
+        }
+        for entry in fs::read_dir(ix_dir)? {
+            if let Ok(entry) = entry {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with("shard.ix.tmp")
+                    || name.starts_with("shard.ix.run.")
+                    || name.starts_with("shard.ix.merged.")
+                {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn new(root: &Path) -> Result<Self> {
         let ix_dir = root.join(".ix");
         fs::create_dir_all(&ix_dir)?;
+
+        Self::cleanup_tmp_files(&ix_dir)?;
 
         let files_tmp = ix_dir.join("shard.ix.tmp.files");
         let blooms_tmp = ix_dir.join("shard.ix.tmp.blooms");
@@ -335,7 +361,33 @@ impl Builder {
         Ok(output_path)
     }
 
+    pub fn reset(&mut self) -> Result<()> {
+        let files_tmp = self.ix_dir.join("shard.ix.tmp.files");
+        let blooms_tmp = self.ix_dir.join("shard.ix.tmp.blooms");
+        let strings_tmp = self.ix_dir.join("shard.ix.tmp.strings");
+
+        self.files_writer = BufWriter::new(File::create(&files_tmp)?);
+        self.blooms_writer = BufWriter::new(File::create(&blooms_tmp)?);
+
+        let mut strings_writer = BufWriter::new(File::create(&strings_tmp)?);
+        strings_writer.write_all(&1u32.to_le_bytes())?;
+        strings_writer.write_all(&0u16.to_le_bytes())?;
+        strings_writer.write_all(&0u16.to_le_bytes())?;
+        strings_writer.write_all(&[0u8; 2])?;
+        self.strings_writer = strings_writer;
+
+        self.file_count = 0;
+        self.postings.clear();
+        self.postings_count = 0;
+        self.temp_runs.clear();
+        self.stats = BuildStats::default();
+        self.dead_ends.clear();
+
+        Ok(())
+    }
+
     pub fn update(&mut self, _changed_files: &[PathBuf]) -> Result<PathBuf> {
+        self.reset()?;
         self.build()
     }
 
