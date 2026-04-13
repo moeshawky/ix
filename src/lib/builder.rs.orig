@@ -423,8 +423,7 @@ impl Builder {
         if ret != 0 {
             return Err(std::io::Error::last_os_error());
         }
-        #[allow(clippy::unnecessary_cast, clippy::useless_conversion)]
-        Ok((stat.f_bavail as u64) * (stat.f_frsize as u64))
+        Ok(u64::try_from(stat.f_bavail).unwrap_or(0) * u64::try_from(stat.f_frsize).unwrap_or(0))
     }
 
     fn process_file(&mut self, path: PathBuf) -> Result<bool> {
