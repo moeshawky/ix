@@ -295,7 +295,7 @@ fn main() {
 }
 
 #[cfg(feature = "notify")]
-fn handle_service(#[allow(unused_variables)] cmd: ServiceCommand) -> ix::error::Result<()> {
+fn handle_service(cmd: ServiceCommand) -> ix::error::Result<()> {
     #[cfg(target_os = "linux")]
     {
         let home =

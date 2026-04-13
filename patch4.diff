@@ -1,0 +1,11 @@
+--- src/bin/ix.rs
++++ src/bin/ix.rs
+@@ -295,7 +295,7 @@
+ }
+
+ #[cfg(not(target_os = "windows"))]
+-fn handle_service(cmd: ServiceCommand) -> ix::error::Result<()> {
++fn handle_service(_cmd: ServiceCommand) -> ix::error::Result<()> {
+     Err(ix::error::Error::Io(std::io::Error::new(
+         std::io::ErrorKind::Unsupported,
+         "Service management is only supported on Windows",
