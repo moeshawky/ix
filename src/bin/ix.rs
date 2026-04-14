@@ -12,7 +12,7 @@ use ix::planner::Planner;
 use ix::reader::Reader;
 use ix::scanner::Scanner;
 use regex::Regex;
-use std::io::{self, IsTerminal, Read};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 #[derive(Parser)]
 #[command(
@@ -191,9 +191,7 @@ fn main() {
             .unwrap();
     }
 
-    let is_stdin_pipe = !io::stdin().is_terminal();
-
-    if let Some(service) = cli.service {
+if let Some(service) = cli.service {
         if let Err(e) = handle_service(service) {
             eprintln!("Error: {}", e);
             std::process::exit(1);
@@ -223,21 +221,14 @@ fn main() {
         }
     }
 
-    // Determine path and handle build action
-    let search_path = if let Some(ref p) = cli.path {
-        p.clone()
-    } else {
-        if cli.build {
-            PathBuf::from(".")
-        } else if is_stdin_pipe && cli.pattern.is_some() {
-            // Special path to signal stdin search
-            PathBuf::from("(stdin)")
-        } else {
-            PathBuf::from(".")
-        }
-    };
+// Determine path and handle build action
+let search_path = if let Some(ref p) = cli.path {
+    p.clone()
+} else {
+    PathBuf::from(".")
+};
 
-    if cli.build {
+if cli.build {
         if let Err(e) = do_build(&search_path, cli.decompress, cli.force) {
             eprintln!("Error: {}", e);
             std::process::exit(1);

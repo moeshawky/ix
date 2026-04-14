@@ -1,4 +1,4 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ix::builder::Builder;
 use ix::executor::Executor;
 use ix::planner::Planner;
@@ -47,7 +47,7 @@ fn bench_search(c: &mut Criterion) {
         fs::write(root.join(format!("file_{}.txt", i)), content).unwrap();
     }
 
-    let mut builder = Builder::new(root);
+    let mut builder = Builder::new(root).unwrap();
     builder.build().unwrap();
 
     let index_path = root.join(".ix/shard.ix");
