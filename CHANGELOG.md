@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2] - 2026-04-14
+
+### Fixed
+- **CRITICAL**: Removed LLMOSafe cognitive filter that silently skipped ~10 source files during indexing
+- Missing files included `src/bin/ix.rs`, `src/bin/ixd.rs`, and several `src/lib/*.rs` files
+- Search results are now complete - all source files are properly indexed
+
+### Technical Details
+- Removed `cognitive_memory` field from Builder struct
+- Removed `sift_perceptions` content filtering during index build
+- LLMOSafe is still used for ResourceGuard (memory safety) and ixd daemon safety decisions
+- Index now includes ALL non-binary, non-oversized source files
+
 ## [0.3.1] - 2026-04-14
 
 ### Fixed
