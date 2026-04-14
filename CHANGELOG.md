@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.2.9] - 2026-04-14
+## [0.3.0] - 2026-04-14
 
 ### Changed
 - **BREAKING**: Posting lists now use ZSTD compression (format v1.2)
