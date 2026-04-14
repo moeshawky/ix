@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.3] - 2026-04-15
+
+### Fixed
+- **CRITICAL**: Fixed stale beacon detection that caused false "managed by ixd" errors due to PID reuse
+- `is_live()` now verifies process identity via `/proc/{pid}/comm` before declaring beacon valid
+- Prevents orphan `.ix.run.*` file accumulation when ixd crashes and PID is reused
+
+### Technical Details
+- `is_live()` was checking only PID existence, not process identity
+- Linux reuses PIDs, so a crashed ixd's PID could be assigned to an unrelated process
+- This caused `ix` to incorrectly believe ixd was still running
+- Now reads `/proc/{pid}/comm` and verifies it contains "ixd"
+
 ## [0.3.2] - 2026-04-14
 
 ### Fixed

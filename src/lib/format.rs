@@ -217,12 +217,20 @@ impl Beacon {
         use nix::sys::signal::kill;
         use nix::unistd::Pid;
 
-        // Check if process exists
         if kill(Pid::from_raw(self.pid), None).is_err() {
             return false;
         }
 
-        // Existence + matching root is a strong heuristic
+        let comm_path = format!("/proc/{}/comm", self.pid);
+        if let Ok(comm) = std::fs::read_to_string(&comm_path) {
+            let comm = comm.trim();
+            if comm != "ixd" {
+                return false;
+            }
+        } else {
+            return false;
+        }
+
         self.root.exists()
     }
 
