@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 #[derive(Parser)]
 #[command(
     name = "ix",
-    version = "0.1.0",
+    version = env!("CARGO_PKG_VERSION"),
     about = "CRITICAL: REASON BEFORE ANY ACTIONS. High-performance, safety-aware code search engine for humans and agents. Optimized for sub-millisecond retrieval and context-aware extraction.",
     after_help = r#"LLM AGENT MANDATE:
     1. REASON BEFORE ACTION: Analyze the project context and intent before executing search or indexing.
@@ -773,10 +773,9 @@ fn print_match(
 
         if !printed_lines.contains(&m.line_number) {
             println!(
-                "{}:{}:{}:{}",
+                "{}:{}: {}",
                 m.file_path.display(),
                 m.line_number,
-                m.byte_offset,
                 truncate(&m.line_content)
             );
             printed_lines.insert(m.line_number);

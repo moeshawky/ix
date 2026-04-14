@@ -193,22 +193,22 @@ impl Builder {
         Ok(())
     }
 
-pub fn build(&mut self) -> Result<PathBuf> {
-    // Cleanup old intermediate shard files before building
-    if self.ix_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&self.ix_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name_str = name.to_string_lossy();
-                if name_str.starts_with("shard.ix.run.") || name_str.starts_with("shard.ix.merged.") {
-                    let _ = std::fs::remove_file(entry.path());
+    pub fn build(&mut self) -> Result<PathBuf> {
+        // Cleanup old intermediate shard files before building
+        if self.ix_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&self.ix_dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    let name_str = name.to_string_lossy();
+                    if name_str.starts_with("shard.ix.run.") || name_str.starts_with("shard.ix.merged.") {
+                        let _ = std::fs::remove_file(entry.path());
+                    }
                 }
             }
         }
-    }
 
-    let start = Instant::now();
-    let root = self.root.clone();
+        let start = Instant::now();
+        let root = self.root.clone();
 
         // LLMOSafe Formal Law: Sensitive filesystem traversal (Root)
         if root.to_string_lossy() == "/" {
