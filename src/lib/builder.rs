@@ -195,19 +195,17 @@ impl Builder {
 
     pub fn build(&mut self) -> Result<PathBuf> {
         // Cleanup old intermediate shard files before building
-        if self.ix_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&self.ix_dir) {
+        if self.ix_dir.exists()
+            && let Ok(entries) = std::fs::read_dir(&self.ix_dir) {
                 for entry in entries.flatten() {
                     let name = entry.file_name();
                     let name_str = name.to_string_lossy();
-                    if name_str.starts_with("shard.ix.run.") || name_str.starts_with("shard.ix.merged.") {
-                        if let Err(e) = std::fs::remove_file(entry.path()) {
+                    if (name_str.starts_with("shard.ix.run.") || name_str.starts_with("shard.ix.merged."))
+                        && let Err(e) = std::fs::remove_file(entry.path()) {
                             tracing::warn!("Failed to cleanup shard file {}: {}", name_str, e);
                         }
-                    }
                 }
             }
-        }
 
         let start = Instant::now();
         let root = self.root.clone();

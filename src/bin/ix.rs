@@ -816,7 +816,7 @@ fn check_stale(reader: &Reader, index_root: &Path) -> ix::error::Result<()> {
     if last_mod > reader.header.created_at.saturating_add(grace_period_micros) {
         let last_built_secs = (reader.header.created_at / 1_000_000) as i64;
         let datetime = chrono::DateTime::from_timestamp(last_built_secs, 0)
-            .unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH);
+            .unwrap_or(chrono::DateTime::UNIX_EPOCH);
         let time_str = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
         eprintln!(
             "ix: index is stale (last built: {}). Run 'ix --build' to update.",

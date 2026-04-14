@@ -8,7 +8,7 @@ pub const MAGIC: [u8; 4] = [0x49, 0x58, 0x30, 0x31];
 
 /// Current format version
 pub const VERSION_MAJOR: u16 = 1;
-pub const VERSION_MINOR: u16 = 1;
+pub const VERSION_MINOR: u16 = 2;
 
 /// Fixed header size (256 bytes)
 pub const HEADER_SIZE: usize = 256;
