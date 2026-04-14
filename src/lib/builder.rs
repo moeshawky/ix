@@ -201,7 +201,9 @@ impl Builder {
                     let name = entry.file_name();
                     let name_str = name.to_string_lossy();
                     if name_str.starts_with("shard.ix.run.") || name_str.starts_with("shard.ix.merged.") {
-                        let _ = std::fs::remove_file(entry.path());
+                        if let Err(e) = std::fs::remove_file(entry.path()) {
+                            tracing::warn!("Failed to cleanup shard file {}: {}", name_str, e);
+                        }
                     }
                 }
             }
@@ -559,7 +561,9 @@ impl Builder {
                 self.merge_to_run(chunk, &out_path)?;
                 next_generation.push(out_path);
                 for p in chunk {
-                    let _ = fs::remove_file(p);
+                    if let Err(e) = fs::remove_file(p) {
+                        tracing::warn!("Failed to cleanup temp run {}: {}", p.display(), e);
+                    }
                 }
             }
             self.temp_runs = next_generation;
@@ -709,14 +713,31 @@ impl Builder {
         f.flush()?;
         drop(f);
 
+        // Atomic swap: backup old index, rename new to final
+        let backup_path = self.ix_dir.join("shard.ix.bak");
+        let old_index_exists = final_path.exists();
+        if old_index_exists {
+            // Remove old backup if exists
+            let _ = fs::remove_file(&backup_path);
+            // Backup current index
+            if let Err(e) = fs::rename(&final_path, &backup_path) {
+                tracing::warn!("Failed to backup existing index: {}", e);
+            }
+        }
         fs::rename(&tmp_path, &final_path)?;
+        // Remove backup after successful rename
+        if old_index_exists {
+            let _ = fs::remove_file(&backup_path);
+        }
 
         let _ = fs::remove_file(self.ix_dir.join("shard.ix.tmp.files"));
         let _ = fs::remove_file(self.ix_dir.join("shard.ix.tmp.blooms"));
         let _ = fs::remove_file(self.ix_dir.join("shard.ix.tmp.strings"));
         let _ = fs::remove_file(&temp_trigrams_path);
         for path in &self.temp_runs {
-            let _ = fs::remove_file(path);
+            if let Err(e) = fs::remove_file(path) {
+                tracing::warn!("Failed to cleanup temp run {}: {}", path.display(), e);
+            }
         }
         self.temp_runs.clear();
 
