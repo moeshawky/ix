@@ -12,7 +12,7 @@ use crate::posting::{PostingEntry, PostingList};
 use crate::trigram::{Extractor, Trigram};
 use ignore::WalkBuilder;
 use libc;
-use llmosafe::{ResourceGuard, WorkingMemory, sift_perceptions};
+use llmosafe::ResourceGuard;
 use memmap2::Mmap;
 use std::collections::{BinaryHeap, HashMap};
 use std::fs::{self, File};
@@ -35,12 +35,11 @@ pub struct Builder {
     postings_count: usize,
     temp_runs: Vec<PathBuf>,
 
-    extractor: Extractor,
-    stats: BuildStats,
-    decompress: bool,
-    resource_guard: Option<ResourceGuard>,
-    cognitive_memory: WorkingMemory<128>,
-    dead_ends: Vec<PathBuf>,
+extractor: Extractor,
+stats: BuildStats,
+decompress: bool,
+resource_guard: Option<ResourceGuard>,
+dead_ends: Vec<PathBuf>,
 }
 
 #[derive(Default, Debug)]
@@ -143,14 +142,13 @@ impl Builder {
             strings_writer,
             postings: HashMap::new(),
             postings_count: 0,
-            temp_runs: Vec::new(),
-            extractor: Extractor::new(),
-            stats: BuildStats::default(),
-            decompress: false,
-            resource_guard: None,
-            cognitive_memory: WorkingMemory::new(1000), // Standard surprise threshold
-            dead_ends: Vec::new(),
-        })
+temp_runs: Vec::new(),
+extractor: Extractor::new(),
+stats: BuildStats::default(),
+decompress: false,
+resource_guard: None,
+dead_ends: Vec::new(),
+})
     }
 
     pub fn with_resource_guard(mut self, guard: ResourceGuard) -> Self {
@@ -437,29 +435,12 @@ impl Builder {
         };
 
         let data = &raw_data[..];
-        if is_binary(data) {
-            self.stats.files_skipped_binary += 1;
-            return Ok(false);
-        }
+if is_binary(data) {
+    self.stats.files_skipped_binary += 1;
+    return Ok(false);
+}
 
-        // LLMOSafe Tier 3: Perceptual Sifting (Cognitive Layer)
-        // Evaluate file utility and bias (Halo signal)
-        let sample_len = data.len().min(2048);
-        let sample = String::from_utf8_lossy(&data[..sample_len]);
-        let objective = "High-signal source code for semantic indexing";
-        let sifted = sift_perceptions(&[sample.as_ref()], objective);
-
-        if let Err(e) = self.cognitive_memory.update(sifted) {
-            tracing::warn!(
-                "LLMOSafe Cognitive Guard rejection for {}: {:?}",
-                path.display(),
-                e
-            );
-            // Skip files that don't pass the safety/utility check (e.g., high bias/halo or high surprise)
-            return Ok(false);
-        }
-
-        let content_hash = xxhash_rust::xxh64::xxh64(data, 0);
+let content_hash = xxhash_rust::xxh64::xxh64(data, 0);
         let pairs = self.extractor.extract_with_offsets(data);
 
         let file_id = self.file_count;
