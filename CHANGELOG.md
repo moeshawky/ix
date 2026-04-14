@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-04-14
+
+### Fixed
+- **CRITICAL**: Removed broken auto-stdin detection that caused empty results when running in non-TTY environments (bash tools, pi, CI)
+- Root cause: Code incorrectly assumed stdin search when stdin was not a terminal
+- Now requires explicit `(stdin)` path argument for stdin search (follows Unix convention)
+
+### Technical Details
+- Removed `is_stdin_pipe` detection logic in `ix.rs`
+- Removed unused `IsTerminal` import
+- Fixed benchmark build error in `benches/search.rs`
+
 ## [0.3.0] - 2026-04-14
 
 ### Changed
