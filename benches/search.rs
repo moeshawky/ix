@@ -37,7 +37,7 @@ fn bench_posting_decode(c: &mut Criterion) {
     });
 }
 
-fn bench_search(c: &mut Criterion) {
+fn bench_search_literal(c: &mut Criterion) {
     let dir = tempdir().unwrap();
     let root = dir.path();
 
@@ -56,7 +56,7 @@ fn bench_search(c: &mut Criterion) {
     let plan = Planner::plan("hello", false);
     let options = ix::executor::QueryOptions::default();
 
-    c.bench_function("search_100_files_1mb_total", |b| {
+    c.bench_function("search_literal_100_files_1mb_total", |b| {
         b.iter(|| {
             executor.execute(black_box(&plan), &options).unwrap();
         })
@@ -67,6 +67,6 @@ criterion_group!(
     benches,
     bench_trigram_extraction,
     bench_posting_decode,
-    bench_search
+    bench_search_literal
 );
 criterion_main!(benches);
