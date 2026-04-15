@@ -505,7 +505,7 @@ impl<'a> Executor<'a> {
             if let Some(m) = regex.find(&line) {
                 let context_before_vec: Vec<String> = context_before
                     .iter()
-                    .map(|s: &String| s.trim_end().to_string())
+                    .cloned()
                     .collect();
 
                 let new_match = Match {
@@ -538,7 +538,7 @@ impl<'a> Executor<'a> {
             }
 
             if options.context_lines > 0 {
-                context_before.push_back(line.clone());
+                context_before.push_back(trimmed_line.clone());
                 if context_before.len() > options.context_lines {
                     context_before.pop_front();
                 }
