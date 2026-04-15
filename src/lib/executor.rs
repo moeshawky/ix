@@ -168,7 +168,7 @@ impl<'a> Executor<'a> {
                 files_verified.fetch_add(1, Ordering::Relaxed);
                 bytes_verified.fetch_add(file_info.size_bytes, Ordering::Relaxed);
 
-                let matches = self.verify_file(&file_info, &regex, options).ok()?;
+                let matches = self.verify_file(&file_info, regex, options).ok()?;
                 matches_found.fetch_add(matches.len() as u32, Ordering::Relaxed);
                 Some(matches)
             })

@@ -384,6 +384,7 @@ dead_ends: Vec::new(),
         if ret != 0 {
             return Err(std::io::Error::last_os_error());
         }
+        #[allow(clippy::unnecessary_cast)]
         Ok(stat.f_bavail as u64 * stat.f_frsize as u64)
     }
 
