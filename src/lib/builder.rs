@@ -384,7 +384,8 @@ dead_ends: Vec::new(),
         if ret != 0 {
             return Err(std::io::Error::last_os_error());
         }
-        Ok((stat.f_bavail as u64) * (stat.f_frsize as u64))
+        #[allow(clippy::useless_conversion)]
+        Ok(u64::from(stat.f_bavail) * u64::from(stat.f_frsize))
     }
 
     fn process_file(&mut self, path: PathBuf) -> Result<bool> {
