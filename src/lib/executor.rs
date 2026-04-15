@@ -67,9 +67,11 @@ impl<'a> Executor<'a> {
         options: &QueryOptions,
     ) -> Result<(Vec<Match>, QueryStats)> {
         match plan {
-            QueryPlan::Literal { pattern, trigrams, regex } => {
-                self.execute_literal(pattern, trigrams, regex, options)
-            }
+            QueryPlan::Literal {
+                pattern,
+                trigrams,
+                regex,
+            } => self.execute_literal(pattern, trigrams, regex, options),
             QueryPlan::RegexWithLiterals {
                 regex,
                 required_trigram_sets,

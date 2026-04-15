@@ -35,11 +35,11 @@ pub struct Builder {
     postings_count: usize,
     temp_runs: Vec<PathBuf>,
 
-extractor: Extractor,
-stats: BuildStats,
-decompress: bool,
-resource_guard: Option<ResourceGuard>,
-dead_ends: Vec<PathBuf>,
+    extractor: Extractor,
+    stats: BuildStats,
+    decompress: bool,
+    resource_guard: Option<ResourceGuard>,
+    dead_ends: Vec<PathBuf>,
 }
 
 #[derive(Default, Debug)]
@@ -142,13 +142,13 @@ impl Builder {
             strings_writer,
             postings: HashMap::new(),
             postings_count: 0,
-temp_runs: Vec::new(),
-extractor: Extractor::new(),
-stats: BuildStats::default(),
-decompress: false,
-resource_guard: None,
-dead_ends: Vec::new(),
-})
+            temp_runs: Vec::new(),
+            extractor: Extractor::new(),
+            stats: BuildStats::default(),
+            decompress: false,
+            resource_guard: None,
+            dead_ends: Vec::new(),
+        })
     }
 
     pub fn with_resource_guard(mut self, guard: ResourceGuard) -> Self {
@@ -194,16 +194,19 @@ dead_ends: Vec::new(),
     pub fn build(&mut self) -> Result<PathBuf> {
         // Cleanup old intermediate shard files before building
         if self.ix_dir.exists()
-            && let Ok(entries) = std::fs::read_dir(&self.ix_dir) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name();
-                    let name_str = name.to_string_lossy();
-                    if (name_str.starts_with("shard.ix.run.") || name_str.starts_with("shard.ix.merged."))
-                        && let Err(e) = std::fs::remove_file(entry.path()) {
-                            tracing::warn!("Failed to cleanup shard file {}: {}", name_str, e);
-                        }
+            && let Ok(entries) = std::fs::read_dir(&self.ix_dir)
+        {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if (name_str.starts_with("shard.ix.run.")
+                    || name_str.starts_with("shard.ix.merged."))
+                    && let Err(e) = std::fs::remove_file(entry.path())
+                {
+                    tracing::warn!("Failed to cleanup shard file {}: {}", name_str, e);
                 }
             }
+        }
 
         let start = Instant::now();
         let root = self.root.clone();
@@ -436,12 +439,12 @@ dead_ends: Vec::new(),
         };
 
         let data = &raw_data[..];
-if is_binary(data) {
-    self.stats.files_skipped_binary += 1;
-    return Ok(false);
-}
+        if is_binary(data) {
+            self.stats.files_skipped_binary += 1;
+            return Ok(false);
+        }
 
-let content_hash = xxhash_rust::xxh64::xxh64(data, 0);
+        let content_hash = xxhash_rust::xxh64::xxh64(data, 0);
         let pairs = self.extractor.extract_with_offsets(data);
 
         let file_id = self.file_count;

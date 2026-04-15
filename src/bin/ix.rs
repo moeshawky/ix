@@ -191,7 +191,7 @@ fn main() {
             .unwrap();
     }
 
-if let Some(service) = cli.service {
+    if let Some(service) = cli.service {
         if let Err(e) = handle_service(service) {
             eprintln!("Error: {}", e);
             std::process::exit(1);
@@ -221,14 +221,14 @@ if let Some(service) = cli.service {
         }
     }
 
-// Determine path and handle build action
-let search_path = if let Some(ref p) = cli.path {
-    p.clone()
-} else {
-    PathBuf::from(".")
-};
+    // Determine path and handle build action
+    let search_path = if let Some(ref p) = cli.path {
+        p.clone()
+    } else {
+        PathBuf::from(".")
+    };
 
-if cli.build {
+    if cli.build {
         if let Err(e) = do_build(&search_path, cli.decompress, cli.force) {
             eprintln!("Error: {}", e);
             std::process::exit(1);
