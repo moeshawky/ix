@@ -67,8 +67,8 @@ impl<'a> Executor<'a> {
         options: &QueryOptions,
     ) -> Result<(Vec<Match>, QueryStats)> {
         match plan {
-            QueryPlan::Literal { pattern, trigrams } => {
-                self.execute_literal(pattern, trigrams, options)
+            QueryPlan::Literal { pattern, trigrams, regex } => {
+                self.execute_literal(pattern, trigrams, regex, options)
             }
             QueryPlan::RegexWithLiterals {
                 regex,
@@ -84,8 +84,9 @@ impl<'a> Executor<'a> {
 
     fn execute_literal(
         &self,
-        pattern: &[u8],
+        _pattern: &[u8],
         trigrams: &[Trigram],
+        regex: &Regex,
         options: &QueryOptions,
     ) -> Result<(Vec<Match>, QueryStats)> {
         let mut stats = QueryStats::default();
@@ -133,8 +134,6 @@ impl<'a> Executor<'a> {
         }
 
         stats.candidate_files = candidates.len() as u32;
-
-        let regex = Regex::new(&regex::escape(&String::from_utf8_lossy(pattern)))?;
 
         // Parallel verification
         let files_verified = AtomicU32::new(0);
