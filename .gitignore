@@ -1,0 +1,42 @@
+# Build output
+/target/
+
+# ix index files
+.ix/
+*.ix
+*.ix.tmp
+
+# Dependencies lock (uncomment if you want to commit it)
+# Cargo.lock
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Agentic / dev artifacts
+.gemini/
+docs/guidelines/
+AGENTS.md
+PROMPT.md
+AGENTIC_README.md
+ABOUT.md
+Testing IXD Safety In Docker.md
+mcp_config.json
+test_results/
+tests/docker/
+tests/docker_llmosafe_vendor/
+
+# Coverage / temporary
+/lcov.info
+ignored_file.txt
+Dockerfile.*
+
+# Keep scripts/ directory tracked
+!scripts/*.sh
