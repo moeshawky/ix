@@ -889,7 +889,7 @@ dependencies = [
 
 [[package]]
 name = "moeix"
-version = "0.5.3"
+version = "0.5.2"
 dependencies = [
  "bzip2",
  "chrono",
