@@ -469,12 +469,22 @@ fn client_read_loop(
                     }
                 };
 
-                if let Ok(mut write_stream) = stream.try_clone() {
-                    let mut line = serde_json::to_string(&response).unwrap_or_default();
-                    line.push('\n');
-                    let _ = write_stream.write_all(line.as_bytes());
-                    let _ = write_stream.flush();
+if let Ok(mut write_stream) = stream.try_clone() {
+        match serde_json::to_string(&response) {
+            Ok(mut line) => {
+                line.push('\n');
+                if write_stream.write_all(line.as_bytes()).is_err()
+                    || write_stream.flush().is_err()
+                {
+                    break;
                 }
+            }
+            Err(e) => {
+                tracing::warn!("ixd: failed to serialize query response: {e}");
+                break;
+            }
+        }
+    }
             }
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
             Err(_) => break,
