@@ -161,10 +161,11 @@ pub fn run_daemon(path: &std::path::Path) -> crate::error::Result<()> {
 
     let running = Arc::new(AtomicBool::new(true));
     let r = std::sync::Arc::clone(&running);
-    ctrlc::set_handler(move || {
+    if let Err(e) = ctrlc::set_handler(move || {
         r.store(false, Ordering::SeqCst);
-    })
-    .expect("Error setting Ctrl-C handler");
+    }) {
+        eprintln!("[ix] warning: could not set Ctrl-C handler: {e}");
+    }
 
     while running.load(Ordering::SeqCst) {
         match rx.recv_timeout(Duration::from_secs(5)) {

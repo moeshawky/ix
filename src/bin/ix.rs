@@ -66,9 +66,9 @@ struct Cli {
     #[arg(value_name = "PATTERN")]
     pattern: Option<String>,
 
-    /// The directory to search in.
-    #[arg(value_name = "PATH")]
-    path: Option<PathBuf>,
+    /// The directories to search in (one or more).
+    #[arg(value_name = "PATH", num_args = 0..)]
+    path: Vec<PathBuf>,
 
     /// Build or update the .ix index for the target directory.
     #[arg(
@@ -228,10 +228,16 @@ fn main() {
     #[cfg(feature = "notify")]
     {
         if cli.daemon {
-            let path = cli.path.unwrap_or_else(|| PathBuf::from("."));
-            if let Err(e) = ix::run_daemon(&path) {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
+            let paths: Vec<PathBuf> = if cli.path.is_empty() {
+                vec![PathBuf::from(".")]
+            } else {
+                cli.path.clone()
+            };
+            for path in &paths {
+                if let Err(e) = ix::run_daemon(path) {
+                    eprintln!("Error watching {}: {e}", path.display());
+                    std::process::exit(1);
+                }
             }
             return;
         }
@@ -251,7 +257,7 @@ fn main() {
     let search_path = if let Some(ref build_path) = cli.build {
         // Build mode: path comes from --build flag, or CWD if not specified
         build_path.clone()
-    } else if let Some(ref p) = cli.path {
+    } else if let Some(p) = cli.path.first() {
         p.clone()
     } else {
         PathBuf::from(".")

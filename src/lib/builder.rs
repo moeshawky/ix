@@ -46,6 +46,7 @@ pub struct Builder {
     resource_guard: Option<ResourceGuard>,
     dead_ends: Vec<PathBuf>,
     max_file_size: u64,
+    committed: bool,
 }
 
 /// Accumulated metrics collected during a build run.
@@ -169,6 +170,7 @@ impl Builder {
             resource_guard: None,
             dead_ends: Vec::new(),
             max_file_size: 100 * 1024 * 1024,
+            committed: false,
         })
     }
 
@@ -231,6 +233,27 @@ impl Builder {
     ///
     /// Returns an error if the build process fails (I/O, disk space, etc.).
     pub fn build(&mut self) -> Result<PathBuf> {
+        // Upfront disk space check: estimate required bytes before any I/O.
+        // Peak overhead is ~3× existing shard (old + tmp + bak + runs).
+        // For first builds, use a 200 MB floor.
+        if let Ok(free) = Self::free_bytes_at(&self.ix_dir) {
+            let existing_shard_size =
+                fs::metadata(self.ix_dir.join("shard.ix")).map_or(0, |m| m.len());
+            let required = if existing_shard_size > 0 {
+                existing_shard_size.saturating_mul(3)
+            } else {
+                200 * 1024 * 1024 // 200 MB floor for first builds
+            };
+            if free < required {
+                return Err(Error::Io(std::io::Error::other(format!(
+                    "insufficient disk space: {} MB free, need ≥{} MB (path: {})",
+                    free / 1024 / 1024,
+                    required / 1024 / 1024,
+                    self.ix_dir.display(),
+                ))));
+            }
+        }
+
         // Cleanup old intermediate shard files before building
         if self.ix_dir.exists()
             && let Ok(entries) = std::fs::read_dir(&self.ix_dir)
@@ -422,6 +445,30 @@ impl Builder {
         Ok(stat.f_bavail as u64 * stat.f_frsize as u64)
     }
 
+    fn cleanup_temp_files(&self) {
+        let paths = [
+            self.ix_dir.join("shard.ix.tmp.files"),
+            self.ix_dir.join("shard.ix.tmp.blooms"),
+            self.ix_dir.join("shard.ix.tmp.strings"),
+            self.ix_dir.join("shard.ix.tmp"),
+            self.ix_dir.join("shard.ix.bak"),
+        ];
+        for p in &paths {
+            if let Err(e) = fs::remove_file(p)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!("Failed to cleanup temp file {}: {}", p.display(), e);
+            }
+        }
+        for run_path in &self.temp_runs {
+            if let Err(e) = fs::remove_file(run_path)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!("Failed to cleanup temp run {}: {}", run_path.display(), e);
+            }
+        }
+    }
+
     fn process_file(&mut self, path: &Path) -> Result<bool> {
         let path_str = path.display().to_string();
         // TOCTOU guard: file may have been deleted between walk and open
@@ -567,17 +614,6 @@ impl Builder {
     }
 
     fn serialize(&mut self) -> Result<PathBuf> {
-        // Disk space guard: abort if < 100MB free to avoid partial shard writes
-        if let Ok(free) = Self::free_bytes_at(&self.ix_dir) {
-            const MIN_FREE: u64 = 100 * 1024 * 1024; // 100 MB
-            if free < MIN_FREE {
-                return Err(crate::error::Error::Io(std::io::Error::other(format!(
-                    "insufficient disk space: {} MB free, need ≥100 MB (path: {})",
-                    free / 1024 / 1024,
-                    self.ix_dir.display()
-                ))));
-            }
-        }
         self.flush_run()?;
 
         self.files_writer.flush()?;
@@ -783,6 +819,7 @@ impl Builder {
             }
         }
         fs::rename(&tmp_path, &final_path)?;
+        self.committed = true;
         // Remove backup after successful rename
         if old_index_exists {
             let _ = fs::remove_file(&backup_path);
@@ -920,5 +957,13 @@ impl Builder {
             w.write_all(&vec![0u8; padding as usize])?;
         }
         w.stream_position()
+    }
+}
+
+impl Drop for Builder {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.cleanup_temp_files();
+        }
     }
 }

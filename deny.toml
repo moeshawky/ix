@@ -19,6 +19,7 @@ exceptions = []
 yanked = "deny"
 ignore = [
     "RUSTSEC-2024-0384",
+    "RUSTSEC-2024-0375",
 ]
 
 [bans]

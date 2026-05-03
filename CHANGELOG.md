@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.4] - 2026-05-03
+
+### Added
+- **Multi-directory daemon support**: `ix --daemon dir1 dir2 dir3` now watches multiple directories simultaneously.
+
+### Fixed
+- **Format violations**: All code now passes `cargo fmt --check`.
+- **Ctrl-C handler error handling**: Replaced `expect()` with proper error handling in daemon.
+- **Dependency advisory**: Added exception for RUSTSEC-2024-0375 (transitive via cbindgen build dependency).
+
+## [0.5.3] - 2026-05-03
+
+### Added
+- **DaemonStatus typed enum** — Replaces raw status strings with structured typed state (`Idle`, `Indexing`, `Deferred`, `Escalated`, `Warned`, `SafetyHalt`, `SafetyExit`). Wire format backward compatible — legacy `status` field preserved as plain string.
+- **daemon_status field** — New optional field in `QueryResult` and `Status` messages carrying structured typed state (`{"state":"indexing","entropy":42}`).
+- **last_rebuild_at** — New optional `u64` field in `QueryResult` response — Unix timestamp of the last successful rebuild completion.
+
+### Fixed
+- **StatusQuery id echo back** — StatusQuery now echoes back the client-provided `id` instead of returning the daemon PID.
+- **SafetyDecision cooldowns** — All `Halt` and `Escalate` cooldowns now non-zero via llmosafe 0.5.5 dependency.
+- **Disk space check moved** — Now performed at start of `build()` before any temp file I/O.
+- **Builder Drop impl** — Cleans up orphaned temp files on build failure.
+
+### Changed
+- `ClientMessage::StatusQuery` now accepts an optional `id: u64` field (serde default) for correlation.
+
 ## [0.5.2] - 2026-04-29
 
 ### Fixed

@@ -76,6 +76,52 @@ impl FileOp {
     }
 }
 
+/// Typed daemon status enum for structured status tracking.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum DaemonStatus {
+    /// Daemon is idle, no active rebuild.
+    Idle,
+    /// Active index rebuild in progress.
+    Indexing {
+        /// Current entropy reading.
+        entropy: u16,
+    },
+    /// Rebuild deferred due to high entropy.
+    Deferred {
+        /// Current entropy reading.
+        entropy: u16,
+    },
+    /// Safety escalation triggered.
+    Escalated {
+        /// Current entropy reading.
+        entropy: u16,
+    },
+    /// Safety warning issued.
+    Warned {
+        /// Warning reason.
+        reason: String,
+    },
+    /// Critical safety halt — daemon stopped.
+    SafetyHalt,
+    /// Unrecoverable safety exit.
+    SafetyExit,
+}
+
+impl std::fmt::Display for DaemonStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Idle { .. } => write!(f, "idle"),
+            Self::Indexing { entropy } => write!(f, "indexing (entropy: {entropy})"),
+            Self::Deferred { entropy } => write!(f, "deferred (entropy: {entropy})"),
+            Self::Escalated { entropy } => write!(f, "escalated (entropy: {entropy})"),
+            Self::Warned { reason } => write!(f, "warned: {reason}"),
+            Self::SafetyHalt => write!(f, "safety halt"),
+            Self::SafetyExit => write!(f, "safety exit"),
+        }
+    }
+}
+
 /// A single file change record broadcast to connected clients.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileChange {
@@ -102,6 +148,9 @@ pub enum ServerMessage {
         status: String,
         /// Number of files currently in the index.
         files: usize,
+        /// Typed daemon status (present when daemon is running).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        daemon_status: Option<DaemonStatus>,
     },
     /// Batch of file changes detected by the watcher.
     FilesChanged {
@@ -122,6 +171,12 @@ pub enum ServerMessage {
         /// Changes since the requested timestamp (for history queries).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         changes_since: Vec<FileChange>,
+        /// Typed daemon status (present when daemon is running).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        daemon_status: Option<DaemonStatus>,
+        /// Timestamp of the last successful rebuild completion.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        last_rebuild_at: Option<u64>,
     },
 }
 
@@ -130,7 +185,11 @@ pub enum ServerMessage {
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum ClientMessage {
     /// Request current daemon status.
-    StatusQuery,
+    StatusQuery {
+        /// Client-assigned query ID (echoed back in the response).
+        #[serde(default)]
+        id: u64,
+    },
     /// Request all changes since the given timestamp.
     HistoryQuery {
         /// Return changes with timestamps strictly after this value.
@@ -226,8 +285,9 @@ impl History {
 struct Shared {
     clients: Vec<ClientConn>,
     history: History,
-    pid: u32,
     status: String,
+    daemon_status: Option<DaemonStatus>,
+    last_rebuild_at: Option<u64>,
     files_count: usize,
 }
 
@@ -285,12 +345,12 @@ impl DaemonServer {
 
         let listener = UnixListener::bind(&sp)?;
 
-        let pid = std::process::id();
         let shared = Arc::new(Mutex::new(Shared {
             clients: Vec::new(),
             history: History::new(),
-            pid,
             status: "idle".to_string(),
+            daemon_status: Some(DaemonStatus::Idle),
+            last_rebuild_at: None,
             files_count: 0,
         }));
         let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -395,9 +455,10 @@ impl DaemonServer {
 
     /// Update the daemon status and file count (reflected in subsequent
     /// broadcasts and query responses).
-    pub fn set_status(&self, status: &str, files_count: usize) {
+    pub fn set_status(&self, daemon_status: &DaemonStatus, files_count: usize) {
         if let Ok(mut s) = self.shared.lock() {
-            s.status = status.to_string();
+            s.status = daemon_status.to_string();
+            s.daemon_status = Some(daemon_status.clone());
             s.files_count = files_count;
         }
     }
@@ -408,6 +469,11 @@ impl DaemonServer {
         if let Ok(mut s) = self.shared.lock() {
             s.history.push(timestamp, changes.clone());
             s.files_count = files_count;
+            if matches!(s.daemon_status, Some(DaemonStatus::Idle)) {
+                s.status = "idle".to_string();
+                s.daemon_status = Some(DaemonStatus::Idle);
+                s.last_rebuild_at = Some(timestamp);
+            }
             let msg = ServerMessage::FilesChanged {
                 batch: changes,
                 timestamp,
@@ -442,16 +508,18 @@ fn client_read_loop(
                 };
 
                 let response = match msg {
-                    ClientMessage::StatusQuery => {
+                    ClientMessage::StatusQuery { id } => {
                         let Ok(s) = shared.lock() else {
                             tracing::warn!("ixd: shared lock poisoned in status query");
                             continue;
                         };
                         ServerMessage::QueryResult {
-                            id: u64::from(s.pid),
+                            id,
                             status: s.status.clone(),
                             files: s.files_count,
                             changes_since: Vec::new(),
+                            daemon_status: s.daemon_status.clone(),
+                            last_rebuild_at: s.last_rebuild_at,
                         }
                     }
                     ClientMessage::HistoryQuery { since, id } => {
@@ -465,26 +533,28 @@ fn client_read_loop(
                             status: s.status.clone(),
                             files: s.files_count,
                             changes_since: changes,
+                            daemon_status: s.daemon_status.clone(),
+                            last_rebuild_at: s.last_rebuild_at,
                         }
                     }
                 };
 
-if let Ok(mut write_stream) = stream.try_clone() {
-        match serde_json::to_string(&response) {
-            Ok(mut line) => {
-                line.push('\n');
-                if write_stream.write_all(line.as_bytes()).is_err()
-                    || write_stream.flush().is_err()
-                {
-                    break;
+                if let Ok(mut write_stream) = stream.try_clone() {
+                    match serde_json::to_string(&response) {
+                        Ok(mut line) => {
+                            line.push('\n');
+                            if write_stream.write_all(line.as_bytes()).is_err()
+                                || write_stream.flush().is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("ixd: failed to serialize query response: {e}");
+                            break;
+                        }
+                    }
                 }
-            }
-            Err(e) => {
-                tracing::warn!("ixd: failed to serialize query response: {e}");
-                break;
-            }
-        }
-    }
             }
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
             Err(_) => break,
@@ -614,15 +684,27 @@ mod tests {
             pid: 1234,
             status: "idle".to_string(),
             files: 42,
+            daemon_status: None,
         };
         let json = serde_json::to_string(&msg).expect("serialize");
         assert!(json.contains("\"t\":\"status\""), "tag field present");
+        assert!(
+            !json.contains("daemon_status"),
+            "daemon_status should be omitted when None"
+        );
 
         let back: ServerMessage = serde_json::from_str(&json).expect("deserialize");
-        if let ServerMessage::Status { pid, status, files } = back {
+        if let ServerMessage::Status {
+            pid,
+            status,
+            files,
+            daemon_status,
+        } = back
+        {
             assert_eq!(pid, 1234);
             assert_eq!(status, "idle");
             assert_eq!(files, 42);
+            assert_eq!(daemon_status, None);
         } else {
             panic!("wrong variant after roundtrip");
         }
@@ -732,13 +814,14 @@ mod tests {
         // Give the accept thread time to register the client
         std::thread::sleep(std::time::Duration::from_millis(200));
 
-        server.set_status("idle", 10);
+        server.set_status(&DaemonStatus::Idle, 10);
 
         // Broadcast a status message
         server.broadcast(&ServerMessage::Status {
             pid: 1234,
             status: "idle".to_string(),
             files: 10,
+            daemon_status: Some(DaemonStatus::Idle),
         });
 
         // Client should receive the message
@@ -750,10 +833,16 @@ mod tests {
             .expect("set timeout");
 
         match client.recv() {
-            Ok(ServerMessage::Status { pid, status, files }) => {
+            Ok(ServerMessage::Status {
+                pid,
+                status,
+                files,
+                daemon_status,
+            }) => {
                 assert_eq!(pid, 1234);
                 assert_eq!(status, "idle");
                 assert_eq!(files, 10);
+                assert!(daemon_status.is_some());
             }
             Ok(other) => panic!("expected Status, got {other:?}"),
             Err(e) => panic!("recv failed: {e}"),
@@ -768,7 +857,7 @@ mod tests {
         let mut server = DaemonServer::new(&root).expect("create server");
         let sp = server.path().to_path_buf();
         let _ = server.start();
-        server.set_status("indexing", 99);
+        server.set_status(&DaemonStatus::Indexing { entropy: 42 }, 99);
 
         let stream = UnixStream::connect(&sp).expect("connect");
         let mut client = DaemonClient {
@@ -778,7 +867,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(200));
 
         client
-            .send(&ClientMessage::StatusQuery)
+            .send(&ClientMessage::StatusQuery { id: 123 })
             .expect("send query");
 
         client
@@ -789,14 +878,23 @@ mod tests {
 
         match client.recv() {
             Ok(ServerMessage::QueryResult {
-                id: _,
+                id,
                 status,
                 files,
                 changes_since,
+                daemon_status,
+                last_rebuild_at,
             }) => {
-                assert_eq!(status, "indexing");
+                eprintln!(
+                    "[JSON] id={}, status={}, files={}, daemon_status={:?}, last_rebuild_at={:?}",
+                    id, status, files, daemon_status, last_rebuild_at
+                );
+                assert_eq!(id, 123);
+                assert_eq!(status, "indexing (entropy: 42)");
                 assert_eq!(files, 99);
                 assert!(changes_since.is_empty());
+                assert_eq!(daemon_status, Some(DaemonStatus::Indexing { entropy: 42 }));
+                assert_eq!(last_rebuild_at, None);
             }
             Ok(other) => panic!("expected QueryResult, got {other:?}"),
             Err(e) => panic!("recv failed: {e}"),

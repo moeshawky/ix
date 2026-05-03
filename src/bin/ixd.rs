@@ -13,7 +13,7 @@
 
 use clap::Parser;
 use ix::builder::Builder;
-use ix::daemon_sock::{DaemonServer, FileChange, FileOp, ServerMessage};
+use ix::daemon_sock::{DaemonServer, DaemonStatus, FileChange, FileOp, ServerMessage};
 use ix::format::Beacon;
 use ix::idle::IdleTracker;
 use ix::watcher::Watcher;
@@ -270,7 +270,8 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
         changed_files.len(),
     );
 
-    ctx.beacon.status = format!("indexing (entropy: {entropy})");
+    let daemon_status = DaemonStatus::Indexing { entropy };
+    ctx.beacon.status = daemon_status.to_string();
     ctx.beacon.last_event_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -279,17 +280,18 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
 
     broadcast_status(
         ctx,
-        &beacon_status_msg(&ctx.beacon.status, ctx.builder.files_len()),
+        &beacon_status_msg(&daemon_status, ctx.builder.files_len()),
     );
 
     ctx.idle.record_change();
 
     if entropy > ENTROPY_SAFE_THRESHOLD {
         eprintln!("ixd: entropy too high ({entropy}), deferring update");
-        ctx.beacon.status = format!("deferred (entropy: {entropy})");
+        let deferred_status = DaemonStatus::Deferred { entropy };
+        ctx.beacon.status = deferred_status.to_string();
         let _ = ctx.beacon.write_to(ctx.ix_dir);
         if let Some(sock) = ctx.daemon_sock {
-            sock.set_status(&ctx.beacon.status, ctx.builder.files_len());
+            sock.set_status(&deferred_status, ctx.builder.files_len());
         }
         return;
     }
@@ -302,10 +304,11 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
 
     broadcast_file_changes(ctx, changed_files);
 
-    ctx.beacon.status = "idle".to_string();
+    let idle_status = DaemonStatus::Idle;
+    ctx.beacon.status = idle_status.to_string();
     let _ = ctx.beacon.write_to(ctx.ix_dir);
     if let Some(sock) = ctx.daemon_sock {
-        sock.set_status("idle", ctx.builder.files_len());
+        sock.set_status(&idle_status, ctx.builder.files_len());
     }
 }
 
@@ -331,17 +334,17 @@ fn evaluate_safety(guard: &ResourceGuard) -> (u16, SafetyDecision) {
     }
 }
 
-fn beacon_status_msg(status: &str, files: usize) -> ServerMessage {
+fn beacon_status_msg(status: &DaemonStatus, files: usize) -> ServerMessage {
     ServerMessage::Status {
         pid: std::process::id(),
         status: status.to_string(),
         files,
+        daemon_status: Some(status.clone()),
     }
 }
 
 fn broadcast_status(ctx: &mut DaemonCtx, msg: &ServerMessage) {
     if let Some(sock) = ctx.daemon_sock {
-        sock.set_status(&ctx.beacon.status, ctx.builder.files_len());
         sock.broadcast(msg);
     }
 }

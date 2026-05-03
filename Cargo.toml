@@ -1,6 +1,6 @@
 [package]
 name = "moeix"
-version = "0.5.2"
+version = "0.5.4"
 edition = "2024"
 description = "Sub-millisecond code search via sparse trigram indexing."
 homepage = "https://github.com/moeshawky/ix"
@@ -53,7 +53,7 @@ archive = ["zip", "tar"]
 full = ["decompress", "notify", "archive"]
 
 [dependencies]
-llmosafe = "0.5"
+llmosafe = "0.5.5"
 memmap2 = "0.9"
 crc32c = "0.6"
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
