@@ -298,13 +298,23 @@ impl Builder {
     ///
     /// Returns an error if the build process fails (I/O, disk space, etc.).
     pub fn build(&mut self) -> Result<PathBuf> {
-        // Upfront disk space check: estimate required bytes before any I/O.
         // === Clean-before-build: release old temp files + create fresh writers ===
         // This fixes the stale FD bug where serialize() deletes temp files but
         // Builder keeps BufWriter handles pointing to deleted inodes.
         // On Linux, dropping the writers releases the inode references first.
         self.cleanup_old_temp_files();
         self.init_writers()?;
+
+        // Reset state for fresh build — clear any residual data from previous builds
+        self.postings.clear();
+        self.postings_count = 0;
+        self.temp_runs.clear();
+        self.file_count = 0;
+        self.stats = BuildStats::default();
+        self.dead_ends.clear();
+        self.committed = false;
+
+        // Upfront disk space check: estimate required bytes before any I/O.
 
         // Peak overhead is ~3× existing shard (old + tmp + bak + runs).
         // For first builds, use a 200 MB floor.
