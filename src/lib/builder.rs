@@ -30,10 +30,11 @@ pub struct Builder {
     ix_dir: PathBuf,
     file_count: u32,
 
-    // O(1) memory streaming writers for temporary file table and blooms
-    files_writer: BufWriter<File>,
-    blooms_writer: BufWriter<File>,
-    strings_writer: BufWriter<File>,
+    // O(1) memory streaming writers for temporary file table and blooms.
+    // Wrapped in Option so they can be recreated per-build (clean-before-build pattern).
+    files_writer: Option<BufWriter<File>>,
+    blooms_writer: Option<BufWriter<File>>,
+    strings_writer: Option<BufWriter<File>>,
 
     // Postings batching for external sort
     postings: HashMap<Trigram, Vec<PostingEntry>>,
@@ -141,26 +142,13 @@ impl Builder {
         let ix_dir = root.join(".ix");
         fs::create_dir_all(&ix_dir)?;
 
-        let files_tmp = ix_dir.join("shard.ix.tmp.files");
-        let blooms_tmp = ix_dir.join("shard.ix.tmp.blooms");
-        let strings_tmp = ix_dir.join("shard.ix.tmp.strings");
-
-        let files_writer = BufWriter::new(File::create(&files_tmp)?);
-        let blooms_writer = BufWriter::new(File::create(&blooms_tmp)?);
-        let mut strings_writer = BufWriter::new(File::create(&strings_tmp)?);
-
-        strings_writer.write_all(&1u32.to_le_bytes())?;
-        strings_writer.write_all(&0u16.to_le_bytes())?;
-        strings_writer.write_all(&0u16.to_le_bytes())?;
-        strings_writer.write_all(&[0u8; 2])?;
-
         Ok(Self {
             root: root.to_owned(),
             ix_dir,
             file_count: 0,
-            files_writer,
-            blooms_writer,
-            strings_writer,
+            files_writer: None,
+            blooms_writer: None,
+            strings_writer: None,
             postings: HashMap::new(),
             postings_count: 0,
             temp_runs: Vec::new(),
@@ -190,6 +178,83 @@ impl Builder {
     /// Set the maximum file size to index (0 = unlimited). Default: 100 MB.
     pub const fn set_max_file_size(&mut self, max_bytes: u64) {
         self.max_file_size = max_bytes;
+    }
+
+    /// Initialize temporary files and writers for building.
+    ///
+    /// Called at start of each `build()` to ensure fresh file handles.
+    /// This is the core of the "clean-before-build" pattern: temp files
+    /// are BUILD ARTIFACTS, not struct state — created fresh each build,
+    /// cleaned at NEXT build start, never deleted mid-lifecycle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if temp files cannot be created.
+    fn init_writers(&mut self) -> Result<()> {
+        let files_tmp = self.ix_dir.join("shard.ix.tmp.files");
+        let blooms_tmp = self.ix_dir.join("shard.ix.tmp.blooms");
+        let strings_tmp = self.ix_dir.join("shard.ix.tmp.strings");
+
+        self.files_writer = Some(BufWriter::new(File::create(&files_tmp)?));
+        self.blooms_writer = Some(BufWriter::new(File::create(&blooms_tmp)?));
+        let mut strings_writer = BufWriter::new(File::create(&strings_tmp)?);
+
+        // Initialize strings table header (10 bytes total):
+        // version(u32) + size(u16) + count(u16) + padding(2)
+        strings_writer.write_all(&1u32.to_le_bytes())?; // version
+        strings_writer.write_all(&0u16.to_le_bytes())?; // size placeholder
+        strings_writer.write_all(&0u16.to_le_bytes())?; // count
+        strings_writer.write_all(&[0u8; 2])?; // padding
+
+        self.strings_writer = Some(strings_writer);
+        Ok(())
+    }
+
+    /// Clean up old temporary files from a previous build.
+    ///
+    /// Called at start of `build()` to release disk space before
+    /// allocating new temp files. On Linux, deleting a file while a
+    /// process holds an open FD keeps the inode alive; dropping the
+    /// old writers first ensures inodes are released.
+    fn cleanup_old_temp_files(&mut self) {
+        // Drop writers first to release inode references on Linux
+        self.files_writer = None;
+        self.blooms_writer = None;
+        self.strings_writer = None;
+
+        let patterns = [
+            "shard.ix.tmp.files",
+            "shard.ix.tmp.blooms",
+            "shard.ix.tmp.strings",
+            "shard.ix.tmp",
+            "shard.ix.bak",
+        ];
+
+        for pattern in &patterns {
+            let path = self.ix_dir.join(pattern);
+            if path.exists() {
+                let _ = fs::remove_file(&path);
+            }
+        }
+
+        if let Ok(entries) = fs::read_dir(&self.ix_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with("shard.ix.run.") || name.starts_with("shard.ix.merged.") {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+    /// Helper to get mutable writer reference with proper error handling.
+    ///
+    /// Returns an error if the writer is not initialized (violates clean-before-build contract).
+    fn get_writer<'a, T>(writer: &'a mut Option<T>, context: &'static str) -> Result<&'a mut T> {
+        writer.as_mut().ok_or_else(|| {
+        Error::Io(std::io::Error::other(format!(
+            "Builder invariant violated: {context} not initialized (clean-before-build contract)"
+        )))
+        })
     }
 
     fn flush_run(&mut self) -> Result<()> {
@@ -234,6 +299,13 @@ impl Builder {
     /// Returns an error if the build process fails (I/O, disk space, etc.).
     pub fn build(&mut self) -> Result<PathBuf> {
         // Upfront disk space check: estimate required bytes before any I/O.
+        // === Clean-before-build: release old temp files + create fresh writers ===
+        // This fixes the stale FD bug where serialize() deletes temp files but
+        // Builder keeps BufWriter handles pointing to deleted inodes.
+        // On Linux, dropping the writers releases the inode references first.
+        self.cleanup_old_temp_files();
+        self.init_writers()?;
+
         // Peak overhead is ~3× existing shard (old + tmp + bak + runs).
         // For first builds, use a 200 MB floor.
         if let Ok(free) = Self::free_bytes_at(&self.ix_dir) {
@@ -537,12 +609,24 @@ impl Builder {
 
         let path_str = path.to_string_lossy();
         let path_bytes = path_str.as_bytes();
-        let path_off = u32::try_from(self.strings_writer.stream_position()?).unwrap_or(0);
+        let path_off = u32::try_from(
+            Self::get_writer(&mut self.strings_writer, "strings_writer")?.stream_position()?,
+        )
+        .unwrap_or(0);
         let path_len = u16::try_from(path_bytes.len()).unwrap_or(0);
 
-        self.strings_writer.write_all(&0u16.to_le_bytes())?;
-        self.strings_writer.write_all(&path_len.to_le_bytes())?;
-        self.strings_writer.write_all(path_bytes)?;
+        self.strings_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("strings_writer not initialized")))?
+            .write_all(&0u16.to_le_bytes())?;
+        self.strings_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("strings_writer not initialized")))?
+            .write_all(&path_len.to_le_bytes())?;
+        self.strings_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("strings_writer not initialized")))?
+            .write_all(path_bytes)?;
 
         let mut bloom = BloomFilter::new(256, 5);
         let mut trigram_count = 0u32;
@@ -569,25 +653,61 @@ impl Builder {
             i = j;
         }
 
-        bloom.serialize(&mut self.blooms_writer)?;
+        bloom.serialize(
+            self.blooms_writer
+                .as_mut()
+                .ok_or_else(|| Error::Io(std::io::Error::other("blooms_writer not initialized")))?,
+        )?;
 
         let bloom_offset = u64::from(file_id)
             .checked_mul(260)
             .ok_or_else(|| Error::Config("file_id * 260 overflow".into()))?;
         let bloom_offset_u32 = u32::try_from(bloom_offset)
             .map_err(|_| Error::Config(format!("bloom_offset {bloom_offset} exceeds u32::MAX")))?;
-        self.files_writer.write_all(&file_id.to_le_bytes())?;
-        self.files_writer.write_all(&path_off.to_le_bytes())?;
-        self.files_writer.write_all(&path_len.to_le_bytes())?;
-        self.files_writer.write_all(&[FileStatus::Fresh as u8])?;
-        self.files_writer.write_all(&[0u8])?;
-        self.files_writer.write_all(&mtime.to_le_bytes())?;
-        self.files_writer.write_all(&size.to_le_bytes())?;
-        self.files_writer.write_all(&content_hash.to_le_bytes())?;
-        self.files_writer.write_all(&trigram_count.to_le_bytes())?;
         self.files_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("files_writer not initialized")))?
+            .write_all(&file_id.to_le_bytes())?;
+        self.files_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("files_writer not initialized")))?
+            .write_all(&path_off.to_le_bytes())?;
+        self.files_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("files_writer not initialized")))?
+            .write_all(&path_len.to_le_bytes())?;
+        self.files_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("files_writer not initialized")))?
+            .write_all(&[FileStatus::Fresh as u8])?;
+        self.files_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("files_writer not initialized")))?
+            .write_all(&[0u8])?;
+        self.files_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("files_writer not initialized")))?
+            .write_all(&mtime.to_le_bytes())?;
+        self.files_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("files_writer not initialized")))?
+            .write_all(&size.to_le_bytes())?;
+        self.files_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("files_writer not initialized")))?
+            .write_all(&content_hash.to_le_bytes())?;
+        self.files_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("files_writer not initialized")))?
+            .write_all(&trigram_count.to_le_bytes())?;
+        self.files_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("files_writer not initialized")))?
             .write_all(&bloom_offset_u32.to_le_bytes())?;
-        self.files_writer.write_all(&[0u8; 4])?;
+        self.files_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("files_writer not initialized")))?
+            .write_all(&[0u8; 4])?;
 
         self.stats.files_scanned += 1;
         self.stats.bytes_scanned += size;
@@ -616,9 +736,18 @@ impl Builder {
     fn serialize(&mut self) -> Result<PathBuf> {
         self.flush_run()?;
 
-        self.files_writer.flush()?;
-        self.blooms_writer.flush()?;
-        self.strings_writer.flush()?;
+        self.files_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("files_writer not initialized")))?
+            .flush()?;
+        self.blooms_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("blooms_writer not initialized")))?
+            .flush()?;
+        self.strings_writer
+            .as_mut()
+            .ok_or_else(|| Error::Io(std::io::Error::other("strings_writer not initialized")))?
+            .flush()?;
 
         // Hierarchical Merge to stay under ulimit
         while self.temp_runs.len() > 128 {

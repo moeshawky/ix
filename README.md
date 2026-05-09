@@ -22,7 +22,8 @@ This installs two binaries:
 ## Quick Start
 
 ```bash
-# Index a directory
+# Index a directory (defaults to current directory if no path given)
+ix --build
 ix --build /path/to/repo
 
 # Search
@@ -140,3 +141,14 @@ Requires Rust 1.85+.
 ## License
 
 MIT
+
+### Clean-Before-Build
+
+The daemon uses a "clean-before-build" pattern to prevent stale file descriptor bugs:
+
+1. Old temp files are cleaned at the start of each build (not at the end)
+2. Fresh writers are initialized for each build
+3. No temp file accumulation across consecutive builds
+4. Prevents inode exhaustion on Linux
+
+This fixes the critical bug where incremental rebuilds failed with "I/O: No such file or directory (os error 2)" after the first successful build.

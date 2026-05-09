@@ -72,11 +72,12 @@ struct Cli {
 
     /// Build or update the .ix index for the target directory.
     #[arg(
-        long,
-        value_name = "PATH",
-        default_missing_value = ".",
-        help_heading = "Actions"
-    )]
+  long,
+  value_name = "PATH",
+  num_args = 0..=1,
+  default_missing_value = ".",
+  help_heading = "Actions"
+)]
     build: Option<PathBuf>,
 
     /// Interpret the pattern as a regular expression.

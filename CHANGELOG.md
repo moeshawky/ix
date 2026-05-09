@@ -1,3 +1,40 @@
+## [0.6.0] - 2026-05-09
+
+### Added
+- **Clean-before-build pattern** — Fixed critical stale file descriptor bug where incremental rebuilds failed with "I/O: No such file or directory (os error 2)" after first successful build.
+  - `Builder` struct fields (`files_writer`, `blooms_writer`, `strings_writer`) now wrapped in `Option<BufWriter<File>>`
+  - New `init_writers()` method creates fresh temp files at build start
+  - New `cleanup_old_temp_files()` method releases old temp files before initialization
+  - Temp files are build artifacts, not struct state — created fresh each build, cleaned at next build start
+  - Prevents inode exhaustion on Linux where deleted files with open FDs keep inodes alive
+- **CLI ergonomics** — `ix --build` without path argument now defaults to current working directory
+  - Changed from `default_value = "."` to `num_args = 0..=1, default_missing_value = "."`
+  - All three modes work: `ix --build`, `ix --build /path`, `ix "pattern"`
+- **Enterprise-grade error handling** — Zero `.unwrap()` or `.expect()` in library code
+  - Added `get_writer()` helper with `.ok_or_else(|| Error::Io(...))` pattern
+  - All 19 writer accesses now return proper errors instead of panicking
+  - Error messages include context ("files_writer not initialized", etc.)
+
+### Fixed
+- **Stale FD bug** — `serialize()` no longer deletes temp files mid-lifecycle; cleanup happens at next build start
+- **Disk accumulation** — No temp file accumulation across consecutive builds
+- **Daemon incremental rebuild** — `ixd` can now perform multiple consecutive rebuilds without failure
+
+### Changed
+- `Builder::new()` no longer creates temp files — initialization deferred to `build()`
+- `Builder::build()` now calls `cleanup_old_temp_files()` + `init_writers()` at start
+- Temp file deletion responsibility moved from `serialize()` to `cleanup_old_temp_files()`
+
+### Technical Details
+- Index format: unchanged (v1.3)
+- Backward compatible: yes (no index format change)
+- Breaking changes: no
+- Migration: none required (existing indexes remain valid)
+
+### Security
+- No `.unwrap()` in library code — all errors properly propagated
+- Clean-before-build prevents inode exhaustion attacks via repeated builds
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
