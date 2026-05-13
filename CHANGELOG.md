@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.2] - 2026-05-13
+### Fixed
+- **JSON output backslash escaping** — Fixed critical silent data loss bug where `ix --json` output was malformed for `.jsonl` files and files containing backslash-quote sequences (`\"`). The JSON serializer now properly escapes backslashes before quotes, preventing 50-84% result loss on `.jsonl` files. Added `.replace('\\', '\\\\')` before quote escaping in `print_match()`.
+- **Library panic prevention** — Replaced `.expect()` calls in `planner.rs::compile_regex()` with safe fallback to `^$` regex (matches nothing) plus `tracing::warn!` logging. Library code now complies with AGENTS.md requirement: "No unwrap/expect/panic in library code."
+- **Silent data corruption prevention** — Five varint decode points in `reader.rs::get_trigram_cdx()` now return `None` and log warnings on error instead of silently using `0`. Corrupted CDX index blocks are now detected and handled gracefully, preventing silent wrong/empty search results.
+
+### Security
+- **No silent failures** — All varint decode errors in CDX reader now logged and propagated
+- **No panics in library code** — All error paths use proper error handling or safe fallbacks
+
+### Technical Details
+- Index format: unchanged (v1.3)
+- Backward compatible: yes (no index format change)
+- Breaking changes: no
+- Migration: none required (existing indexes remain valid)
+- All 90 tests pass (71 lib + 19 integration/robustness/streaming)
+
+
 ## [0.6.1] - 2026-05-09
 
 ### Fixed

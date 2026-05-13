@@ -340,25 +340,41 @@ impl Reader {
         };
 
         let mut pos = 0;
-        let num_entries =
-            usize::try_from(crate::varint::decode(&decompressed, &mut pos).unwrap_or(0))
-                .unwrap_or(0);
+        let num_entries = match crate::varint::decode(&decompressed, &mut pos) {
+            Ok(v) => usize::try_from(v).unwrap_or(0),
+            Err(e) => {
+                tracing::warn!("ix: CDX num_entries varint decode failed: {e}");
+                return None;
+            }
+        };
 
         let mut last_key = 0u32;
         for _ in 0..num_entries {
-            let key_delta =
-                u32::try_from(crate::varint::decode(&decompressed, &mut pos).unwrap_or(0))
-                    .unwrap_or(0);
+            let key_delta = match crate::varint::decode(&decompressed, &mut pos) {
+                Ok(v) => u32::try_from(v).unwrap_or(0),
+                Err(e) => {
+                    tracing::warn!("ix: CDX key_delta varint decode failed: {e}");
+                    return None;
+                }
+            };
             let key = last_key + key_delta;
             last_key = key;
 
-            let posting_offset = crate::varint::decode(&decompressed, &mut pos).unwrap_or(0);
-            let posting_length =
-                u32::try_from(crate::varint::decode(&decompressed, &mut pos).unwrap_or(0))
-                    .unwrap_or(0);
-            let doc_frequency =
-                u32::try_from(crate::varint::decode(&decompressed, &mut pos).unwrap_or(0))
-                    .unwrap_or(0);
+            let posting_offset = match crate::varint::decode(&decompressed, &mut pos) { Ok(v) => v, Err(e) => { tracing::warn!("ix: CDX posting_offset varint decode failed: {e}"); return None; } };
+            let posting_length = match crate::varint::decode(&decompressed, &mut pos) {
+                Ok(v) => u32::try_from(v).unwrap_or(0),
+                Err(e) => {
+                    tracing::warn!("ix: CDX posting_length varint decode failed: {e}");
+                    return None;
+                }
+            };
+            let doc_frequency = match crate::varint::decode(&decompressed, &mut pos) {
+                Ok(v) => u32::try_from(v).unwrap_or(0),
+                Err(e) => {
+                    tracing::warn!("ix: CDX doc_frequency varint decode failed: {e}");
+                    return None;
+                }
+            };
 
             if key == trigram {
                 return Some(TrigramInfo {

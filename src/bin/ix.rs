@@ -854,7 +854,7 @@ fn print_match(
             m.file_path.display(),
             m.line_number,
             m.col,
-            line_content.replace('"', "\\\"").replace('\n', "\\n"),
+            line_content.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"),
             m.byte_offset,
             context_before,
             context_after,

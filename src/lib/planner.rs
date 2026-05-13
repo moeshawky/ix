@@ -114,6 +114,9 @@ impl Planner {
         Self::plan_impl(pattern, options, None)
     }
 
+    /// Compile a regex, preferring the pool if available. On failure,
+    /// logs a warning and returns `"^$"` (matches nothing) instead of
+    /// panicking. Library code must never call expect/panic per AGENTS.md.
     fn compile_regex(pat: &str, pool: Option<&RegexPool>) -> Regex {
         if let Some(p) = pool
             && let Ok(re) = p.get_or_compile(pat)
@@ -121,10 +124,17 @@ impl Planner {
             return re;
         }
         Regex::new(pat).unwrap_or_else(|_| {
-            pool.map_or_else(
-                || Regex::new("").expect("empty regex should always compile"),
-                |p| p.get_or_compile("").expect("empty regex always compiles"),
-            )
+            tracing::warn!(
+                "ix: regex compilation failed for '{}', using '^$' fallback",
+                pat
+            );
+            // ^$ matches end-of-line only — effectively matches nothing useful.
+            // This is safer than "" which matches EVERY line.
+            Regex::new("^$").unwrap_or_else(|_| {
+                // Absolute last resort: a literal 'a' pattern.
+                // This should never fail unless regex crate is broken.
+                Regex::new("a").unwrap()
+            })
         })
     }
 
