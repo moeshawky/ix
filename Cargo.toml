@@ -1,6 +1,6 @@
 [package]
 name = "moeix"
-version = "0.6.2"
+version = "0.6.3"
 edition = "2024"
 description = "Sub-millisecond code search via sparse trigram indexing."
 homepage = "https://github.com/moeshawky/ix"
