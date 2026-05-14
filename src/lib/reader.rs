@@ -4,11 +4,13 @@
 
 use crate::bloom::BloomFilter;
 use crate::error::{Error, Result};
+use crate::format::{DELTA_FILE_ENTRY, DELTA_MAGIC, DELTA_TOMBSTONE, DELTA_TRIGRAM_ENTRY};
 use crate::format::{FILE_ENTRY_SIZE, FileStatus, HEADER_SIZE, Header};
 use crate::posting::PostingList;
 use crate::string_pool::StringPoolReader;
 use crate::trigram::Trigram;
 use memmap2::Mmap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -360,7 +362,13 @@ impl Reader {
             let key = last_key + key_delta;
             last_key = key;
 
-            let posting_offset = match crate::varint::decode(&decompressed, &mut pos) { Ok(v) => v, Err(e) => { tracing::warn!("ix: CDX posting_offset varint decode failed: {e}"); return None; } };
+            let posting_offset = match crate::varint::decode(&decompressed, &mut pos) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("ix: CDX posting_offset varint decode failed: {e}");
+                    return None;
+                }
+            };
             let posting_length = match crate::varint::decode(&decompressed, &mut pos) {
                 Ok(v) => u32::try_from(v).unwrap_or(0),
                 Err(e) => {
@@ -536,5 +544,134 @@ impl Reader {
         }
 
         false
+    }
+}
+
+/// Metadata for a single file stored in the delta index.
+#[derive(Debug, Clone)]
+pub struct DeltaFileInfo {
+    /// Absolute path to the file on disk.
+    pub path: PathBuf,
+    /// Last modification time in nanoseconds since the Unix epoch.
+    pub mtime: u64,
+    /// File size in bytes at index time.
+    pub size: u64,
+    /// XXH64 content hash computed at index time.
+    pub hash: u64,
+    /// Raw bloom filter bytes (260 bytes).
+    pub bloom_bytes: Vec<u8>,
+}
+
+/// Delta index reader for incremental index updates.
+#[derive(Default)]
+pub struct DeltaReader {
+    /// Set of tombstoned file IDs.
+    pub tombstones: HashSet<u32>,
+    /// Delta trigram postings (trigram to entries).
+    pub postings: HashMap<u32, Vec<crate::posting::PostingEntry>>,
+    /// Mapping from file path to file ID (path → id).
+    pub path_to_id: HashMap<PathBuf, u32>,
+    /// Mapping from file ID to file metadata (id → info).
+    pub id_to_fileinfo: HashMap<u32, DeltaFileInfo>,
+    /// Total number of file entries in this delta.
+    pub total_file_entries: u32,
+}
+
+impl DeltaReader {
+    /// Open and parse a delta index file.
+    ///
+    /// Returns `Default::default()` if the file does not exist or is invalid.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file exists but cannot be read.
+    pub fn open(path: &std::path::Path) -> crate::error::Result<Self> {
+        use std::io::Read;
+        let mut file = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => return Err(e.into()),
+        };
+
+        let mut reader = Self::default();
+        let mut magic = [0u8; 4];
+        if file.read_exact(&mut magic).is_err() || magic != DELTA_MAGIC {
+            return Ok(reader);
+        }
+
+        let mut type_buf = [0u8; 1];
+        while file.read_exact(&mut type_buf).is_ok() {
+            match type_buf[0] {
+                DELTA_TOMBSTONE => {
+                    let mut id_buf = [0u8; 4];
+                    file.read_exact(&mut id_buf)?;
+                    reader.tombstones.insert(u32::from_le_bytes(id_buf));
+                }
+                DELTA_FILE_ENTRY => {
+                    let mut id_buf = [0u8; 4];
+                    file.read_exact(&mut id_buf)?;
+                    let file_id = u32::from_le_bytes(id_buf);
+
+                    let mut len_buf = [0u8; 2];
+                    file.read_exact(&mut len_buf)?;
+                    let path_len = u16::from_le_bytes(len_buf) as usize;
+
+                    let mut path_buf = vec![0u8; path_len];
+                    file.read_exact(&mut path_buf)?;
+                    let path = PathBuf::from(String::from_utf8_lossy(&path_buf).into_owned());
+
+                    let mut u64_buf = [0u8; 8];
+                    file.read_exact(&mut u64_buf)?;
+                    let mtime = u64::from_le_bytes(u64_buf);
+                    file.read_exact(&mut u64_buf)?;
+                    let size = u64::from_le_bytes(u64_buf);
+                    file.read_exact(&mut u64_buf)?;
+                    let hash = u64::from_le_bytes(u64_buf);
+
+                    let mut bloom_buf = vec![0u8; 260];
+                    file.read_exact(&mut bloom_buf)?;
+
+                    reader.id_to_fileinfo.insert(
+                        file_id,
+                        DeltaFileInfo {
+                            path: path.clone(),
+                            mtime,
+                            size,
+                            hash,
+                            bloom_bytes: bloom_buf,
+                        },
+                    );
+                    reader.path_to_id.insert(path, file_id);
+                    reader.total_file_entries += 1;
+                }
+                DELTA_TRIGRAM_ENTRY => {
+                    let mut buf32 = [0u8; 4];
+                    file.read_exact(&mut buf32)?;
+                    let trigram = u32::from_le_bytes(buf32);
+
+                    file.read_exact(&mut buf32)?;
+
+                    file.read_exact(&mut buf32)?;
+                    let file_id = u32::from_le_bytes(buf32);
+
+                    file.read_exact(&mut buf32)?;
+                    let offsets_len = u32::from_le_bytes(buf32) as usize;
+
+                    let mut offsets = Vec::with_capacity(offsets_len);
+                    for _ in 0..offsets_len {
+                        file.read_exact(&mut buf32)?;
+                        offsets.push(u32::from_le_bytes(buf32));
+                    }
+
+                    reader
+                        .postings
+                        .entry(trigram)
+                        .or_default()
+                        .push(crate::posting::PostingEntry { file_id, offsets });
+                }
+                _ => break,
+            }
+        }
+        Ok(reader)
     }
 }

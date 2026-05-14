@@ -5,9 +5,11 @@
 .ix/
 *.ix
 *.ix.tmp
+*.ix.delta
 
-# Dependencies lock (uncomment if you want to commit it)
-# Cargo.lock
+# Dependencies lock (Cargo.lock SHOULD be committed for binaries)
+# See: https://doc.rust-lang.org/cargo/reference/manifest.html#the-cargolock-file
+# Cargo.lock is committed for this binary crate
 
 # IDE / editor
 .vscode/
@@ -15,19 +17,20 @@
 *.swp
 *.swo
 *~
+*.rlib
 
 # OS files
 .DS_Store
 Thumbs.db
 
-# Agentic / dev artifacts
+# Agentic / dev artifacts (NOT committed)
 .gemini/
+.sniper/
 docs/guidelines/
 AGENTS.md
 PROMPT.md
 AGENTIC_README.md
 ABOUT.md
-Testing IXD Safety In Docker.md
 mcp_config.json
 test_results/
 tests/docker/
@@ -36,7 +39,10 @@ tests/docker_llmosafe_vendor/
 # Coverage / temporary
 /lcov.info
 ignored_file.txt
+
+# Dockerfiles for testing (generated/temporary)
 Dockerfile.*
+!Dockerfile
 
 # Keep scripts/ directory tracked
 !scripts/*.sh

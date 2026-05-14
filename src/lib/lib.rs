@@ -68,6 +68,8 @@ pub mod builder;
 pub mod cache_policy;
 pub mod config;
 #[cfg(feature = "notify")]
+pub mod daemon;
+#[cfg(feature = "notify")]
 pub mod daemon_sock;
 pub mod decompress;
 /// Error types for the ix crate.
@@ -107,94 +109,13 @@ pub use crate::watcher::Watcher;
 
 /// Run the daemon watching the given directory for changes and rebuilding the index.
 ///
+/// This function is deprecated. Use [`crate::daemon::run`] instead.
+///
 /// # Errors
 ///
-/// Returns an error if the root cannot be canonicalized, the index cannot be built,
-/// or the file watcher fails.
-///
-/// # Panics
-///
-/// Panics if the Ctrl-C handler cannot be set (which is extremely rare).
+/// Delegates to [`daemon::run`]; see that function for error conditions.
 #[cfg(feature = "notify")]
+#[deprecated(since = "0.7.0", note = "use ix::daemon::run instead")]
 pub fn run_daemon(path: &std::path::Path) -> crate::error::Result<()> {
-    use std::fs;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::Duration;
-
-    let root = path.canonicalize().map_err(crate::error::Error::Io)?;
-
-    println!("ixd: watching {}...", root.display());
-
-    let mut builder = Builder::new(&root)?;
-
-    // Lazy startup: if index exists, just update. Otherwise build.
-    let ix_dir = root.join(".ix");
-    let index_file = ix_dir.join("shard.ix");
-    if index_file.exists() {
-        println!("ixd: existing index found, performing startup update...");
-        // In a real implementation we would load the 'files' table from the shard
-        // to know which files to check for changes. For now we just build to satisfy
-        // the current Builder API, but we've already optimized Builder's memory.
-        builder.build()?;
-    } else {
-        builder.build()?;
-    }
-
-    println!(
-        "ixd: initial index ready ({} files, {} trigrams)",
-        builder.files_len(),
-        builder.trigrams_len()
-    );
-
-    let mut watcher = Watcher::new(&root);
-    let rx = watcher.start()?;
-
-    let ix_dir = root.join(".ix");
-    if !ix_dir.exists() {
-        fs::create_dir_all(&ix_dir)?;
-    }
-    let mut beacon = Beacon::new(&root);
-    beacon.write_to(&ix_dir)?;
-
-    let mut idle = IdleTracker::new();
-
-    let running = Arc::new(AtomicBool::new(true));
-    let r = std::sync::Arc::clone(&running);
-    if let Err(e) = ctrlc::set_handler(move || {
-        r.store(false, Ordering::SeqCst);
-    }) {
-        eprintln!("[ix] warning: could not set Ctrl-C handler: {e}");
-    }
-
-    while running.load(Ordering::SeqCst) {
-        match rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(changed_files) => {
-                println!(
-                    "ixd: {} files changed, updating index...",
-                    changed_files.len()
-                );
-
-                beacon.status = "indexing".to_string();
-                beacon.last_event_at = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                let _ = beacon.write_to(&ix_dir);
-
-                idle.record_change();
-                builder.update(&changed_files)?;
-
-                beacon.status = "idle".to_string();
-                let _ = beacon.write_to(&ix_dir);
-            }
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-
-    println!("ixd: shutting down");
-    let _ = fs::remove_file(ix_dir.join("beacon.json"));
-    watcher.stop();
-    Ok(())
+    crate::daemon::run(path)
 }

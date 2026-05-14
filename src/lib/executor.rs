@@ -10,11 +10,12 @@ use crate::format::is_binary;
 use crate::neg_cache::NegCache;
 use crate::planner::QueryPlan;
 use crate::posting_cache::PostingCache;
-use crate::reader::{FileInfo, Reader};
+use crate::reader::{DeltaReader, FileInfo, Reader};
 use crate::regex_pool::RegexPool;
 use crate::trigram::Trigram;
 use rayon::prelude::*;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Read};
@@ -23,7 +24,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 /// A single regex match found in a file.
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Match {
     /// Absolute path to the file containing the match.
     pub file_path: PathBuf,
@@ -44,7 +45,7 @@ pub struct Match {
 }
 
 /// Performance counters collected during query execution.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct QueryStats {
     /// Number of trigrams looked up in the trigram table.
     pub trigrams_queried: u32,
@@ -135,6 +136,8 @@ pub struct QueryOptions {
 /// - [`RegexPool`] caches compiled regex objects across queries
 pub struct Executor<'a> {
     index: &'a Reader,
+    delta: Option<DeltaReader>,
+    delta_path: Option<std::path::PathBuf>,
     posting_cache: Arc<PostingCache>,
     neg_cache: Arc<NegCache>,
     regex_pool: Arc<RegexPool>,
@@ -147,6 +150,8 @@ impl<'a> Executor<'a> {
     pub fn new(index: &'a Reader) -> Self {
         Self {
             index,
+            delta: None,
+            delta_path: None,
             posting_cache: Arc::new(PostingCache::default()),
             neg_cache: Arc::new(NegCache::new(65_536)),
             regex_pool: Arc::new(RegexPool::new(256)),
@@ -164,9 +169,15 @@ impl<'a> Executor<'a> {
         posting_cache: Arc<PostingCache>,
         neg_cache: Arc<NegCache>,
         regex_pool: Arc<RegexPool>,
+        delta_path: Option<std::path::PathBuf>,
     ) -> Self {
+        let delta = delta_path
+            .as_ref()
+            .and_then(|p| crate::reader::DeltaReader::open(p).ok());
         Self {
             index,
+            delta,
+            delta_path,
             posting_cache,
             neg_cache,
             regex_pool,
@@ -192,6 +203,63 @@ impl<'a> Executor<'a> {
         &self.regex_pool
     }
 
+    /// Unified file info getter bridging main shard and delta index.
+    fn get_file_info(&self, fid: u32) -> Option<crate::reader::FileInfo> {
+        if fid >= self.index.header.file_count {
+            let delta = self.delta.as_ref()?;
+            let info = delta.id_to_fileinfo.get(&fid)?;
+            Some(crate::reader::FileInfo {
+                file_id: fid,
+                path: info.path.clone(),
+                status: crate::format::FileStatus::Fresh,
+                mtime_ns: info.mtime,
+                size_bytes: info.size,
+                content_hash: info.hash,
+            })
+        } else {
+            self.index.get_file(fid).ok()
+        }
+    }
+
+    /// Set the path for delta file lookup. Delta is loaded lazily on first search.
+    pub fn set_delta_path(&mut self, path: std::path::PathBuf) {
+        self.delta_path = Some(path);
+    }
+
+    /// Ensure delta is loaded from the configured path.
+    fn ensure_delta(&mut self) {
+        if self.delta.is_none()
+            && let Some(ref path) = self.delta_path
+            && let Ok(dr) = DeltaReader::open(path)
+        {
+            self.delta = Some(dr);
+        }
+    }
+
+    /// Check if a `file_id` is tombstoned.
+    fn is_tombstoned(&self, file_id: u32) -> bool {
+        self.delta
+            .as_ref()
+            .is_some_and(|d| d.tombstones.contains(&file_id))
+    }
+
+    /// Merge delta postings into a candidate set.
+    fn merge_delta_candidates(
+        &self,
+        candidates: &mut std::collections::HashSet<u32>,
+        trigram: crate::trigram::Trigram,
+    ) {
+        if let Some(ref delta) = self.delta
+            && let Some(entries) = delta.postings.get(&trigram)
+        {
+            for entry in entries {
+                if !self.is_tombstoned(entry.file_id) {
+                    candidates.insert(entry.file_id);
+                }
+            }
+        }
+    }
+
     /// Execute a query plan against the index.
     ///
     /// # Errors
@@ -204,6 +272,7 @@ impl<'a> Executor<'a> {
         options: &QueryOptions,
     ) -> Result<(Vec<Match>, QueryStats)> {
         self.neg_query_fingerprint = crate::neg_cache::query_fingerprint(plan.pattern_str());
+        self.ensure_delta();
         match plan {
             QueryPlan::Literal {
                 pattern,
@@ -279,6 +348,10 @@ impl<'a> Executor<'a> {
         let postings = self.decode_postings_cached(*rarest_tri, rarest_info, &mut stats)?;
 
         let mut candidates: HashSet<u32> = postings.entries.iter().map(|e| e.file_id).collect();
+
+        // Filter tombstoned file_ids and merge delta entries
+        candidates.retain(|&fid| !self.is_tombstoned(fid));
+        self.merge_delta_candidates(&mut candidates, *rarest_tri);
         tracing::debug!("step 1 (rarest): {} candidates", candidates.len());
 
         // ── Step 2: Intersect with next rarest lists if candidate set is large ──
@@ -323,7 +396,7 @@ impl<'a> Executor<'a> {
                     return None;
                 }
 
-                let file_info = self.index.get_file(fid).ok()?;
+                let file_info = self.get_file_info(fid)?;
 
                 if !options.type_filter.is_empty() {
                     let ext = file_info
@@ -420,6 +493,12 @@ impl<'a> Executor<'a> {
             final_candidates.retain(|fid: &u32| set.contains(fid));
         }
 
+        // Tombstone filtering + delta merge
+        final_candidates.retain(|&fid| !self.is_tombstoned(fid));
+        if let Some(ref delta) = self.delta {
+            final_candidates.extend(delta.id_to_fileinfo.keys().copied());
+        }
+
         stats.candidate_files = final_candidates.len() as u32;
 
         let accum = QueryStatsAccum::new();
@@ -437,7 +516,7 @@ impl<'a> Executor<'a> {
                     return None;
                 }
 
-                let file_info = self.index.get_file(fid).ok()?;
+                let file_info = self.get_file_info(fid)?;
 
                 if !options.type_filter.is_empty() {
                     let ext = file_info
@@ -506,7 +585,7 @@ impl<'a> Executor<'a> {
         }
 
         // Intersect across position groups
-        let final_candidates = if let Some(mut base) = group_candidates.pop() {
+        let mut final_candidates = if let Some(mut base) = group_candidates.pop() {
             for set in group_candidates {
                 base.retain(|fid| set.contains(fid));
             }
@@ -516,6 +595,12 @@ impl<'a> Executor<'a> {
             let all: HashSet<u32> = (0..self.index.header.file_count).collect();
             all
         };
+
+        // Tombstone filtering + delta merge
+        final_candidates.retain(|&fid| !self.is_tombstoned(fid));
+        if let Some(ref delta) = self.delta {
+            final_candidates.extend(delta.id_to_fileinfo.keys().copied());
+        }
 
         stats.candidate_files = final_candidates.len() as u32;
 
@@ -534,15 +619,15 @@ impl<'a> Executor<'a> {
                     return None;
                 }
 
-                let file_info = self.index.get_file(fid).ok()?;
+                let file_info = self.get_file_info(fid)?;
 
                 if !options.type_filter.is_empty() {
                     let ext = file_info
                         .path
                         .extension()
-                        .and_then(|e| e.to_str())
+                        .and_then(|e: &std::ffi::OsStr| e.to_str())
                         .unwrap_or("");
-                    if !options.type_filter.iter().any(|e| e == ext) {
+                    if !options.type_filter.iter().any(|e: &String| e == ext) {
                         return None;
                     }
                 }
@@ -575,12 +660,24 @@ impl<'a> Executor<'a> {
 
     #[allow(clippy::as_conversions)] // line count fits within range
     fn execute_full_scan(&self, regex: &Regex, options: &QueryOptions) -> (Vec<Match>, QueryStats) {
-        let stats_candidate_files = self.index.header.file_count;
+        let mut candidates: Vec<u32> = (0..self.index.header.file_count)
+            .filter(|fid| !self.is_tombstoned(*fid))
+            .collect();
+        if let Some(ref delta) = self.delta {
+            candidates.extend(
+                delta
+                    .id_to_fileinfo
+                    .keys()
+                    .copied()
+                    .filter(|fid| !self.is_tombstoned(*fid)),
+            );
+        }
+        let stats_candidate_files = candidates.len() as u32;
 
         let accum = QueryStatsAccum::new();
         let neg_fp = self.neg_query_fingerprint;
 
-        let mut all_matches: Vec<Match> = (0..self.index.header.file_count)
+        let mut all_matches: Vec<Match> = candidates
             .into_par_iter()
             .filter_map(|fid| {
                 let should_early_terminate = options.max_results > 0
@@ -590,7 +687,7 @@ impl<'a> Executor<'a> {
                     return None;
                 }
 
-                let file_info = self.index.get_file(fid).ok()?;
+                let file_info = self.get_file_info(fid)?;
 
                 if !options.type_filter.is_empty() {
                     let ext = file_info

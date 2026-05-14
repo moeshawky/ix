@@ -25,14 +25,18 @@ fn test_json_escaping_backslash_quote() {
 
     run_ix(&["--build", dir.path().to_str().unwrap()]);
     let (stdout, _stderr) = run_ix(&["--json", "prefix", dir.path().to_str().unwrap()]);
-    
+
     let line = stdout.lines().next().expect("Should find match");
     // G-SEM: Must be valid JSON - this is the critical test
     let json: serde_json::Value = serde_json::from_str(line)
         .unwrap_or_else(|e| panic!("Invalid JSON output: {}\nRaw: {}", e, line));
-    
+
     let content = json["content"].as_str().unwrap();
-    assert!(content.contains("prefix"), "Content should match: {}", content);
+    assert!(
+        content.contains("prefix"),
+        "Content should match: {}",
+        content
+    );
 }
 
 #[test]
@@ -45,10 +49,10 @@ fn test_json_escaping_windows_path() {
 
     run_ix(&["--build", dir.path().to_str().unwrap()]);
     let (stdout, _stderr) = run_ix(&["--json", "Users", dir.path().to_str().unwrap()]);
-    
+
     let line = stdout.lines().next().expect("Should find match");
-    let _: serde_json::Value = serde_json::from_str(line)
-        .unwrap_or_else(|e| panic!("Invalid JSON: {}\nRaw: {}", e, line));
+    let _: serde_json::Value =
+        serde_json::from_str(line).unwrap_or_else(|e| panic!("Invalid JSON: {}\nRaw: {}", e, line));
 }
 
 #[test]
@@ -58,11 +62,16 @@ fn test_invalid_regex_no_panic() {
     fs::write(&file_path, "test content").unwrap();
 
     run_ix(&["--build", dir.path().to_str().unwrap()]);
-    
+
     let bad_patterns = ["[", "(", "*", "+", "?", "{1,2}", "(?"];
     for pattern in bad_patterns {
         let (_stdout, stderr) = run_ix(&["--regex", pattern, dir.path().to_str().unwrap()]);
-        assert!(!stderr.contains("panicked"), "Pattern '{}' caused panic: {}", pattern, stderr);
+        assert!(
+            !stderr.contains("panicked"),
+            "Pattern '{}' caused panic: {}",
+            pattern,
+            stderr
+        );
     }
 }
 
@@ -74,8 +83,12 @@ fn test_empty_pattern_no_panic() {
 
     run_ix(&["--build", dir.path().to_str().unwrap()]);
     let (_stdout, stderr) = run_ix(&["", dir.path().to_str().unwrap()]);
-    
-    assert!(!stderr.contains("panicked"), "Empty pattern caused panic: {}", stderr);
+
+    assert!(
+        !stderr.contains("panicked"),
+        "Empty pattern caused panic: {}",
+        stderr
+    );
 }
 
 #[test]
@@ -86,10 +99,10 @@ fn test_json_output_golden() {
 
     run_ix(&["--build", dir.path().to_str().unwrap()]);
     let (stdout, _stderr) = run_ix(&["--json", "test_func", dir.path().to_str().unwrap()]);
-    
+
     let line = stdout.lines().next().expect("Should find match");
     let json: serde_json::Value = serde_json::from_str(line).unwrap();
-    
+
     assert!(json["file"].as_str().is_some());
     assert!(json["line"].as_u64().is_some());
     assert!(json["content"].as_str().is_some());

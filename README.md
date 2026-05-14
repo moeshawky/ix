@@ -5,6 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![CI](https://github.com/moeshawky/ix/actions/workflows/build.yml/badge.svg)](https://github.com/moeshawky/ix/actions/workflows/build.yml)
 
+**Last Verified:** 2026-05-14  
+**Verification Command:** `./scripts/verify-docs.sh`
+
 Sub-millisecond code search via sparse trigram indexing.
 
 `ix` pre-computes a byte-level trigram index to narrow search candidates to a fraction of the total file set, then verifies matches with a memory-constant streaming architecture. This eliminates the linear-scan bottleneck that slows `grep` and `ripgrep` on large codebases.

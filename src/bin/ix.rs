@@ -12,8 +12,7 @@
 
 use clap::Parser;
 use ix::builder::Builder;
-use ix::executor::{Executor, Match, QueryOptions, QueryStats};
-use ix::planner::Planner;
+use ix::executor::{Match, QueryOptions, QueryStats};
 use ix::reader::Reader;
 use ix::scanner::Scanner;
 use regex::Regex;
@@ -208,6 +207,101 @@ struct SearchParams<'a> {
     max_file_size: u64,
 }
 
+/// Execute search locally using mmap (fallback when IPC is unavailable).
+fn execute_local_search(
+    params: &SearchParams,
+    index_path: &Path,
+    index_root: &Path,
+    options: &QueryOptions,
+    search_path_abs: &Path,
+) -> Result<(Vec<ix::executor::Match>, ix::executor::QueryStats), ix::error::Error> {
+    use ix::executor::Executor;
+    use ix::planner::Planner;
+    use ix::reader::Reader;
+
+    let reader = Reader::open(index_path)?;
+    check_stale(&reader, index_root)?;
+
+    std::env::set_current_dir(index_root)?;
+
+    let plan = Planner::plan_with_options(
+        params.pattern,
+        ix::planner::QueryOptions {
+            is_regex: params.flags.is_regex,
+            ignore_case: params.flags.ignore_case,
+            multiline: params.flags.multiline,
+            word_boundary: params.flags.word_boundary,
+        },
+    );
+    let mut executor = Executor::new(&reader);
+
+    if let Some(delta_path) = index_path.parent().map(|p| p.join("shard.ix.delta")) {
+        executor.set_delta_path(delta_path);
+    }
+
+    let rss = llmosafe::ResourceGuard::current_rss_bytes();
+    let sys_mem = llmosafe::ResourceGuard::system_memory_bytes();
+    if sys_mem > 0 {
+        let pressure = u8::try_from(rss.saturating_mul(100).saturating_div(sys_mem)).unwrap_or(100);
+        let zone = ix::cache_policy::PressureZone::from_pressure(pressure);
+        let allow = !matches!(
+            zone,
+            ix::cache_policy::PressureZone::Orange | ix::cache_policy::PressureZone::Red
+        );
+        executor.posting_cache().set_admit(allow);
+        executor.neg_cache().set_admit(allow);
+    }
+
+    let (m, s) = executor.execute(&plan, options)?;
+
+    let filtered_matches: Vec<_> = m
+        .into_iter()
+        .filter(|m| {
+            let abs_path = if m.file_path.is_absolute() {
+                m.file_path.clone()
+            } else {
+                index_root.join(&m.file_path)
+            };
+            abs_path.starts_with(search_path_abs)
+        })
+        .collect();
+
+    let _ = std::env::set_current_dir(
+        std::env::current_dir().unwrap_or_else(|_| params.path.to_path_buf()),
+    );
+    Ok((filtered_matches, s))
+}
+
+/// Try to execute search via IPC to the daemon.
+/// Returns `Some((matches, stats))` on success, `None` if daemon is unavailable
+/// or the IPC call fails (triggers local fallback).
+fn try_ipc_search(
+    params: &SearchParams,
+    index_root: &Path,
+) -> Option<(Vec<ix::executor::Match>, ix::executor::QueryStats)> {
+    use ix::daemon_sock::{DaemonClient, SearchQuery};
+
+    let mut client = DaemonClient::connect(index_root).ok()?;
+
+    let query = SearchQuery {
+        id: 1,
+        pattern: params.pattern.to_string(),
+        is_regex: params.flags.is_regex,
+        ignore_case: params.flags.ignore_case,
+        word_boundary: params.flags.word_boundary,
+        max_results: params.max_results,
+        context_lines: params.context,
+        file_types: params.file_types.to_vec(),
+        decompress: params.flags.decompress,
+        multiline: params.flags.multiline,
+        archive: params.flags.archive,
+        binary: params.flags.binary,
+    };
+
+    let results = client.search(query).ok()?;
+    Some((results.matches, results.stats))
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -235,7 +329,7 @@ fn main() {
                 cli.path.clone()
             };
             for path in &paths {
-                if let Err(e) = ix::run_daemon(path) {
+                if let Err(e) = ix::daemon::run(path) {
                     eprintln!("Error watching {}: {e}", path.display());
                     std::process::exit(1);
                 }
@@ -663,64 +757,19 @@ fn do_search(params: &SearchParams) -> ix::error::Result<()> {
     };
 
     let (matches, stats) = if let Some((path, index_root, beacon_opt)) = &index_info {
-        let reader = Reader::open(path)?;
+        // Check if daemon is live and try IPC search first
+        let daemon_managed = beacon_opt.as_ref().is_some_and(ix::format::Beacon::is_live);
 
-        if let Some(beacon) = &beacon_opt {
-            if beacon.is_live() {
-                eprintln!("[ix] managed by ixd (Status: {})", beacon.status);
-            } else {
-                check_stale(&reader, index_root)?;
+        if daemon_managed {
+            // Try IPC search with silent fallback
+            match try_ipc_search(params, index_root) {
+                Some((m, s)) => (m, s),
+                None => execute_local_search(params, path, index_root, &options, &search_path_abs)?,
             }
         } else {
-            check_stale(&reader, index_root)?;
+            // No daemon, execute locally
+            execute_local_search(params, path, index_root, &options, &search_path_abs)?
         }
-
-        std::env::set_current_dir(index_root)?;
-
-        let plan = Planner::plan_with_options(
-            params.pattern,
-            ix::planner::QueryOptions {
-                is_regex: params.flags.is_regex,
-                ignore_case: params.flags.ignore_case,
-                multiline: params.flags.multiline,
-                word_boundary: params.flags.word_boundary,
-            },
-        );
-        let mut executor = Executor::new(&reader);
-
-        // In CLI mode, apply a lightweight cache policy based on RSS.
-        // Full AdaptiveCachePolicy is reserved for daemon mode (it blocks
-        // for ~100ms reading /proc/stat).
-        let rss = llmosafe::ResourceGuard::current_rss_bytes();
-        let sys_mem = llmosafe::ResourceGuard::system_memory_bytes();
-        if sys_mem > 0 {
-            let pressure =
-                u8::try_from(rss.saturating_mul(100).saturating_div(sys_mem)).unwrap_or(100);
-            let zone = ix::cache_policy::PressureZone::from_pressure(pressure);
-            let allow = !matches!(
-                zone,
-                ix::cache_policy::PressureZone::Orange | ix::cache_policy::PressureZone::Red
-            );
-            executor.posting_cache().set_admit(allow);
-            executor.neg_cache().set_admit(allow);
-        }
-
-        let (m, s) = executor.execute(&plan, &options)?;
-
-        let filtered_matches: Vec<_> = m
-            .into_iter()
-            .filter(|m| {
-                let abs_path = if m.file_path.is_absolute() {
-                    m.file_path.clone()
-                } else {
-                    index_root.join(&m.file_path)
-                };
-                abs_path.starts_with(&search_path_abs)
-            })
-            .collect();
-
-        let _ = std::env::set_current_dir(&original_cwd);
-        (filtered_matches, s)
     } else {
         let scanner = Scanner::new(params.path);
         let matches = scanner.scan(
@@ -854,7 +903,10 @@ fn print_match(
             m.file_path.display(),
             m.line_number,
             m.col,
-            line_content.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"),
+            line_content
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n"),
             m.byte_offset,
             context_before,
             context_after,

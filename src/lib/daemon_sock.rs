@@ -136,6 +136,17 @@ pub struct FileChange {
     pub op: FileOp,
 }
 
+/// Search results returned from daemon to client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResults {
+    /// Query ID (matches the id from the request).
+    pub id: u64,
+    /// Matching results.
+    pub matches: Vec<crate::executor::Match>,
+    /// Query execution statistics.
+    pub stats: crate::executor::QueryStats,
+}
+
 /// Messages sent from the server to connected clients.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
@@ -178,6 +189,49 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         last_rebuild_at: Option<u64>,
     },
+    /// Search query results.
+    SearchResults(SearchResults),
+}
+
+/// Search query parameters sent from client to daemon.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct SearchQuery {
+    /// Client-assigned query ID (echoed back in the response).
+    #[serde(default)]
+    pub id: u64,
+    /// Pattern to search for.
+    pub pattern: String,
+    /// Interpret pattern as regex.
+    #[serde(default)]
+    pub is_regex: bool,
+    /// Case-insensitive search.
+    #[serde(default)]
+    pub ignore_case: bool,
+    /// Match whole words only.
+    #[serde(default)]
+    pub word_boundary: bool,
+    /// Maximum number of results (0 = unlimited).
+    #[serde(default)]
+    pub max_results: usize,
+    /// Number of context lines.
+    #[serde(default)]
+    pub context_lines: usize,
+    /// File extensions filter.
+    #[serde(default)]
+    pub file_types: Vec<String>,
+    /// Decompress archives.
+    #[serde(default)]
+    pub decompress: bool,
+    /// Multiline mode (dot matches newline).
+    #[serde(default)]
+    pub multiline: bool,
+    /// Search inside archives.
+    #[serde(default)]
+    pub archive: bool,
+    /// Search binary files.
+    #[serde(default)]
+    pub binary: bool,
 }
 
 /// Messages sent from connected clients to the daemon server.
@@ -197,6 +251,8 @@ pub enum ClientMessage {
         /// Client-assigned query ID (echoed back in the response).
         id: u64,
     },
+    /// Execute a search query.
+    SearchQuery(SearchQuery),
 }
 
 /// Errors specific to the daemon socket subsystem.
@@ -289,6 +345,7 @@ struct Shared {
     daemon_status: Option<DaemonStatus>,
     last_rebuild_at: Option<u64>,
     files_count: usize,
+    root: PathBuf,
 }
 
 struct ClientConn {
@@ -352,6 +409,7 @@ impl DaemonServer {
             daemon_status: Some(DaemonStatus::Idle),
             last_rebuild_at: None,
             files_count: 0,
+            root: root.to_path_buf(),
         }));
         let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
 
@@ -537,6 +595,26 @@ fn client_read_loop(
                             last_rebuild_at: s.last_rebuild_at,
                         }
                     }
+                    ClientMessage::SearchQuery(query) => {
+                        let root = {
+                            let Ok(s) = shared.lock() else {
+                                tracing::warn!("ixd: shared lock poisoned in search query");
+                                continue;
+                            };
+                            s.root.clone()
+                        };
+                        match execute_search(&root, &query) {
+                            Ok(results) => ServerMessage::SearchResults(results),
+                            Err(e) => {
+                                tracing::warn!("ixd: search failed: {e}");
+                                ServerMessage::SearchResults(SearchResults {
+                                    id: query.id,
+                                    matches: vec![],
+                                    stats: crate::executor::QueryStats::default(),
+                                })
+                            }
+                        }
+                    }
                 };
 
                 if let Ok(mut write_stream) = stream.try_clone() {
@@ -628,6 +706,42 @@ impl DaemonClient {
         stream.flush()?;
         Ok(())
     }
+
+    /// Execute a search query and return results.
+    /// This sends a `SearchQuery` message and waits for the `SearchResults` response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on I/O failure, timeout, or if the response is not a `SearchResults`.
+    pub fn search(&mut self, query: SearchQuery) -> Result<SearchResults> {
+        use std::io::Write;
+
+        let stream = self.stream.get_mut();
+        stream.set_write_timeout(Some(std::time::Duration::from_secs(3)))?;
+
+        // Send query
+        let mut line = serde_json::to_string(&ClientMessage::SearchQuery(query))?;
+        line.push('\n');
+        stream.write_all(line.as_bytes())?;
+        stream.flush()?;
+
+        // Read response
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(3)))?;
+        let mut response_line = String::new();
+        self.stream.read_line(&mut response_line)?;
+
+        match serde_json::from_str::<ServerMessage>(response_line.trim_end()) {
+            Ok(ServerMessage::SearchResults(results)) => Ok(results),
+            Ok(other) => Err(DaemonSockError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("expected SearchResults, got {other:?}"),
+            ))),
+            Err(e) => Err(DaemonSockError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid JSON: {e}"),
+            ))),
+        }
+    }
 }
 
 /// Current Unix timestamp in seconds.
@@ -636,6 +750,69 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+/// Execute a search query against the index at the given root path.
+/// This reads directly from the shard.ix file, ensuring consistency with
+/// the daemon's current state (since the daemon rebuilds the index on each change).
+///
+/// # Errors
+///
+/// Returns an error if the index file cannot be read, the index format is
+/// corrupt, or the query cannot be executed.
+pub fn execute_search(
+    root: &Path,
+    query: &SearchQuery,
+) -> std::result::Result<SearchResults, Box<dyn std::error::Error + Send + Sync>> {
+    use crate::executor::{Executor, QueryOptions};
+    use crate::planner::Planner;
+    use crate::reader::Reader;
+
+    // Find the index file
+    let index_dir = root.join(".ix");
+    let index_path = index_dir.join("shard.ix");
+
+    if !index_path.exists() {
+        return Err("index not found".into());
+    }
+
+    let reader = Reader::open(&index_path)?;
+    let plan = Planner::plan_with_options(
+        &query.pattern,
+        crate::planner::QueryOptions {
+            is_regex: query.is_regex,
+            ignore_case: query.ignore_case,
+            multiline: query.multiline,
+            word_boundary: query.word_boundary,
+        },
+    );
+
+    let mut executor = Executor::new(&reader);
+
+    // Set up delta file path
+    let delta_path = index_dir.join("shard.ix.delta");
+    executor.set_delta_path(delta_path);
+
+    let options = QueryOptions {
+        count_only: false,
+        files_only: false,
+        max_results: query.max_results,
+        type_filter: query.file_types.clone(),
+        context_lines: query.context_lines,
+        decompress: query.decompress,
+        threads: 0,
+        multiline: query.multiline,
+        archive: query.archive,
+        binary: query.binary,
+        word_boundary: query.word_boundary,
+    };
+
+    let (matches, stats) = executor.execute(&plan, &options)?;
+    Ok(SearchResults {
+        id: query.id,
+        matches,
+        stats,
+    })
 }
 
 impl Drop for DaemonServer {

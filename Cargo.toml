@@ -53,7 +53,7 @@ archive = ["zip", "tar"]
 full = ["decompress", "notify", "archive"]
 
 [dependencies]
-llmosafe = "0.5.5"
+llmosafe = "0.6.1"
 memmap2 = "0.9"
 crc32c = "0.6"
 xxhash-rust = { version = "0.8", features = ["xxh64"] }

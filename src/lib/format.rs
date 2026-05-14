@@ -24,6 +24,16 @@ pub const CDX_BLOCK_SIZE: usize = 1024;
 /// On-disk size of one file-table entry in the index.
 pub const FILE_ENTRY_SIZE: usize = 48;
 
+/// Magic bytes identifying a delta file (`b"IXDL"`).
+pub const DELTA_MAGIC: [u8; 4] = [0x49, 0x58, 0x44, 0x4C];
+
+/// Entry type byte for a tombstone record (`file_id` u32 LE follows).
+pub const DELTA_TOMBSTONE: u8 = 0x01;
+/// Entry type byte for a file entry (inline file table entry + path + bloom).
+pub const DELTA_FILE_ENTRY: u8 = 0x02;
+/// Entry type byte for a trigram posting record.
+pub const DELTA_TRIGRAM_ENTRY: u8 = 0x03;
+
 /// Bit-flag constants stored in the [`Header::flags`] field.
 pub mod flags {
     /// The index contains per-trigram bloom filters.

@@ -476,13 +476,55 @@ impl Builder {
         Ok(output_path)
     }
 
-    /// Update the index for changed files (currently does a full rebuild).
+    /// Update the index for changed files using append-only delta indexing.
     ///
     /// # Errors
     ///
-    /// Returns an error if the build process fails.
-    pub fn update(&mut self, _changed_files: &[PathBuf]) -> Result<PathBuf> {
-        self.build()
+    /// Returns an error if I/O fails or a file cannot be processed.
+    pub fn update(&mut self, changed_files: &[PathBuf]) -> Result<PathBuf> {
+        use crate::format::{DELTA_MAGIC, DELTA_TOMBSTONE};
+        use crate::reader::{DeltaReader, Reader};
+        use std::fs::OpenOptions;
+
+        let index_file = self.ix_dir.join("shard.ix");
+        let delta_file = self.ix_dir.join("shard.ix.delta");
+
+        let Ok(main_reader) = Reader::open(&index_file) else {
+            return self.build();
+        };
+
+        let delta_reader = DeltaReader::open(&delta_file).unwrap_or_default();
+        let mut next_file_id = main_reader.header.file_count + delta_reader.total_file_entries;
+
+        let is_new = !delta_file.exists();
+        let mut delta_out = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&delta_file)?;
+        if is_new {
+            delta_out.write_all(&DELTA_MAGIC)?;
+        }
+
+        let mut path_to_id = delta_reader.path_to_id;
+        for file_id in 0..main_reader.header.file_count {
+            if let Ok(info) = main_reader.get_file(file_id) {
+                path_to_id.entry(info.path).or_insert(file_id);
+            }
+        }
+
+        for path in changed_files {
+            if let Some(&old_id) = path_to_id.get(path) {
+                delta_out.write_all(&[DELTA_TOMBSTONE])?;
+                delta_out.write_all(&old_id.to_le_bytes())?;
+            }
+
+            if path.exists() && self.process_file_delta(path, next_file_id, &mut delta_out)? {
+                next_file_id += 1;
+            }
+        }
+
+        delta_out.flush()?;
+        Ok(index_file)
     }
 
     /// Number of files indexed so far (snapshot for progress reporting).
@@ -738,6 +780,82 @@ impl Builder {
                 );
             }
             self.flush_run()?;
+        }
+
+        Ok(true)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn process_file_delta<W: std::io::Write>(
+        &mut self,
+        path: &Path,
+        file_id: u32,
+        delta: &mut W,
+    ) -> Result<bool> {
+        use crate::bloom::BloomFilter;
+        use crate::format::{DELTA_FILE_ENTRY, DELTA_TRIGRAM_ENTRY};
+
+        let metadata = match fs::metadata(path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e.into()),
+        };
+        let size = metadata.len();
+        let mtime = metadata
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64);
+
+        if self.max_file_size > 0 && size > self.max_file_size {
+            return Ok(false);
+        }
+        let file = fs::File::open(path)?;
+        let mmap = unsafe { memmap2::Mmap::map(&file)? };
+        let data = &mmap[..];
+        if crate::format::is_binary(data) {
+            return Ok(false);
+        }
+
+        let content_hash = xxhash_rust::xxh64::xxh64(data, 0);
+        let pairs = self.extractor.extract_with_offsets(data);
+
+        let mut bloom = BloomFilter::new(256, 5);
+        let mut trigram_entries: Vec<(crate::trigram::Trigram, Vec<u32>)> = Vec::new();
+
+        let mut i = 0;
+        while i < pairs.len() {
+            let tri = pairs[i].0;
+            let mut j = i + 1;
+            while j < pairs.len() && pairs[j].0 == tri {
+                j += 1;
+            }
+            let offsets: Vec<u32> = pairs[i..j].iter().map(|p| p.1).collect();
+            bloom.insert(tri);
+            trigram_entries.push((tri, offsets));
+            i = j;
+        }
+
+        let path_bytes = path.to_string_lossy().as_bytes().to_vec();
+        delta.write_all(&[DELTA_FILE_ENTRY])?;
+        delta.write_all(&file_id.to_le_bytes())?;
+        delta.write_all(&(path_bytes.len() as u16).to_le_bytes())?;
+        delta.write_all(&path_bytes)?;
+        delta.write_all(&mtime.to_le_bytes())?;
+        delta.write_all(&size.to_le_bytes())?;
+        delta.write_all(&content_hash.to_le_bytes())?;
+        let mut bloom_buf = Vec::new();
+        bloom.serialize(&mut bloom_buf)?;
+        delta.write_all(&bloom_buf)?;
+
+        for (tri, offsets) in trigram_entries {
+            delta.write_all(&[DELTA_TRIGRAM_ENTRY])?;
+            delta.write_all(&tri.to_le_bytes())?;
+            delta.write_all(&1u32.to_le_bytes())?;
+            delta.write_all(&file_id.to_le_bytes())?;
+            delta.write_all(&(offsets.len() as u32).to_le_bytes())?;
+            for off in offsets {
+                delta.write_all(&off.to_le_bytes())?;
+            }
         }
 
         Ok(true)
