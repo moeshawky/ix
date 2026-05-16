@@ -461,3 +461,36 @@ sudo sysctl -p
 - `docs/DELTA-FORMAT.md` — Delta index format
 - `src/lib/daemon.rs` — Full daemon implementation
 - `src/lib/daemon_sock.rs` — Socket handling code
+
+### Client Shutdown Protocol
+
+When the daemon receives a shutdown signal (SIGTERM/SIGINT), it:
+
+1. **Broadcasts** `ServerMessage::Shutdown` to all connected clients via the Unix socket
+2. **Waits** 1000ms for clients to receive the notice
+3. **Closes** the socket and exits
+
+**Client Behavior:**
+- Clients receive `{"t":"shutdown","reason":"signal","delay_ms":1000}`
+- Clients have 1000ms to finish in-flight operations
+- After delay, socket closes (EOF)
+- Clients can distinguish graceful shutdown from crash
+
+**Example Client Handling:**
+```json
+// Client receives:
+{"t":"shutdown","reason":"signal","delay_ms":1000}
+
+// Client should:
+// 1. Complete current query (if any)
+// 2. Save state if needed
+// 3. Reconnect after delay (if auto-reconnect enabled)
+```
+
+**Optional Acknowledgment:**
+Clients can send acknowledgment (fire-and-forget):
+```json
+{"t":"shutdown","ack":true}
+```
+
+This is logged by the daemon but not required - the shutdown proceeds regardless.
