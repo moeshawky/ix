@@ -191,6 +191,8 @@ pub enum ServerMessage {
     },
     /// Search query results.
     SearchResults(SearchResults),
+    /// Graceful shutdown notice sent to all clients before closing.
+    Shutdown(ShutdownNotice),
 }
 
 /// Search query parameters sent from client to daemon.
@@ -234,6 +236,15 @@ pub struct SearchQuery {
     pub binary: bool,
 }
 
+/// Graceful shutdown notice sent from server to clients.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShutdownNotice {
+    /// Reason for shutdown (e.g., "signal", "`user_request`").
+    pub reason: String,
+    /// Milliseconds clients have before socket closes.
+    pub delay_ms: u32,
+}
+
 /// Messages sent from connected clients to the daemon server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
@@ -253,6 +264,12 @@ pub enum ClientMessage {
     },
     /// Execute a search query.
     SearchQuery(SearchQuery),
+    /// Client acknowledgment of shutdown notice (optional, for slow-client detection).
+    Shutdown {
+        /// Acknowledgment flag (true = received shutdown notice).
+        #[serde(default)]
+        ack: bool,
+    },
 }
 
 /// Errors specific to the daemon socket subsystem.
@@ -539,6 +556,27 @@ impl DaemonServer {
             s.clients.retain_mut(|c| c.send(&msg));
         }
     }
+
+    /// Broadcast graceful shutdown notice to all connected clients.
+    ///
+    /// Sends a `ServerMessage::Shutdown` to all clients, then waits for
+    /// the specified delay to give clients time to finish in-flight operations.
+    /// After the delay, the socket will be closed by the `Drop` implementation.
+    ///
+    /// # Arguments
+    ///
+    /// * `reason` - Human-readable reason for shutdown (e.g., "signal", "`user_request`")
+    /// * `delay_ms` - Milliseconds to wait after broadcast before closing
+    pub fn shutdown_notify(&self, reason: &str, delay_ms: u32) {
+        // Broadcast shutdown notice to all connected clients
+        self.broadcast(&ServerMessage::Shutdown(ShutdownNotice {
+            reason: reason.to_string(),
+            delay_ms,
+        }));
+
+        // Give clients time to finish in-flight operations
+        std::thread::sleep(std::time::Duration::from_millis(u64::from(delay_ms)));
+    }
 }
 fn client_read_loop(
     stream: &UnixStream,
@@ -614,6 +652,16 @@ fn client_read_loop(
                                 })
                             }
                         }
+                    }
+                    ClientMessage::Shutdown { ack } => {
+                        // Client acknowledges shutdown notice
+                        // Log for diagnostics, no response needed
+                        tracing::debug!(
+                            "ixd: client shutdown ack={}",
+                            if ack { "true" } else { "false" }
+                        );
+                        // Continue loop - server will close connection after delay
+                        continue;
                     }
                 };
 
@@ -1077,4 +1125,46 @@ mod tests {
             Err(e) => panic!("recv failed: {e}"),
         }
     }
+}
+
+#[test]
+fn test_shutdown_protocol() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().to_path_buf();
+    let mut server = DaemonServer::new(&root).expect("create server");
+    let _ = server.start();
+
+    // Test shutdown notification
+    server.shutdown_notify("test_signal", 100);
+
+    // Give it time to broadcast
+    std::thread::sleep(std::time::Duration::from_millis(150));
+
+    // Server should still be functional after shutdown notify
+    server.set_status(&DaemonStatus::Idle, 0);
+}
+
+#[test]
+fn test_client_shutdown_ack() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().to_path_buf();
+    let mut server = DaemonServer::new(&root).expect("create server");
+    let sp = server.path().to_path_buf();
+    let _ = server.start();
+
+    let stream = UnixStream::connect(&sp).expect("connect");
+    let mut client = DaemonClient {
+        stream: BufReader::new(stream),
+    };
+
+    // Client sends shutdown acknowledgment
+    client
+        .send(&ClientMessage::Shutdown { ack: true })
+        .expect("send shutdown ack");
+
+    // Give server time to process
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Server should still be functional (shutdown ack is fire-and-forget)
+    server.set_status(&DaemonStatus::Idle, 0);
 }

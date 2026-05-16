@@ -193,6 +193,10 @@ fn run_main_loop(
     loop {
         if SHUTDOWN.load(Ordering::SeqCst) {
             running.store(false, Ordering::SeqCst);
+            // Graceful shutdown: notify clients before closing
+            if let Some(sock) = daemon_sock {
+                sock.shutdown_notify("signal", 1000);
+            }
             break;
         }
 
