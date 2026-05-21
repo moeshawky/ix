@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![CI](https://github.com/moeshawky/ix/actions/workflows/build.yml/badge.svg)](https://github.com/moeshawky/ix/actions/workflows/build.yml)
 
-**Last Verified:** 2026-05-14  
+**Last Verified:** 2026-05-21
 **Verification Command:** `./scripts/verify-docs.sh`
 
 Sub-millisecond code search via sparse trigram indexing.
@@ -75,11 +75,17 @@ ix --build .
 
 ## Daemon
 
-`ixd` watches a directory for file changes and incrementally updates the index:
+`ixd` watches one or more directories for file changes and incrementally updates the index:
 
 ```bash
+# Single directory (backward compatible)
 ixd /path/to/repo
+
+# Multiple directories (new in v0.9.0)
+ixd /project-a /project-b /project-c
 ```
+
+Each directory runs on its own thread with independent index, watcher, beacon, and Unix domain socket. Signal handling and memory monitoring are shared across all roots for safety.
 
 The daemon exposes a Unix domain socket for external consumers (editors, tooling):
 

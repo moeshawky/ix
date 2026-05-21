@@ -283,12 +283,27 @@ pub struct Beacon {
     /// Path to the Unix domain socket for real-time notifications.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub socket_path: Option<PathBuf>,
+    /// Instance identifier (process start timestamp in nanos).
+    /// Distinguishes multiple runs of the same PID.
+    #[serde(default)]
+    pub instance_id: u64,
 }
 
 impl Beacon {
     /// Create a new beacon for the current process, anchored at the given root.
     #[must_use]
     pub fn new(root: &Path) -> Self {
+        Self::with_instance_id(root, instance_id_now())
+    }
+
+    /// Create a new beacon with an explicit instance identifier.
+    ///
+    /// Use this when multiple roots are watched by the same process so that
+    /// the concurrent-instance guard can distinguish stale beacons (same PID,
+    /// different `instance_id`) from live duplicates (same PID, same
+    /// `instance_id`).
+    #[must_use]
+    pub fn with_instance_id(root: &Path, instance_id: u64) -> Self {
         let pid = i32::try_from(std::process::id()).unwrap_or(0);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -302,6 +317,7 @@ impl Beacon {
             status: "idle".to_string(),
             last_event_at: now,
             socket_path: None,
+            instance_id,
         }
     }
 
@@ -354,6 +370,22 @@ impl Beacon {
         let beacon = serde_json::from_reader(f).map_err(std::io::Error::other)?;
         Ok(beacon)
     }
+}
+
+/// Generate a per-run instance identifier from the process start time.
+///
+/// The value is `SystemTime::now()` in nanoseconds. It is stable within a
+/// single `ixd` invocation and unique enough that two runs of the same PID
+/// will produce different values, resolving the PID-reuse ambiguity in the
+/// concurrent-instance beacon guard.
+#[must_use]
+pub fn instance_id_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 /// Centralized binary file detection.

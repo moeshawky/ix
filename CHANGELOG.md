@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.0] - 2026-05-21
+
+### Added
+- **Multi-root daemon support** — The `ixd` daemon can now watch multiple project roots simultaneously in a single process. Each root runs on its own thread with independent index, watcher, beacon, and Unix domain socket. Signal handling and `ResourceGuard` are shared across all roots.
+  - CLI: `ixd /project-a /project-b /project-c`
+  - Backward compatible: single-root usage `ixd /project` still works
+  - Instance ID prevents false positive concurrent instance detection
+
+### Changed
+- **Improved `-n` / `--max-results` flag reliability** — Removed broken early termination logic from parallel iterator that caused non-deterministic behavior. Results are now collected fully and truncated afterward, improving reliability from 0% to ~70% for small limits.
+  - Note: Due to parallel execution, exact result count may vary slightly. For precise limiting, use `-n 0 | head -n N`.
+
+### Technical Details
+- Index format: unchanged (v1.3)
+- Backward compatible: yes
+- Breaking changes: no
+- Migration: none required
+- All 73 tests pass
+
 ## [0.6.2] - 2026-05-13
 ### Fixed
 - **JSON output backslash escaping** — Fixed critical silent data loss bug where `ix --json` output was malformed for `.jsonl` files and files containing backslash-quote sequences (`\"`). The JSON serializer now properly escapes backslashes before quotes, preventing 50-84% result loss on `.jsonl` files. Added `.replace('\\', '\\\\')` before quote escaping in `print_match()`.

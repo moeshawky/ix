@@ -5,6 +5,13 @@
 //! checks system entropy via [`ResourceGuard`], and provides file-change
 //! notifications over a Unix domain socket (`daemon_sock`).
 //!
+//! # Multi-root support (v0.8+)
+//!
+//! The daemon can watch multiple roots in one process. Each root runs on
+//! its own thread with an independent [`Builder`], [`Watcher`], [`Beacon`],
+//! and [`DaemonServer`]. Signal handling, a single [`ResourceGuard`], and
+//! the shutdown flag are shared across all roots.
+//!
 //! # Safety
 //!
 //! - Signal handlers (`SIGTERM`/`SIGINT`) are installed via `sigaction` and
@@ -17,7 +24,7 @@
 
 use crate::builder::Builder;
 use crate::daemon_sock::{DaemonServer, DaemonStatus, FileChange, FileOp, ServerMessage};
-use crate::format::Beacon;
+use crate::format::{self, Beacon};
 use crate::idle::IdleTracker;
 use crate::watcher::Watcher;
 use llmosafe::{EscalationPolicy, PressureLevel, ResourceGuard, SafetyDecision};
@@ -39,6 +46,7 @@ struct DaemonCtx<'a> {
     guard: &'a ResourceGuard,
     daemon_sock: Option<&'a DaemonServer>,
     running: &'a Arc<AtomicBool>,
+    log_prefix: &'a str,
 }
 
 /// Run the daemon, watching `root` for file changes and rebuilding the index.
@@ -52,52 +60,116 @@ struct DaemonCtx<'a> {
 /// built, the file watcher fails, or a concurrent daemon instance is detected.
 #[allow(clippy::too_many_lines)]
 pub fn run(root: &Path) -> crate::error::Result<()> {
-    SHUTDOWN.store(false, Ordering::SeqCst);
+    run_many(&[root.to_path_buf()])
+}
 
-    let root = root.canonicalize().map_err(crate::error::Error::Io)?;
-
-    println!("ixd: watching {}...", root.display());
-
-    let running = Arc::new(AtomicBool::new(true));
-    install_signal_handlers();
-
-    // Concurrent instance guard — refuse to start if another ixd owns this root.
-    let ix_dir_early = root.join(".ix");
-    let beacon_path = ix_dir_early.join("beacon.json");
-    if beacon_path.exists()
-        && let Ok(existing) = Beacon::read_from(&ix_dir_early)
-    {
-        let pid = nix::unistd::Pid::from_raw(existing.pid);
-        if nix::sys::signal::kill(pid, None).is_ok() {
-            return Err(crate::error::Error::Config(format!(
-                "another instance is already watching {} (PID {}). \
-                 Stop it first or remove {}/beacon.json.",
-                root.display(),
-                existing.pid,
-                ix_dir_early.display()
-            )));
-        }
-        eprintln!("ixd: removing stale beacon from PID {}", existing.pid);
-        let _ = std::fs::remove_file(&beacon_path);
+/// Run the daemon watching multiple roots simultaneously.
+///
+/// Each root runs on its own thread. Signal handlers and a shared
+/// [`ResourceGuard`] are installed once for the whole process.
+///
+/// # Errors
+///
+/// Returns an error if any root fails fatally during start-up. Run-time
+/// errors (e.g. a stalled watcher) are logged per-root and do not
+/// propagate.
+pub fn run_many(roots: &[PathBuf]) -> crate::error::Result<()> {
+    if roots.is_empty() {
+        return Err(crate::error::Error::Config(
+            "at least one root directory is required".into(),
+        ));
     }
 
+    // Deduplicate — the concurrent guard catches same-root duplicates, but
+    // this avoids spawning threads that will immediately fail.
+    let mut seen = std::collections::HashSet::new();
+    let unique: Vec<PathBuf> = roots
+        .iter()
+        .filter_map(|r| {
+            let canonical = r.canonicalize().unwrap_or_else(|_| r.clone());
+            if seen.insert(canonical.clone()) {
+                Some(canonical)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if unique.is_empty() {
+        return Err(crate::error::Error::Config(
+            "no valid root directories provided".into(),
+        ));
+    }
+
+    SHUTDOWN.store(false, Ordering::SeqCst);
+    install_signal_handlers();
+
     let guard = ResourceGuard::auto(0.6);
+    let instance_id = format::instance_id_now();
+
+    let mut handles = Vec::new();
+    for root in &unique {
+        let root = root.clone();
+        let name = root_name(&root);
+        let name2 = name.clone();
+        let guard = guard.clone();
+        let handle = std::thread::Builder::new()
+            .name(format!("ixd-{name}"))
+            .spawn(move || match run_single_root(&root, &guard, instance_id) {
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!("ixd [{name}]: fatal start-up error: {e}");
+                }
+            })
+            .map_err(|e| {
+                crate::error::Error::Config(format!(
+                    "cannot spawn watcher thread for {name2}: {e}",
+                ))
+            })?;
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        let _ = handle.join();
+    }
+
+    Ok(())
+}
+
+/// Core daemon logic for a single watched root.
+///
+/// This is the extracted body of [`run`]. It does **not** install signal
+/// handlers or manage the process-wide shutdown flag — the caller
+/// ([`run_many`] or [`run`]) provides a shared guard and a shared
+/// shutdown signal via the static [`SHUTDOWN`] atomic.
+fn run_single_root(root: &Path, guard: &ResourceGuard, instance_id: u64) -> crate::error::Result<()> {
+    let root = root.canonicalize().map_err(crate::error::Error::Io)?;
+    let name = root_name(&root);
+
+    println!("ixd [{name}]: watching ...");
+
+    let running = Arc::new(AtomicBool::new(true));
+
+    // Concurrent instance guard — refuse another watcher for the same root.
+    let ix_dir_early = root.join(".ix");
+    let beacon_path = ix_dir_early.join("beacon.json");
+    check_concurrent_instance(&ix_dir_early, &beacon_path, &root, instance_id)?;
 
     let mut builder = match Builder::new(&root) {
         Ok(b) => b.with_resource_guard(guard.clone()),
         Err(e) => {
-            eprintln!("ixd: cannot create index in {}: {}", root.display(), e);
+            eprintln!("ixd [{name}]: cannot create index: {e}");
             return Err(e);
         }
     };
 
-    wait_for_memory(&guard);
+    wait_for_memory(guard, &name);
 
     if let Err(e) = builder.build() {
-        eprintln!("ixd: initial build failed: {e} — will watch for changes anyway");
+        eprintln!("ixd [{name}]: initial build failed: {e} — will watch for changes anyway");
     } else {
         println!(
-            "ixd: initial build complete ({} files, {} trigrams)",
+            "ixd [{name}]: initial build complete ({} files, {} trigrams)",
             builder.files_len(),
             builder.trigrams_len()
         );
@@ -110,27 +182,27 @@ pub fn run(root: &Path) -> crate::error::Result<()> {
     if !ix_dir.exists() {
         fs::create_dir_all(&ix_dir)?;
     }
-    let mut beacon = Beacon::new(&root);
+    let mut beacon = Beacon::with_instance_id(&root, instance_id);
     beacon.write_to(&ix_dir)?;
 
     let mut idle = IdleTracker::new();
 
     let mut daemon_sock = match DaemonServer::new(&root) {
         Ok(s) => {
-            println!("ixd: socket at {}", s.path().display());
+            println!("ixd [{name}]: socket at {}", s.path().display());
             beacon.socket_path = Some(s.path().to_path_buf());
             let _ = beacon.write_to(&ix_dir);
             Some(s)
         }
         Err(e) => {
-            eprintln!("ixd: warning: could not create daemon socket: {e}");
+            eprintln!("ixd [{name}]: warning: could not create daemon socket: {e}");
             None
         }
     };
     if let Some(ref mut s) = daemon_sock
         && let Err(e) = s.start()
     {
-        eprintln!("ixd: failed to start socket server: {e}");
+        eprintln!("ixd [{name}]: failed to start socket server: {e}");
     }
 
     run_main_loop(
@@ -139,15 +211,78 @@ pub fn run(root: &Path) -> crate::error::Result<()> {
         &ix_dir,
         &mut beacon,
         &mut idle,
-        &guard,
+        guard,
         &running,
         daemon_sock.as_ref(),
+        &name,
     );
 
-    eprintln!("ixd: shutting down...");
+    eprintln!("ixd [{name}]: shutting down...");
     watcher.stop();
     let _ = fs::remove_file(ix_dir.join("beacon.json"));
 
+    Ok(())
+}
+
+/// Check for a concurrent instance watching the same root.
+///
+/// Uses the beacon `instance_id` field to distinguish stale beacons left by
+/// a previous run of the same PID from live beacons written by another thread
+/// in the current process.
+fn check_concurrent_instance(
+    ix_dir: &Path,
+    beacon_path: &Path,
+    root: &Path,
+    instance_id: u64,
+) -> crate::error::Result<()> {
+    if !beacon_path.exists() {
+        return Ok(());
+    }
+    let Ok(existing) = Beacon::read_from(ix_dir) else {
+        return Ok(());
+    };
+    let pid = nix::unistd::Pid::from_raw(existing.pid);
+
+    // Process with this PID exists.
+    if nix::sys::signal::kill(pid, None).is_ok() {
+        let our_pid =
+            i32::try_from(std::process::id()).unwrap_or(-1);
+
+        // Same PID + same instance_id → another root in THIS process is
+        // already watching this directory.
+        if existing.pid == our_pid && existing.instance_id == instance_id {
+            return Err(crate::error::Error::Config(format!(
+                "another thread in this process is already watching {}. \
+                 Remove duplicate `{}/beacon.json` to force.",
+                root.display(),
+                ix_dir.display()
+            )));
+        }
+
+        // Same PID + different instance_id → stale beacon from a prior
+        // run that reused this PID.
+        if existing.pid == our_pid && existing.instance_id != instance_id {
+            eprintln!(
+                "ixd: removing stale beacon from PID {} (instance {} → {})",
+                existing.pid, existing.instance_id, instance_id
+            );
+            let _ = std::fs::remove_file(beacon_path);
+            return Ok(());
+        }
+
+        // Different PID → another process is watching this root.
+        return Err(crate::error::Error::Config(format!(
+            "another instance is already watching {} (PID {}). \
+             Stop it first or remove `{}/beacon.json`.",
+            root.display(),
+            existing.pid,
+            ix_dir.display()
+        )));
+    }
+
+    // PID not alive — stale beacon.
+    eprintln!("ixd: removing stale beacon from PID {}", existing.pid);
+    let _ = std::fs::remove_file(beacon_path);
     Ok(())
 }
 
@@ -165,14 +300,14 @@ fn install_signal_handlers() {
     }
 }
 
-fn wait_for_memory(guard: &ResourceGuard) {
+fn wait_for_memory(guard: &ResourceGuard, log_prefix: &str) {
     let pre_build_timeout = Duration::from_secs(30);
     let pre_build_start = std::time::Instant::now();
     while pre_build_start.elapsed() < pre_build_timeout {
         match guard.check_blocking() {
             Ok(_) => break,
             Err(e) => {
-                eprintln!("ixd: memory pressure before initial build: {e:?} — waiting...");
+                eprintln!("ixd [{log_prefix}]: memory pressure before initial build: {e:?} — waiting...");
                 std::thread::sleep(Duration::from_secs(PRE_BUILD_WAIT_SECS));
             }
         }
@@ -189,11 +324,11 @@ fn run_main_loop(
     guard: &ResourceGuard,
     running: &Arc<AtomicBool>,
     daemon_sock: Option<&DaemonServer>,
+    log_prefix: &str,
 ) {
     loop {
         if SHUTDOWN.load(Ordering::SeqCst) {
             running.store(false, Ordering::SeqCst);
-            // Graceful shutdown: notify clients before closing
             if let Some(sock) = daemon_sock {
                 sock.shutdown_notify("signal", 1000);
             }
@@ -210,6 +345,7 @@ fn run_main_loop(
                     guard,
                     daemon_sock,
                     running,
+                    log_prefix,
                 };
                 handle_changes(&mut ctx, &changed_files);
             }
@@ -220,18 +356,24 @@ fn run_main_loop(
 }
 
 fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
-    let (entropy, safety_decision) = evaluate_safety(ctx.guard);
+    let (entropy, safety_decision) = evaluate_safety(ctx.guard, ctx.log_prefix);
 
     match &safety_decision {
         SafetyDecision::Halt(err, cooldown) => {
-            eprintln!("ixd: critical safety decision (Halt: {err:?}) — pausing operations");
+            let prefix = ctx.log_prefix;
+            eprintln!(
+                "ixd [{prefix}]: critical safety decision (Halt: {err:?}) — pausing operations",
+            );
             ctx.beacon.status = "safety halt".to_string();
             let _ = ctx.beacon.write_to(ctx.ix_dir);
             std::thread::sleep(Duration::from_millis(u64::from(*cooldown)));
             return;
         }
         SafetyDecision::Exit(err) => {
-            eprintln!("ixd: SAFETY EXIT (unrecoverable: {err:?}) — terminating");
+            let prefix = ctx.log_prefix;
+            eprintln!(
+                "ixd [{prefix}]: SAFETY EXIT (unrecoverable: {err:?}) — terminating",
+            );
             ctx.beacon.status = "safety exit".to_string();
             ctx.running.store(false, Ordering::SeqCst);
             return;
@@ -241,8 +383,9 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
             reason,
             cooldown_ms,
         } => {
+            let prefix = ctx.log_prefix;
             eprintln!(
-                "ixd: safety escalation (entropy: {esc_entropy}, reason: {reason:?}) — throttling"
+                "ixd [{prefix}]: safety escalation (entropy: {esc_entropy}, reason: {reason:?}) — throttling",
             );
             let deferred_status = DaemonStatus::Deferred {
                 entropy: *esc_entropy,
@@ -257,8 +400,9 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
         }
         SafetyDecision::Warn(reason) => {
             if safety_decision.severity() >= 2 {
+                let prefix = ctx.log_prefix;
                 eprintln!(
-                    "ixd: safety warning (severity {}): {reason}",
+                    "ixd [{prefix}]: safety warning (severity {}): {reason}",
                     safety_decision.severity()
                 );
                 ctx.beacon.status = format!("warned: {reason}");
@@ -269,8 +413,9 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
         SafetyDecision::Proceed => {}
     }
 
+    let prefix = ctx.log_prefix;
     println!(
-        "ixd: {} files changed, updating index... (Entropy: {entropy}, Decision: {safety_decision:?})",
+        "ixd [{prefix}]: {} files changed, updating index... (Entropy: {entropy}, Decision: {safety_decision:?})",
         changed_files.len(),
     );
 
@@ -289,11 +434,13 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
 
     ctx.idle.record_change();
 
-    if let Err(e) = ctx.builder.update(changed_files) {
-        eprintln!("ixd: update failed: {e} — retrying on next change");
-    } else {
-        tracing::debug!("ixd: index updated - caches will self-invalidate on next query");
-    }
+if let Err(e) = ctx.builder.update(changed_files) {
+            let prefix = ctx.log_prefix;
+            eprintln!("ixd [{prefix}]: update failed: {e} — retrying on next change");
+        } else {
+            let prefix = ctx.log_prefix;
+            tracing::debug!("ixd [{prefix}]: index updated - caches will self-invalidate on next query");
+        }
 
     broadcast_file_changes(ctx, changed_files);
 
@@ -305,7 +452,7 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
     }
 }
 
-fn evaluate_safety(guard: &ResourceGuard) -> (u16, SafetyDecision) {
+fn evaluate_safety(guard: &ResourceGuard, log_prefix: &str) -> (u16, SafetyDecision) {
     match guard.check_blocking() {
         Ok(synapse) => {
             let raw_entropy = synapse.raw_entropy();
@@ -317,7 +464,9 @@ fn evaluate_safety(guard: &ResourceGuard) -> (u16, SafetyDecision) {
             (raw_entropy, decision)
         }
         Err(e) => {
-            eprintln!("ixd: resource check error: {e:?} — proceeding with elevated caution");
+            eprintln!(
+                "ixd [{log_prefix}]: resource check error: {e:?} — proceeding with elevated caution",
+            );
             (
                 ENTROPY_CRITICAL,
                 SafetyDecision::Escalate {
@@ -360,6 +509,13 @@ fn broadcast_file_changes(ctx: &DaemonCtx, changed_files: &[PathBuf]) {
         })
         .collect();
     sock.notify_changes(changes, ctx.builder.files_len());
+}
+
+/// Short human-readable name for a root path (last component, or full path).
+fn root_name(root: &Path) -> String {
+    root.file_name()
+        .and_then(|n| n.to_str())
+        .map_or_else(|| root.display().to_string(), String::from)
 }
 
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);

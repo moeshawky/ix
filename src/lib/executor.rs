@@ -389,13 +389,6 @@ impl<'a> Executor<'a> {
         let mut all_matches: Vec<Match> = candidate_list
             .into_par_iter()
             .filter_map(|fid| {
-                let should_early_terminate = options.max_results > 0
-                    && !options.files_only
-                    && accum.matches_found.load(Ordering::Relaxed) >= options.max_results as u32;
-                if should_early_terminate {
-                    return None;
-                }
-
                 let file_info = self.get_file_info(fid)?;
 
                 if !options.type_filter.is_empty() {
@@ -509,13 +502,6 @@ impl<'a> Executor<'a> {
         let mut all_matches: Vec<Match> = candidate_list
             .into_par_iter()
             .filter_map(|fid| {
-                let should_early_terminate = options.max_results > 0
-                    && !options.files_only
-                    && accum.matches_found.load(Ordering::Relaxed) >= options.max_results as u32;
-                if should_early_terminate {
-                    return None;
-                }
-
                 let file_info = self.get_file_info(fid)?;
 
                 if !options.type_filter.is_empty() {
@@ -612,13 +598,6 @@ impl<'a> Executor<'a> {
         let mut all_matches: Vec<Match> = candidate_list
             .into_par_iter()
             .filter_map(|fid| {
-                let should_early_terminate = options.max_results > 0
-                    && !options.files_only
-                    && accum.matches_found.load(Ordering::Relaxed) >= options.max_results as u32;
-                if should_early_terminate {
-                    return None;
-                }
-
                 let file_info = self.get_file_info(fid)?;
 
                 if !options.type_filter.is_empty() {
@@ -680,13 +659,6 @@ impl<'a> Executor<'a> {
         let mut all_matches: Vec<Match> = candidates
             .into_par_iter()
             .filter_map(|fid| {
-                let should_early_terminate = options.max_results > 0
-                    && !options.files_only
-                    && accum.matches_found.load(Ordering::Relaxed) >= options.max_results as u32;
-                if should_early_terminate {
-                    return None;
-                }
-
                 let file_info = self.get_file_info(fid)?;
 
                 if !options.type_filter.is_empty() {
