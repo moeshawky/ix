@@ -825,7 +825,13 @@ pub fn execute_search(
     }
 
     let reader = Reader::open(&index_path)?;
-    let plan = Planner::plan_with_options(
+    let mut executor = Executor::new(&reader);
+
+    // Set up delta file path
+    let delta_path = index_dir.join("shard.ix.delta");
+    executor.set_delta_path(delta_path);
+
+    let plan = Planner::plan_with_pool(
         &query.pattern,
         crate::planner::QueryOptions {
             is_regex: query.is_regex,
@@ -833,13 +839,8 @@ pub fn execute_search(
             multiline: query.multiline,
             word_boundary: query.word_boundary,
         },
+        executor.regex_pool(),
     );
-
-    let mut executor = Executor::new(&reader);
-
-    // Set up delta file path
-    let delta_path = index_dir.join("shard.ix.delta");
-    executor.set_delta_path(delta_path);
 
     let options = QueryOptions {
         count_only: false,

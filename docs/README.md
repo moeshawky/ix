@@ -19,9 +19,13 @@ cargo build --all-targets --all-features --verbose
 
 ### Test
 ```bash
-# All tests (71 unit tests)
+# Unit tests
 cargo test --lib
-# Expected: 71 passed
+# Expected: 73 passed
+
+# Full suite (unit + integration + streaming)
+cargo test --all-features
+# Expected: 97 passed (1 ignored)
 ```
 
 ### Formatting
@@ -101,7 +105,7 @@ src/lib/
 ├── posting.rs — Posting list encoding/decoding
 ├── string_pool.rs — String interning
 ├── streaming.rs — Memory-constant stream verification
-├── config.rs — Search configuration types
+├── config.rs — Search configuration types + .ixd.toml loading
 ├── error.rs — Error types (thiserror)
 ├── archive.rs — Archive support (zip, tar; optional)
 ├── decompress.rs — Decompression (gz/zst/bz2/xz; optional)

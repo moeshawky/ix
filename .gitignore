@@ -23,18 +23,69 @@
 .DS_Store
 Thumbs.db
 
-# Agentic / dev artifacts (NOT committed)
+# ── Agent / AI tooling (NOT committed) ──────────────────────────
+# IDE-integrated agents
+.cursor/
+.cursorrules
+.copilot/
+.copilot-instructions.md
+CLAUDE.md
+.claude/
+.clinerules/
+.roo/
+.roocode/
+.cody/
+.trae/
+.augment/
+.continue/
+.windsurf/
+.codex/
+.aide/
+.mentat/
+.pythagora/
+
+# CLI agents
+.opencode/
+.aider*
 .gemini/
 .sniper/
-docs/guidelines/
+.claude/
+.codex/
+.cody/
+mcp_config.json
+
+# Agent-generated documents
 AGENTS.md
 PROMPT.md
 AGENTIC_README.md
 ABOUT.md
-mcp_config.json
+PLAN.md
+TODO.md
+*.prompt.md
+prompt_*
+analysis.md
+research.md
+*.ai.md
+*.gpt.md
+COPILOT.md
+COPILOT_INSTRUCTIONS.md
+
+# Agent session artifacts
+.aiconfig
+.agent/
+.session/
+*.session
+conversation.md
+*.conversation
+
+# ── Dev / CI artifacts (NOT committed) ─────────────────────────
+docs/guidelines/
 test_results/
 tests/docker/
 tests/docker_llmosafe_vendor/
+*.patch
+*.diff
+!scripts/*.patch
 
 # Coverage / temporary
 /lcov.info

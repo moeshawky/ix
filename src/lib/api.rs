@@ -1,22 +1,35 @@
-//! Public API surface for the search crate.
+//! Convenience API for search operations.
+//!
+//! Thin wrappers around the planner + executor pipeline for simple
+//! single-call searches.
 
-use executor::Executor;
-use reader::Reader;
+use crate::error::Result;
+use crate::executor::{Executor, Match, QueryOptions, QueryStats};
+use crate::planner::Planner;
+use crate::reader::Reader;
 
-/// Execute a search request against an index reader.
+/// Execute a search against an open index with a single call.
 ///
-/// # Source
-/// `/src/lib/executor.rs:102` — verified 2026-04-19
+/// Plans the query, creates an executor, and runs the search.
+/// Returns all matches and query statistics.
 ///
-/// # Example (Verified)
-/// ```
-/// # use std::sync::Arc;
-/// # use moeix::{Reader, Executor};
-/// # let reader = Reader::open("/tmp/index").unwrap();
-/// # let mut executor = Executor::new(&reader);
-/// let result = executor.execute(/* request parameters */);
-/// ```
-pub fn execute(reader: &Reader, request: &serde_json::Value) -> serde_json::Value {
+/// # Errors
+///
+/// Returns an error if the index cannot be read, posting data is
+/// corrupted, or file content cannot be accessed during verification.
+pub fn execute(
+    reader: &Reader,
+    pattern: &str,
+    is_regex: bool,
+    options: &QueryOptions,
+) -> Result<(Vec<Match>, QueryStats)> {
+    let plan = Planner::plan_with_options(
+        pattern,
+        crate::planner::QueryOptions {
+            is_regex,
+            ..Default::default()
+        },
+    );
     let mut executor = Executor::new(reader);
-    executor.execute(request)
+    executor.execute(&plan, options)
 }

@@ -47,6 +47,7 @@ pub struct Builder {
     resource_guard: Option<ResourceGuard>,
     dead_ends: Vec<PathBuf>,
     max_file_size: u64,
+    exclude_patterns: Vec<String>,
     committed: bool,
 }
 
@@ -158,6 +159,7 @@ impl Builder {
             resource_guard: None,
             dead_ends: Vec::new(),
             max_file_size: 100 * 1024 * 1024,
+            exclude_patterns: Vec::new(),
             committed: false,
         })
     }
@@ -178,6 +180,16 @@ impl Builder {
     /// Set the maximum file size to index (0 = unlimited). Default: 100 MB.
     pub const fn set_max_file_size(&mut self, max_bytes: u64) {
         self.max_file_size = max_bytes;
+    }
+
+    /// Set directory name patterns to exclude during the file walk.
+    ///
+    /// Names are matched against the last component of each entry's
+    /// path. Matching directories and their contents are skipped.
+    #[must_use]
+    pub fn with_exclude_patterns(mut self, patterns: Vec<String>) -> Self {
+        self.exclude_patterns = patterns;
+        self
     }
 
     /// Initialize temporary files and writers for building.
@@ -369,37 +381,43 @@ impl Builder {
             .git_exclude(true)
             .require_git(false)
             .add_custom_ignore_filename(".ixignore")
-            .filter_entry(move |entry| {
-                let path = entry.path();
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            .filter_entry({
+                let exclude_patterns = self.exclude_patterns.clone();
+                move |entry| {
+                    let path = entry.path();
+                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-                if entry.file_type().is_some_and(|t| t.is_dir())
-                    && (name == "lost+found" || name == ".git" || name == ".ix")
-                {
-                    return false;
-                }
-
-                if entry.file_type().is_some_and(|t| t.is_file())
-                    && (name == "shard.ix"
-                        || name == "shard.ix.tmp"
-                        || name.starts_with("shard.ix."))
-                {
-                    return false;
-                }
-
-                if entry.file_type().is_some_and(|t| t.is_file()) {
-                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                    match ext {
-                        "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" | "jpg" | "png"
-                        | "gif" | "mp4" | "mp3" | "pdf" | "zip" | "7z" | "rar" | "sqlite"
-                        | "db" | "bin" => return false,
-                        _ => {}
-                    }
-                    if name.ends_with(".tar.gz") {
+                    if entry.file_type().is_some_and(|t| t.is_dir())
+                        && (name == "lost+found"
+                            || name == ".git"
+                            || name == ".ix"
+                            || exclude_patterns.iter().any(|p| p == name))
+                    {
                         return false;
                     }
+
+                    if entry.file_type().is_some_and(|t| t.is_file())
+                        && (name == "shard.ix"
+                            || name == "shard.ix.tmp"
+                            || name.starts_with("shard.ix."))
+                    {
+                        return false;
+                    }
+
+                    if entry.file_type().is_some_and(|t| t.is_file()) {
+                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                        match ext {
+                            "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" | "jpg" | "png"
+                            | "gif" | "mp4" | "mp3" | "pdf" | "zip" | "7z" | "rar" | "sqlite"
+                            | "db" | "bin" => return false,
+                            _ => {}
+                        }
+                        if name.ends_with(".tar.gz") {
+                            return false;
+                        }
+                    }
+                    true
                 }
-                true
             })
             .build();
 

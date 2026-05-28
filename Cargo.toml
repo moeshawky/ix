@@ -1,6 +1,6 @@
 [package]
 name = "moeix"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 description = "Sub-millisecond code search via sparse trigram indexing."
 homepage = "https://github.com/moeshawky/ix"
@@ -10,6 +10,7 @@ repository = "https://github.com/moeshawky/ix"
 readme = "README.md"
 keywords = ["search", "trigram", "code-search", "indexing", "grep"]
 categories = ["command-line-utilities", "development-tools", "text-processing"]
+rust-version = "1.85"
 
 [workspace]
 members = ["."]
@@ -53,7 +54,7 @@ archive = ["zip", "tar"]
 full = ["decompress", "notify", "archive"]
 
 [dependencies]
-llmosafe = "0.6.1"
+llmosafe = "0.6.2"
 memmap2 = "0.9"
 crc32c = "0.6"
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
@@ -63,6 +64,7 @@ ignore = "0.4"           # .gitignore support (same as ripgrep)
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"
 thiserror = "2"
 crossbeam-channel = "0.5"
 notify = { version = "7", optional = true }             # file watcher (inotify/kqueue/ReadDirectoryChanges)
@@ -104,7 +106,6 @@ lto = "thin"
 # Tier 3: Release profile optimizations
 # panic and opt-level added to existing [profile.release] below
 
-# MSRV verification
 [workspace.package]
 rust-version = "1.85"
 

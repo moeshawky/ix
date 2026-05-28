@@ -6,10 +6,14 @@ use std::collections::{HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
+/// Accumulated statistics from a streaming file search.
 #[derive(Debug, Default)]
 pub struct StreamStats {
+    /// Number of lines read during the stream.
     pub lines_read: u32,
+    /// Total bytes consumed from the reader.
     pub bytes_read: u64,
+    /// Total regex matches found across all lines.
     pub matches_found: u32,
 }
 
@@ -110,6 +114,7 @@ pub fn stream_file<R: Read>(
     Ok(matches)
 }
 
+#[allow(clippy::string_slice)]
 fn stream_file_multiline<R: Read>(
     reader: R,
     path: &Path,
@@ -220,13 +225,17 @@ pub fn stream_file_with_windows(
         let line_start = if s == 0 {
             0
         } else {
-            match mmap_data.get(..s).and_then(|before| before.iter().rposition(|&b| b == b'\n')) {
+            match mmap_data
+                .get(..s)
+                .and_then(|before| before.iter().rposition(|&b| b == b'\n'))
+            {
                 Some(pos) => pos + 1,
                 None => 0,
             }
         };
 
-        let line_offsets = compute_line_offsets(mmap_data.get(line_start..e).unwrap_or_default(), line_start);
+        let line_offsets =
+            compute_line_offsets(mmap_data.get(line_start..e).unwrap_or_default(), line_start);
 
         let window_str = String::from_utf8_lossy(window);
         let is_lossy = matches!(window_str, std::borrow::Cow::Owned(_));
@@ -255,18 +264,30 @@ pub fn stream_file_with_windows(
                 .get(ln_idx.saturating_sub(1))
                 .copied()
                 .unwrap_or(0);
-            let line_end_off = line_offsets
-                .get(ln_idx)
-                .map_or(mmap_data.len(), |&off| off);
+            let line_end_off = line_offsets.get(ln_idx).map_or(mmap_data.len(), |&off| off);
 
-            let line_bytes = trim_line_end(mmap_data.get(line_start_off..line_end_off).unwrap_or_default());
+            let line_bytes = trim_line_end(
+                mmap_data
+                    .get(line_start_off..line_end_off)
+                    .unwrap_or_default(),
+            );
             let line_str = String::from_utf8_lossy(line_bytes).to_string();
 
             let col = u32::try_from(abs_byte_start - line_start_off + 1).unwrap_or(u32::MAX);
 
             let (context_before, context_after) = if options.context_lines > 0 {
-                let before = collect_context_before(&line_offsets, mmap_data, line_number, options.context_lines);
-                let after = collect_context_after(&line_offsets, mmap_data, line_number, options.context_lines);
+                let before = collect_context_before(
+                    &line_offsets,
+                    mmap_data,
+                    line_number,
+                    options.context_lines,
+                );
+                let after = collect_context_after(
+                    &line_offsets,
+                    mmap_data,
+                    line_number,
+                    options.context_lines,
+                );
                 (before, after)
             } else {
                 (vec![], vec![])

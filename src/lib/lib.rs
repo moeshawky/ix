@@ -36,6 +36,13 @@
 //!
 //! Cache layer: `posting_cache` → `neg_cache` → `regex_pool` → `cache_policy`
 //!
+//! Support: `streaming` → `api` → `config`
+//!
+//! # See Also
+//!
+//! - [GitHub README](https://github.com/moeshawky/ix) — install, quick start, daemon
+//! - [Socket API](https://github.com/moeshawky/ix/blob/main/docs/SOCKET-API.md) — daemon IPC protocol
+//!
 //! # Feature Flags
 //!
 //! - **`notify`** (default) — File watcher + daemon (`ixd`) + Unix domain socket IPC
@@ -61,15 +68,19 @@
 
 extern crate llmosafe;
 
+pub mod api;
 pub mod archive;
 pub mod bloom;
 pub mod builder;
 /// Adaptive cache policy driven by `ResourceGuard` memory pressure.
+#[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub mod cache_policy;
 pub mod config;
 #[cfg(feature = "notify")]
+#[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub mod daemon;
 #[cfg(feature = "notify")]
+#[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub mod daemon_sock;
 pub mod decompress;
 /// Error types for the ix crate.
@@ -77,6 +88,7 @@ pub mod error;
 pub mod executor;
 pub mod format;
 #[cfg(feature = "notify")]
+#[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub mod idle;
 /// Negative result cache — skips re-verification of known non-matching files.
 pub mod neg_cache;
@@ -88,23 +100,32 @@ pub mod reader;
 /// Compiled regex pool — caches `Regex` objects to avoid recompilation.
 pub mod regex_pool;
 pub mod scanner;
+/// Alternative streaming file search implementations — line-based and
+/// mmap-windowed verification with context support.
+pub mod streaming;
 pub mod string_pool;
 pub mod trigram;
 pub mod varint;
 #[cfg(feature = "notify")]
+#[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub mod watcher;
 
 #[cfg(feature = "notify")]
+#[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub use crate::builder::Builder;
 #[cfg(feature = "notify")]
+#[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub use crate::daemon_sock::{
     ClientMessage, DaemonClient, DaemonServer, FileChange, FileOp, ServerMessage,
 };
 #[cfg(feature = "notify")]
+#[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub use crate::format::Beacon;
 #[cfg(feature = "notify")]
+#[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub use crate::idle::IdleTracker;
 #[cfg(feature = "notify")]
+#[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub use crate::watcher::Watcher;
 
 /// Run the daemon watching the given directory for changes and rebuilding the index.

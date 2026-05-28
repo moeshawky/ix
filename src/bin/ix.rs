@@ -159,23 +159,36 @@ struct Cli {
     #[arg(long, hide = true)]
     daemon: bool,
 
-    /// Manage ixd as a system service (install, start, stop).
+    /// Manage ixd as a system service.
     #[command(subcommand)]
     service: Option<ServiceCommand>,
 }
 
 #[derive(clap::Subcommand)]
 enum ServiceCommand {
-    /// Install the ixd system service.
+    /// Install ixd as a user-level systemd service.
+    #[command(name = "service")]
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum ServiceAction {
+    /// Install ixd as a user-level systemd service. Writes a unit file to
+    /// ~/.config/systemd/user/ixd.service and enables it with `systemctl --user`.
     Install {
-        /// The path to watch and index (default: $HOME).
+        /// Directory to watch (defaults to $HOME).
         #[arg(value_name = "PATH")]
         path: Option<PathBuf>,
     },
-    /// Start the ixd system service.
+    /// Start the ixd systemd service.
     Start,
-    /// Stop the ixd system service.
+    /// Stop the ixd systemd service.
     Stop,
+    /// Restart the ixd systemd service.
+    Restart,
 }
 
 #[derive(Clone, Copy)]
@@ -426,7 +439,9 @@ fn handle_service(cmd: ServiceCommand) -> ix::error::Result<()> {
         let service_file = service_dir.join("ixd.service");
 
         match cmd {
-            ServiceCommand::Install { path } => {
+            ServiceCommand::Service {
+                action: ServiceAction::Install { path },
+            } => {
                 let watch_path = path.unwrap_or_else(|| PathBuf::from(&home));
                 let watch_path_abs = watch_path.canonicalize().unwrap_or(watch_path);
 
@@ -472,7 +487,9 @@ WantedBy=default.target
                 println!("Watch path: {}", watch_path_abs.display());
                 println!("Run 'ix service start' to start the daemon.");
             }
-            ServiceCommand::Start => {
+            ServiceCommand::Service {
+                action: ServiceAction::Start,
+            } => {
                 let status = std::process::Command::new("systemctl")
                     .args(["--user", "enable", "--now", "ixd"])
                     .status()?;
@@ -483,7 +500,9 @@ WantedBy=default.target
                 }
                 println!("ixd service started.");
             }
-            ServiceCommand::Stop => {
+            ServiceCommand::Service {
+                action: ServiceAction::Stop,
+            } => {
                 let status = std::process::Command::new("systemctl")
                     .args(["--user", "stop", "ixd"])
                     .status()?;
@@ -493,6 +512,19 @@ WantedBy=default.target
                     ));
                 }
                 println!("ixd service stopped.");
+            }
+            ServiceCommand::Service {
+                action: ServiceAction::Restart,
+            } => {
+                let status = std::process::Command::new("systemctl")
+                    .args(["--user", "restart", "ixd"])
+                    .status()?;
+                if !status.success() {
+                    return Err(ix::error::Error::Config(
+                        "Failed to restart ixd service".into(),
+                    ));
+                }
+                println!("ixd service restarted.");
             }
         }
         Ok(())

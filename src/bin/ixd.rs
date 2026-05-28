@@ -33,7 +33,13 @@ use std::path::PathBuf;
 #[command(
     name = "ixd",
     version = env!("CARGO_PKG_VERSION"),
-    about = "Background daemon for automatic indexing with safety monitoring."
+    about = "Background daemon that watches directories for changes and rebuilds the index.",
+    after_help = "EXAMPLES:\n  \
+                  ixd /path/to/repo\n  \
+                  ixd /project-a /project-b /project-c\n\n\
+                  DOCS:\n  \
+                  https://github.com/moeshawky/ix/blob/main/docs/DAEMON-RUNBOOK.md\n  \
+                  https://github.com/moeshawky/ix/blob/main/docs/.ixd.toml.md"
 )]
 struct Cli {
     /// One or more directories to watch (defaults to current directory if omitted).

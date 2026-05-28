@@ -5,12 +5,27 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![CI](https://github.com/moeshawky/ix/actions/workflows/build.yml/badge.svg)](https://github.com/moeshawky/ix/actions/workflows/build.yml)
 
-**Last Verified:** 2026-05-21
-**Verification Command:** `./scripts/verify-docs.sh`
-
 Sub-millisecond code search via sparse trigram indexing.
 
-`ix` pre-computes a byte-level trigram index to narrow search candidates to a fraction of the total file set, then verifies matches with a memory-constant streaming architecture. This eliminates the linear-scan bottleneck that slows `grep` and `ripgrep` on large codebases.
+`ix` pre-computes a byte-level trigram index to narrow search candidates
+to a fraction of the total file set, then verifies matches with a
+memory-constant streaming architecture. This eliminates the linear-scan
+bottleneck of traditional tools on large codebases.
+
+## Documentation
+
+| For | Read |
+|-----|------|
+| Getting started (tutorial) | [docs/QUICKSTART.md](docs/QUICKSTART.md) |
+| CLI flag reference | `ix --help` |
+| Running the daemon | [docs/DAEMON-RUNBOOK.md](docs/DAEMON-RUNBOOK.md) |
+| `.ixd.toml` config | [docs/.ixd.toml.md](docs/.ixd.toml.md) |
+| Socket API (tool builders) | [docs/SOCKET-API.md](docs/SOCKET-API.md) |
+| Index delta format | [docs/DELTA-FORMAT.md](docs/DELTA-FORMAT.md) |
+| Performance benchmarks | [docs/BENCHMARKS.md](docs/BENCHMARKS.md) |
+| Contributing | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) |
+| Release history | [CHANGELOG.md](CHANGELOG.md) |
+| Upgrade from v0.7.x | [docs/v0.8.0-UPGRADE-GUIDE.md](docs/v0.8.0-UPGRADE-GUIDE.md) |
 
 ## Install
 
@@ -18,96 +33,139 @@ Sub-millisecond code search via sparse trigram indexing.
 cargo install moeix
 ```
 
-This installs two binaries:
+Installs two binaries:
 - **`ix`** — CLI search tool
-- **`ixd`** — background daemon for continuous indexing (requires `notify` feature, enabled by default)
+- **`ixd`** — background daemon (requires `notify` feature, enabled by default)
+
+You only need `ix` for search. Install `ixd` if you want continuous indexing.
 
 ## Quick Start
 
 ```bash
-# Index a directory (defaults to current directory if no path given)
-ix --build
+# Build the index
 ix --build /path/to/repo
 
-# Search
+# Literal search
 ix "fn validate"
 
-# Search with regex
+# Regex search
 ix --regex "fn\s+\w+_handler"
 
-# Search with context lines
+# Context lines around each match
 ix --context 3 "TODO"
-
-# Negation filter (exclude matches)
-ix "error" --negate "test"
 
 # Show query statistics
 ix --stats "struct Config"
+
+# Only matching file paths
+ix --files-only "error"
+
+# Count matches only
+ix --count "TODO"
+
+# Filter by file extension
+ix --type rs --type py "fn main"
 ```
+
+## Daemon
+
+`ixd` watches one or more directories for file changes and incrementally
+updates the index:
+
+```bash
+# Single directory
+ixd /path/to/repo
+
+# Multiple directories (v0.9+)
+ixd /project-a /project-b /project-c
+```
+
+Each directory runs on its own thread with independent index, watcher,
+beacon, and Unix domain socket. Signal handling and memory monitoring
+are shared.
+
+### Service Management (Linux / systemd)
+
+```bash
+# Install as a user-level systemd service
+ix service install /path/to/repo
+
+# Start / stop / restart the service
+ix service start
+ix service stop
+ix service restart
+```
+
+The service auto-starts on login and survives reboots. See
+[docs/DAEMON-RUNBOOK.md](docs/DAEMON-RUNBOOK.md) for full operation guide.
+
+### Daemon Socket
+
+The daemon exposes a Unix domain socket for external consumers (editors,
+tooling):
+
+```
+$XDG_RUNTIME_DIR/ixd/{hash}.sock
+```
+
+Protocol is NDJSON — one JSON object per newline-terminated line. See
+[docs/SOCKET-API.md](docs/SOCKET-API.md). The `ix` CLI reads the index
+file directly, not through the socket.
+
+### Configuring the Daemon
+
+Scope what the daemon watches and indexes with `.ixd.toml`:
+
+```toml
+# .ixd.toml
+watch_roots = ["src", "lib"]
+exclude_patterns = [".git", "node_modules", "target", "vendor"]
+```
+
+See [docs/.ixd.toml.md](docs/.ixd.toml.md) for full schema and examples.
 
 ## How It Works
 
-1. **Index** — `ix --build` walks the directory, extracts byte-level trigrams from every file, and writes a compressed index to `.ix/shard.ix`.
-2. **Plan** — On search, the query is decomposed into trigrams. The index is consulted to find candidate files that contain all required trigrams.
-3. **Verify** — Candidates are streamed through a regex matcher with constant memory usage, producing precise line-level results.
+1. **Index** — `ix --build` walks the directory, extracts byte-level trigrams
+   from every file, and writes a compressed index to `.ix/shard.ix`.
+2. **Plan** — On search, the query is decomposed into trigrams. The index
+   is consulted to find candidate files.
+3. **Verify** — Candidates are streamed through a regex matcher with
+   constant memory usage.
 
 ### Index Format (v1.3)
 
-All integers are little-endian, all offsets absolute from file start, 8-byte aligned sections.
+All integers little-endian, offsets absolute from file start, 8-byte aligned.
 
 | Section | Description |
 |---------|-------------|
 | Header | 256 bytes: magic `IX01`, version, flags, section offsets |
-| File table | Per-file metadata: path hash, content hash, size, posting offset |
-| Trigram table (CDX) | Delta-encoded + varint + ZSTD compressed in 1024-entry blocks |
-| Block index | `(u32 first_key, u64 block_offset)` × N + sentinel |
+| File table | Per-file metadata: path hash, content hash, size |
+| Trigram table (CDX) | Delta-encoded + varint + ZSTD in 1024-entry blocks |
 | Posting lists | Per-trigram file IDs, delta-encoded + varint + ZSTD |
 | String pool | Interned file paths |
 
-CDX compression is always-on since v1.3. The reader does a two-level search: block index → decompress block → linear scan.
-
-**Not backward compatible** with v1.1 or v1.2. Rebuild indexes after upgrading:
+CDX compression is always-on since v1.3. Not backward compatible with
+v1.1/v1.2 — rebuild indexes after upgrading:
 
 ```bash
 rm -rf .ix/
 ix --build .
 ```
 
-## Daemon
-
-`ixd` watches one or more directories for file changes and incrementally updates the index:
-
-```bash
-# Single directory (backward compatible)
-ixd /path/to/repo
-
-# Multiple directories (new in v0.9.0)
-ixd /project-a /project-b /project-c
-```
-
-Each directory runs on its own thread with independent index, watcher, beacon, and Unix domain socket. Signal handling and memory monitoring are shared across all roots for safety.
-
-The daemon exposes a Unix domain socket for external consumers (editors, tooling):
-
-```
-$XDG_RUNTIME_DIR/ixd/{hash}.sock
-```
-
-Protocol is NDJSON — one JSON object per newline-terminated line. Push notifications for file changes and status updates; query/response for history and status queries.
-
-`ix` CLI does **not** use the socket — it reads the index file directly.
-
 ## Performance
 
 | Metric | Value |
 |--------|-------|
 | Index ratio | ~4× source size (ZSTD level 3) |
-| Selective query (10% match) | 40ms — scans 10× fewer files than ripgrep |
-| Small dataset (all match) | 305ms — ripgrep wins on small/all-match workloads |
+| Selective query (10% match) | 40ms — 10× fewer files than ripgrep |
+| Small dataset (all match) | 305ms — ripgrep wins on all-match workloads |
 | Cold start | <3s |
 | Hot path p99 | <50ms |
 
-`ix` wins when the trigram index can eliminate most files from scanning. On small repos or queries where every file matches, linear-scan tools like ripgrep are faster.
+`ix` wins when the trigram index eliminates most files from scanning.
+On small repos or queries where every file matches, linear-scan tools
+like ripgrep are faster.
 
 ## Feature Flags
 
@@ -124,18 +182,21 @@ Protocol is NDJSON — one JSON object per newline-terminated line. Push notific
 
 ```toml
 [dependencies]
-moeix = "0.5"
+moeix = "0.9"
 ```
 
 ```rust
-use ix::{Reader, Executor};
+use ix::reader::Reader;
+use ix::executor::Executor;
+use ix::planner::Planner;
 
 let reader = Reader::open(".ix/shard.ix")?;
+let plan = Planner::plan("struct Config", false);
 let mut executor = Executor::new(&reader);
-let matches = executor.execute(/* query */);
+let (matches, stats) = executor.execute(&plan, &options)?;
 ```
 
-See [docs.rs/moeix](https://docs.rs/moeix) for full API documentation.
+See [docs.rs/moeix](https://docs.rs/moeix) for the full API reference.
 
 ## Building
 
@@ -150,14 +211,3 @@ Requires Rust 1.85+.
 ## License
 
 MIT
-
-### Clean-Before-Build
-
-The daemon uses a "clean-before-build" pattern to prevent stale file descriptor bugs:
-
-1. Old temp files are cleaned at the start of each build (not at the end)
-2. Fresh writers are initialized for each build
-3. No temp file accumulation across consecutive builds
-4. Prevents inode exhaustion on Linux
-
-This fixes the critical bug where incremental rebuilds failed with "I/O: No such file or directory (os error 2)" after the first successful build.

@@ -2,8 +2,7 @@
 
 use crate::error::Result;
 use crossbeam_channel::Receiver;
-use llmosafe::llmosafe_kernel::{ReasoningLoop, SiftedSynapse};
-use llmosafe::{ResourceGuard, Synapse, WorkingMemory};
+use llmosafe::ResourceGuard;
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher as _};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -112,31 +111,17 @@ impl Watcher {
                 })
                 .build();
 
-            let mut loop_guard = ReasoningLoop::<20000>::new();
             let guard = ResourceGuard::auto(0.5);
-            let mut memory = WorkingMemory::<64>::new(1000);
+            let mut file_count: u64 = 0;
 
             for result in walker {
-                // Cognitive Stability check: entropy must be stable (RSS < 50% ceiling for the walk)
-                let synapse = guard.check().unwrap_or_else(|_| {
-                    let mut s = Synapse::new();
-                    s.set_raw_entropy(1500); // 1.0 ratio
-                    s
-                });
+                file_count += 1;
 
-                let sifted = SiftedSynapse::new(synapse);
-                let validated = match memory.update(sifted) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        eprintln!(
-                            "ix: critical safety halt during watcher walk: {e:?}. Directory tree too large or RAM low."
-                        );
-                        break;
-                    }
-                };
-
-                if let Err(e) = loop_guard.next_step(validated) {
-                    eprintln!("ix: critical reasoning depth exceeded: {e:?}.");
+                // Memory pressure check every 250 files (same cadence as builder.rs)
+                if file_count % 250 == 0 && guard.check().is_err() {
+                    eprintln!(
+                        "ix: critical memory pressure during watcher walk (ceiling breached) -- aborting."
+                    );
                     break;
                 }
 

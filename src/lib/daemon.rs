@@ -23,6 +23,8 @@
 //!   infinite rebuild loops.
 
 use crate::builder::Builder;
+use crate::cache_policy::AdaptiveCachePolicy;
+use crate::config::Config;
 use crate::daemon_sock::{DaemonServer, DaemonStatus, FileChange, FileOp, ServerMessage};
 use crate::format::{self, Beacon};
 use crate::idle::IdleTracker;
@@ -44,6 +46,7 @@ struct DaemonCtx<'a> {
     beacon: &'a mut Beacon,
     idle: &'a mut IdleTracker,
     guard: &'a ResourceGuard,
+    cache_policy: &'a AdaptiveCachePolicy,
     daemon_sock: Option<&'a DaemonServer>,
     running: &'a Arc<AtomicBool>,
     log_prefix: &'a str,
@@ -122,9 +125,7 @@ pub fn run_many(roots: &[PathBuf]) -> crate::error::Result<()> {
                 }
             })
             .map_err(|e| {
-                crate::error::Error::Config(format!(
-                    "cannot spawn watcher thread for {name2}: {e}",
-                ))
+                crate::error::Error::Config(format!("cannot spawn watcher thread for {name2}: {e}"))
             })?;
         handles.push(handle);
     }
@@ -142,7 +143,11 @@ pub fn run_many(roots: &[PathBuf]) -> crate::error::Result<()> {
 /// handlers or manage the process-wide shutdown flag — the caller
 /// ([`run_many`] or [`run`]) provides a shared guard and a shared
 /// shutdown signal via the static [`SHUTDOWN`] atomic.
-fn run_single_root(root: &Path, guard: &ResourceGuard, instance_id: u64) -> crate::error::Result<()> {
+fn run_single_root(
+    root: &Path,
+    guard: &ResourceGuard,
+    instance_id: u64,
+) -> crate::error::Result<()> {
     let root = root.canonicalize().map_err(crate::error::Error::Io)?;
     let name = root_name(&root);
 
@@ -162,6 +167,22 @@ fn run_single_root(root: &Path, guard: &ResourceGuard, instance_id: u64) -> crat
             return Err(e);
         }
     };
+
+    // Discover and apply `.ixd.toml` configuration
+    if let Ok(config) = Config::discover_under(&root)
+        && !config.exclude_patterns.is_empty()
+    {
+        eprintln!(
+            "ixd [{name}]: loaded config — {} exclude patterns, {} watch roots",
+            config.exclude_patterns.len(),
+            config.watch_roots.len()
+        );
+        builder = builder.with_exclude_patterns(config.exclude_patterns);
+    }
+
+    // Cache policy for memory-pressure-driven cache management
+    let ceiling_bytes = (ResourceGuard::system_memory_bytes().saturating_mul(3)) / 5;
+    let cache_policy = AdaptiveCachePolicy::new_with_guard(guard.clone(), ceiling_bytes);
 
     wait_for_memory(guard, &name);
 
@@ -212,6 +233,7 @@ fn run_single_root(root: &Path, guard: &ResourceGuard, instance_id: u64) -> crat
         &mut beacon,
         &mut idle,
         guard,
+        &cache_policy,
         &running,
         daemon_sock.as_ref(),
         &name,
@@ -245,8 +267,7 @@ fn check_concurrent_instance(
 
     // Process with this PID exists.
     if nix::sys::signal::kill(pid, None).is_ok() {
-        let our_pid =
-            i32::try_from(std::process::id()).unwrap_or(-1);
+        let our_pid = i32::try_from(std::process::id()).unwrap_or(-1);
 
         // Same PID + same instance_id → another root in THIS process is
         // already watching this directory.
@@ -307,7 +328,9 @@ fn wait_for_memory(guard: &ResourceGuard, log_prefix: &str) {
         match guard.check_blocking() {
             Ok(_) => break,
             Err(e) => {
-                eprintln!("ixd [{log_prefix}]: memory pressure before initial build: {e:?} — waiting...");
+                eprintln!(
+                    "ixd [{log_prefix}]: memory pressure before initial build: {e:?} — waiting..."
+                );
                 std::thread::sleep(Duration::from_secs(PRE_BUILD_WAIT_SECS));
             }
         }
@@ -322,6 +345,7 @@ fn run_main_loop(
     beacon: &mut Beacon,
     idle: &mut IdleTracker,
     guard: &ResourceGuard,
+    cache_policy: &AdaptiveCachePolicy,
     running: &Arc<AtomicBool>,
     daemon_sock: Option<&DaemonServer>,
     log_prefix: &str,
@@ -343,6 +367,7 @@ fn run_main_loop(
                     beacon,
                     idle,
                     guard,
+                    cache_policy,
                     daemon_sock,
                     running,
                     log_prefix,
@@ -371,9 +396,7 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
         }
         SafetyDecision::Exit(err) => {
             let prefix = ctx.log_prefix;
-            eprintln!(
-                "ixd [{prefix}]: SAFETY EXIT (unrecoverable: {err:?}) — terminating",
-            );
+            eprintln!("ixd [{prefix}]: SAFETY EXIT (unrecoverable: {err:?}) — terminating");
             ctx.beacon.status = "safety exit".to_string();
             ctx.running.store(false, Ordering::SeqCst);
             return;
@@ -434,13 +457,27 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
 
     ctx.idle.record_change();
 
-if let Err(e) = ctx.builder.update(changed_files) {
-            let prefix = ctx.log_prefix;
-            eprintln!("ixd [{prefix}]: update failed: {e} — retrying on next change");
-        } else {
-            let prefix = ctx.log_prefix;
-            tracing::debug!("ixd [{prefix}]: index updated - caches will self-invalidate on next query");
-        }
+    if let Err(e) = ctx.builder.update(changed_files) {
+        let prefix = ctx.log_prefix;
+        eprintln!("ixd [{prefix}]: update failed: {e} — retrying on next change");
+    } else {
+        let prefix = ctx.log_prefix;
+        tracing::debug!(
+            "ixd [{prefix}]: index updated - caches will self-invalidate on next query"
+        );
+    }
+
+    let directive = ctx.cache_policy.directive();
+    if directive.zone != crate::cache_policy::PressureZone::Green {
+        tracing::debug!(
+            "ixd [{}]: cache directive -- zone={:?}, pressure={}, evict={:.2}, admit={}",
+            ctx.log_prefix,
+            directive.zone,
+            directive.pressure,
+            directive.evict_fraction,
+            directive.allow_new_entries
+        );
+    }
 
     broadcast_file_changes(ctx, changed_files);
 

@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0] - 2026-05-28
+
+### Added
+- **`.ixd.toml` configuration** — The daemon now discovers `.ixd.toml` files to scope watch roots and exclude patterns. Configs are merged from root + subdirectories (2 levels deep). See `docs/.ixd.toml.md` for schema.
+- **Builder `exclude_patterns`** — `Builder::with_exclude_patterns()` accepts directory name patterns to skip during file walk. Patterns are matched against the last component of each entry's path.
+- **`cache_policy` module** — `AdaptiveCachePolicy` driven by `ResourceGuard` memory pressure, now wired into the daemon's main loop. Produces `CacheDirective`s with zone-based eviction decisions, logged per change batch.
+- **`streaming` module** — Alternative file search implementations (line-based and mmap-windowed) now declared in `lib.rs` and fully functional. 4 new tests unearthed.
+- **`api` module** — Convenience `execute()` wrapper around planner + executor pipeline for simple single-call searches. Rewritten with correct `Executor`/`Planner` API signatures.
+- **Service management** — `ix service install/start/stop/restart` nested under `ix service` subcommand (was flat `ix install/start/stop`). Added `Restart` support via `systemctl --user restart`.
+- **Documentation routing table** — `README.md` now serves as a hub linking to QUICKSTART, DAEMON-RUNBOOK, SOCKET-API, `.ixd.toml`, DELTA-FORMAT, BENCHMARKS, CONTRIBUTING, and CHANGELOG.
+- **`rust-version` in `[package]`** — crates.io now displays minimum Rust version (1.85) on the package page.
+- **`ixd --help`** — Now includes examples and links to DAEMON-RUNBOOK and `.ixd.toml` docs.
+- **`doc(cfg)` annotations** — All feature-gated (`notify`) modules and re-exports annotated for docs.rs rendering.
+- **`.ixd.toml.md`** — Full config reference with schema, examples, and verification commands.
+
+### Changed
+- **llmosafe 0.6.1 → 0.6.2** — Upgraded for v0.6.2 witness-token architecture. Watcher fallback cognitive pipeline simplified to `ResourceGuard::check()` + `pressure()` — same safety, no witness-token overhead.
+- **Documentation moved** — `POSTMORTEM*` + `DAEMON-SOCKET-INTERNALS` → `docs/internals/`. `SECURITY.md` + `CODE_OF_CONDUCT.md` → repository root (GitHub convention).
+- **`Plan::plan_with_pool()`** — Wired into `daemon_sock::execute_search()`, replacing `plan_with_options()` for regex-pool-aware planning.
+- **`Config` struct** — No longer dead code. `Config::load()` and `Config::discover_under()` implemented. Daemon applies discovered exclude patterns before building.
+- **`--negate` ghost removed** — README no longer references the unimplemented `--negate` flag.
+
+### Fixed
+- **5 dead-code modules/types wired** (~587 lines): `streaming.rs` (370L, 4 tests), `api.rs` (21L), `Config` struct, `AdaptiveCachePolicy`/`CacheDirective`, `Planner::plan_with_pool`.
+- **Non-ASCII literals** — Em dashes replaced with ASCII dashes (clippy `non_ascii_literal`).
+
+### Security
+- **llmosafe 0.6.2** — `check_blocking()` now bounded (3 retries → `DeadlineExceeded`) instead of spinning indefinitely under sustained pressure. `ResourceGuard::auto()` fail-closed on non-Linux.
+
+### Housekeeping
+- **`.gitignore` hardened** — Blocks 32+ agentic/AI tooling directories (`cursor`, `opencode`, `claude`, `copilot`, `windsurf`, etc.) and generated files (`.prompt.md`, `PLAN.md`, `analysis.md`, agent sessions).
+
+### Technical Details
+- Index format: unchanged (v1.3)
+- Backward compatible: yes
+- Breaking changes: no
+- Migration: `--build` not required (index format unchanged)
+- All 97 tests pass (73 lib + 24 integration/streaming)
+
 ## [0.9.0] - 2026-05-21
 
 ### Added
