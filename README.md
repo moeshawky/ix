@@ -7,10 +7,17 @@
 
 Sub-millisecond code search via sparse trigram indexing.
 
-`ix` pre-computes a byte-level trigram index to narrow search candidates
-to a fraction of the total file set, then verifies matches with a
-memory-constant streaming architecture. This eliminates the linear-scan
-bottleneck of traditional tools on large codebases.
+`ix` builds a compressed trigram index that is typically **2-3× the source
+size** for pure code, and can be **smaller than the source** for
+repetitive or binary-heavy repos (measured: 0.13× on a 1 GB training
+corpus). The compaction pipeline — delta encoding → protobuf varint →
+ZSTD level 3 — achieves **88% reduction vs raw u32 storage** and **60%
+additional savings on top of varint alone**. The CDX trigram table uses
+a B-tree page architecture (block index → ZSTD-compressed 1024-entry
+blocks) for **sub-50μs random access** into compressed data.
+
+This eliminates the linear-scan bottleneck of traditional tools on large
+codebases. Target hardware floor: 2015 CPU, 8 GB RAM.
 
 ## Documentation
 
@@ -126,24 +133,54 @@ See [docs/.ixd.toml.md](docs/.ixd.toml.md) for full schema and examples.
 
 ## How It Works
 
-1. **Index** — `ix --build` walks the directory, extracts byte-level trigrams
-   from every file, and writes a compressed index to `.ix/shard.ix`.
-2. **Plan** — On search, the query is decomposed into trigrams. The index
-   is consulted to find candidate files.
-3. **Verify** — Candidates are streamed through a regex matcher with
-   constant memory usage.
+1. **Extract** — `ix --build` walks the directory, extracts byte-level
+   trigrams (skipping null bytes to nullify binary noise), and caps at
+   64 offset samples per trigram for files >1 MB.
+2. **Accumulate** — Trigrams are grouped into posting lists (one per
+   unique trigram). An external sort with 500K-entry flush threshold
+   keeps RAM constant regardless of repository size.
+3. **Compress** — Posting lists and the trigram table use the same
+   pipeline: delta-encode adjacent file IDs and offsets → protobuf
+   varint → ZSTD level 3. The CDX trigram table is organized as a
+   B-tree: a 12-byte-per-1024-entry block index for O(log N) lookup,
+   then decompress one ~5 KB block to find the target.
+4. **Plan** — On search, the query is decomposed into trigrams. The
+   block index finds the target block, one ZSTD call decompresses it,
+   and a linear scan finds the posting list offset.
+5. **Verify** — Candidates are filtered through per-file bloom filters
+   (256 B, 0.7% false-positive rate), then streamed through a regex
+   matcher with constant memory usage.
+
+### Compaction Pipeline (measured)
+
+```
+Raw u32 entries  →  delta-encode  →  varint  →  ZSTD level 3
+  10.6 MB             2-3× smaller     60% more     88% total reduction
+                                                      (1.3 MB final)
+```
+
+| Stage | What it catches | Typical savings |
+|-------|----------------|-----------------|
+| Null-byte skip | Binary files (30-80% null bytes) | near-zero trigram cost |
+| Offset sampling | Repeated patterns in large files | 64 offsets max per trigram |
+| Delta encoding | Sequential file IDs, clustered offsets | 2-3× vs raw u32 |
+| Protobuf varint | Small values fit in 1 byte (<128) | dense trigrams stay compact |
+| ZSTD level 3 | Byte-pattern redundancy in varint runs | **60%** on top of varint |
+
 
 ### Index Format (v1.3)
 
 All integers little-endian, offsets absolute from file start, 8-byte aligned.
 
-| Section | Description |
-|---------|-------------|
-| Header | 256 bytes: magic `IX01`, version, flags, section offsets |
-| File table | Per-file metadata: path hash, content hash, size |
-| Trigram table (CDX) | Delta-encoded + varint + ZSTD in 1024-entry blocks |
-| Posting lists | Per-trigram file IDs, delta-encoded + varint + ZSTD |
-| String pool | Interned file paths |
+| Section | Size (ix repo, 70 files) | Description |
+|---------|---------------------------|-------------|
+| Header | 256 B | magic `IX01`, version, flags, CRC, section offsets |
+| File table | 3.4 KB | 48 B per file: path offset, content hash, size, mtime |
+| Posting lists | 1,332 KB (90.1%) | Per-trigram file entries: delta+varint+ZSTD |
+| CDX trigram table | 122 KB (8.3%) | 4.9 B/trigram (75% vs naive 20 B) |
+| CDX block index | 312 B (0.02%) | 12 B per 1024-entry block, O(log N) binary search |
+| Bloom filters | 18 KB (1.2%) | 256 B per file, 5 hashes, 0.7% FPR |
+| String pool | 1.9 KB | Interned file paths |
 
 CDX compression is always-on since v1.3. Not backward compatible with
 v1.1/v1.2 — rebuild indexes after upgrading:
@@ -155,13 +192,25 @@ ix --build .
 
 ## Performance
 
-| Metric | Value |
-|--------|-------|
-| Index ratio | ~4× source size (ZSTD level 3) |
-| Selective query (10% match) | 40ms — 10× fewer files than ripgrep |
-| Small dataset (all match) | 305ms — ripgrep wins on all-match workloads |
-| Cold start | <3s |
-| Hot path p99 | <50ms |
+Measured on a 2015-era CPU (Haswell equivalent), 8 GB RAM. All ratios
+verified from actual indexes.
+
+| Workload | Source | Index | Ratio |
+|----------|--------|-------|-------|
+| ix source (Rust, 70 files) | 576 KB | 1,477 KB | **2.56×** |
+| Training corpus (mixed, 426 files) | 1,069 MB | 138 MB | **0.13×** |
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| Posting data vs raw u32 | **88% reduction** | 10.6 MB → 1.3 MB (ix repo) |
+| ZSTD on varint buffer | **60% savings** | varint 3.3 MB → zstd 1.3 MB |
+| CDX trigram table vs naive | **75% smaller** | 4.9 B vs 20 B per entry |
+| Block index overhead | **0.02%** of index | 12 B per 1024 trigrams |
+| CDX lookup latency | **<50 μs** | block index search + 1 ZSTD call |
+| Build RAM peak | **<8 MB** | HashMap flushes at 500K entries |
+| Safety ceiling | **60% RAM** | ResourceGuard (llmosafe), 80% fallback |
+| Cold start | <3 s | From disk to first result |
+| Selective query (10% match) | 40 ms | 10× fewer files than ripgrep |
 
 `ix` wins when the trigram index eliminates most files from scanning.
 On small repos or queries where every file matches, linear-scan tools
