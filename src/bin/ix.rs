@@ -716,6 +716,19 @@ fn truncate_safe(s: &mut String, max_bytes: usize) {
     s.truncate(end);
 }
 
+fn looks_like_regex(pattern: &str) -> bool {
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\'
+            && let Some(next) = chars.next()
+            && matches!(next, '|' | '(' | ')' | '{' | '}' | '.' | '*' | '+' | '?' | '[' | ']' | '^' | '$')
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn do_search(params: &SearchParams) -> ix::error::Result<()> {
     let original_cwd = std::env::current_dir()?;
     let search_path_abs = if params.path.is_absolute() {
@@ -821,6 +834,16 @@ fn do_search(params: &SearchParams) -> ix::error::Result<()> {
 
     let mut final_stats = stats;
     final_stats.total_matches = matches.len() as u32;
+
+    if matches.is_empty()
+        && !params.flags.is_regex
+        && !params.flags.json
+        && looks_like_regex(params.pattern)
+    {
+        eprintln!(
+            "ix: literal mode returned 0 results. If this was meant as a regex, add --regex (-r)."
+        );
+    }
 
     let mut matches = matches;
     matches.sort_by(|a, b| {
