@@ -197,6 +197,8 @@ pub enum ServerMessage {
 
 /// Search query parameters sent from client to daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// SearchQuery is a wire format struct with 7 boolean query flags
+// that cannot be decomposed without breaking the JSON protocol.
 #[allow(clippy::struct_excessive_bools)]
 pub struct SearchQuery {
     /// Client-assigned query ID (echoed back in the response).
@@ -234,6 +236,9 @@ pub struct SearchQuery {
     /// Search binary files.
     #[serde(default)]
     pub binary: bool,
+    /// Absolute path prefix to filter results (None = search entire root).
+    #[serde(default)]
+    pub search_path: Option<std::path::PathBuf>,
 }
 
 /// Graceful shutdown notice sent from server to clients.
@@ -856,10 +861,27 @@ pub fn execute_search(
         word_boundary: query.word_boundary,
     };
 
-    let (matches, stats) = executor.execute(&plan, &options)?;
+    let (matches, mut stats) = executor.execute(&plan, &options)?;
+    let filtered_matches: Vec<_> = if let Some(ref search_path) = query.search_path {
+        let filtered: Vec<_> = matches
+            .into_iter()
+            .filter(|m| {
+                let abs_path = if m.file_path.is_absolute() {
+                    m.file_path.clone()
+                } else {
+                    root.join(&m.file_path)
+                };
+                abs_path.starts_with(search_path)
+            })
+            .collect();
+        stats.total_matches = filtered.len() as u32;
+        filtered
+    } else {
+        matches
+    };
     Ok(SearchResults {
         id: query.id,
-        matches,
+        matches: filtered_matches,
         stats,
     })
 }
@@ -1125,6 +1147,67 @@ mod tests {
             Ok(other) => panic!("expected QueryResult, got {other:?}"),
             Err(e) => panic!("recv failed: {e}"),
         }
+    }
+
+    #[test]
+    fn search_query_defaults_search_path_none() {
+        let json = r#"{"pattern":"hello"}"#;
+        let q: SearchQuery = serde_json::from_str(json).expect("deserialize");
+        assert!(q.search_path.is_none());
+    }
+
+    #[test]
+    fn search_query_roundtrip_with_search_path() {
+        let q = SearchQuery {
+            id: 42,
+            pattern: "findme".into(),
+            is_regex: false,
+            ignore_case: true,
+            word_boundary: false,
+            max_results: 10,
+            context_lines: 2,
+            file_types: vec!["rs".into()],
+            decompress: false,
+            multiline: false,
+            archive: false,
+            binary: false,
+            search_path: Some(PathBuf::from("/abs/path")),
+        };
+        let json = serde_json::to_string(&q).expect("serialize");
+        let back: SearchQuery = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.id, 42);
+        assert_eq!(back.pattern, "findme");
+        assert_eq!(back.ignore_case, true);
+        assert_eq!(back.max_results, 10);
+        assert_eq!(back.context_lines, 2);
+        assert_eq!(back.file_types, vec!["rs".to_string()]);
+        assert_eq!(back.search_path, Some(PathBuf::from("/abs/path")));
+    }
+
+    #[test]
+    fn search_query_omitting_search_path_is_backward_compatible() {
+        let old_json = r#"{
+            "pattern": "needle",
+            "is_regex": true,
+            "ignore_case": false,
+            "word_boundary": true,
+            "max_results": 0,
+            "context_lines": 3,
+            "file_types": [],
+            "decompress": false,
+            "multiline": true,
+            "archive": false,
+            "binary": false
+        }"#;
+        let q: SearchQuery = serde_json::from_str(old_json).expect("deserialize old client");
+        assert_eq!(q.pattern, "needle");
+        assert!(q.is_regex);
+        assert!(q.multiline);
+        assert_eq!(q.context_lines, 3);
+        assert!(
+            q.search_path.is_none(),
+            "missing search_path in old client → None"
+        );
     }
 }
 

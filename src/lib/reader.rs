@@ -314,13 +314,13 @@ impl Reader {
     }
 
     fn get_trigram_cdx(&self, trigram: Trigram) -> Option<TrigramInfo> {
-        let mut block_idx = 0;
-        for (i, entry) in self.cdx_blocks.iter().enumerate() {
-            if entry.first_key > trigram {
-                break;
-            }
-            block_idx = i;
+        let idx = self
+            .cdx_blocks
+            .partition_point(|entry| entry.first_key <= trigram);
+        if idx == 0 {
+            return None;
         }
+        let block_idx = idx - 1;
 
         let block_entry = self.cdx_blocks.get(block_idx)?;
 

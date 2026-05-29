@@ -291,6 +291,7 @@ fn execute_local_search(
 fn try_ipc_search(
     params: &SearchParams,
     index_root: &Path,
+    search_path_abs: &Path,
 ) -> Option<(Vec<ix::executor::Match>, ix::executor::QueryStats)> {
     use ix::daemon_sock::{DaemonClient, SearchQuery};
 
@@ -309,6 +310,7 @@ fn try_ipc_search(
         multiline: params.flags.multiline,
         archive: params.flags.archive,
         binary: params.flags.binary,
+        search_path: Some(search_path_abs.to_path_buf()),
     };
 
     let results = client.search(query).ok()?;
@@ -442,7 +444,9 @@ fn handle_service(cmd: ServiceCommand) -> ix::error::Result<()> {
             ServiceCommand::Service {
                 action: ServiceAction::Install { path },
             } => {
-                let watch_path = path.unwrap_or_else(|| PathBuf::from(&home));
+                let watch_path = path.unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from(&home))
+                });
                 let watch_path_abs = watch_path.canonicalize().unwrap_or(watch_path);
 
                 std::fs::create_dir_all(&service_dir)?;
@@ -459,8 +463,6 @@ After=network.target
 ExecStart={} {}
 Restart=on-failure
 RestartSec=10
-MemoryMax=512M
-MemoryHigh=384M
 StartLimitBurst=3
 StartLimitIntervalSec=60
 
@@ -794,7 +796,7 @@ fn do_search(params: &SearchParams) -> ix::error::Result<()> {
 
         if daemon_managed {
             // Try IPC search with silent fallback
-            match try_ipc_search(params, index_root) {
+            match try_ipc_search(params, index_root, &search_path_abs) {
                 Some((m, s)) => (m, s),
                 None => execute_local_search(params, path, index_root, &options, &search_path_abs)?,
             }

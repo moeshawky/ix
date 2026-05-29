@@ -473,9 +473,17 @@ impl Builder {
                             self.flush_run()?;
                         }
                     } else {
-                        // Fallback to manual RSS limit if no formal guard provided
+                        // Fallback to proportional RSS limit if no formal guard provided.
+                        // Use 80% of system RAM — higher than ResourceGuard's 60%, so the
+                        // smart governor always fires first when present.
+                        let sys_mem = ResourceGuard::system_memory_bytes();
+                        let rss_threshold: u64 = if sys_mem > 0 {
+                            (sys_mem.saturating_mul(4) / 5) as u64
+                        } else {
+                            512 * 1024 * 1024
+                        };
                         if let Ok(rss) = Self::current_rss_bytes()
-                            && rss > 512 * 1024 * 1024
+                            && rss > rss_threshold
                         {
                             eprintln!(
                                 "ixd: RSS ceiling reached ({} MB) after {} files — flushing intermediate chunk",
@@ -583,6 +591,8 @@ impl Builder {
         if ret != 0 {
             return Err(std::io::Error::last_os_error());
         }
+        // statvfs fields are fsblkcnt_t (platform-width); explicit u64
+        // cast required for multiplication safety on 32-bit targets.
         #[allow(clippy::unnecessary_cast)]
         Ok(stat.f_bavail as u64 * stat.f_frsize as u64)
     }
