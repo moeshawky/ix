@@ -9,8 +9,8 @@ Sub-millisecond code search via sparse trigram indexing.
 
 `ix` builds a compressed trigram index that is typically **2-3× the source
 size** for pure code, and can be **smaller than the source** for
-repetitive or binary-heavy repos (measured: 0.13× on a 1 GB training
-corpus). The compaction pipeline — delta encoding → protobuf varint →
+repetitive or binary-heavy repos (measured: 0.13× on a 1 GB mixed-content
+repo). The compaction pipeline — delta encoding → protobuf varint →
 ZSTD level 3 — achieves **88% reduction vs raw u32 storage** and **60%
 additional savings on top of varint alone**. The CDX trigram table uses
 a B-tree page architecture (block index → ZSTD-compressed 1024-entry
@@ -172,7 +172,7 @@ Raw u32 entries  →  delta-encode  →  varint  →  ZSTD level 3
 
 All integers little-endian, offsets absolute from file start, 8-byte aligned.
 
-| Section | Size (ix repo, 70 files) | Description |
+| Section | Size (example, 70 files) | Description |
 |---------|---------------------------|-------------|
 | Header | 256 B | magic `IX01`, version, flags, CRC, section offsets |
 | File table | 3.4 KB | 48 B per file: path offset, content hash, size, mtime |
@@ -197,12 +197,12 @@ verified from actual indexes.
 
 | Workload | Source | Index | Ratio |
 |----------|--------|-------|-------|
-| ix source (Rust, 70 files) | 576 KB | 1,477 KB | **2.56×** |
-| Training corpus (mixed, 426 files) | 1,069 MB | 138 MB | **0.13×** |
+| Source code (70 files) | 576 KB | 1,477 KB | **2.56×** |
+| Mixed-content repo (426 files) | 1,069 MB | 138 MB | **0.13×** |
 
 | Metric | Value | Notes |
 |--------|-------|-------|
-| Posting data vs raw u32 | **88% reduction** | 10.6 MB → 1.3 MB (ix repo) |
+| Posting data vs raw u32 | **88% reduction** | 10.6 MB → 1.3 MB |
 | ZSTD on varint buffer | **60% savings** | varint 3.3 MB → zstd 1.3 MB |
 | CDX trigram table vs naive | **75% smaller** | 4.9 B vs 20 B per entry |
 | Block index overhead | **0.02%** of index | 12 B per 1024 trigrams |
