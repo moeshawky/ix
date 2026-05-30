@@ -255,14 +255,18 @@ fn execute_local_search(
     let rss = llmosafe::ResourceGuard::current_rss_bytes();
     let sys_mem = llmosafe::ResourceGuard::system_memory_bytes();
     if sys_mem > 0 {
-        let pressure = u8::try_from(rss.saturating_mul(100).saturating_div(sys_mem)).unwrap_or(100);
-        let zone = ix::cache_policy::PressureZone::from_pressure(pressure);
-        let allow = !matches!(
-            zone,
-            ix::cache_policy::PressureZone::Orange | ix::cache_policy::PressureZone::Red
-        );
-        executor.posting_cache().set_admit(allow);
-        executor.neg_cache().set_admit(allow);
+        let rss_pct = rss.saturating_mul(100).saturating_div(sys_mem);
+        if rss_pct < 60 {
+            executor.posting_cache().set_admit(true);
+            executor.neg_cache().set_admit(true);
+        } else {
+            let policy = ix::cache_policy::AdaptiveCachePolicy::new(0.6);
+            let directive = policy.directive();
+            executor
+                .posting_cache()
+                .set_admit(directive.allow_new_entries);
+            executor.neg_cache().set_admit(directive.allow_new_entries);
+        }
     }
 
     let (m, s) = executor.execute(&plan, options)?;
@@ -1021,6 +1025,9 @@ fn print_stats(stats: &QueryStats, elapsed: std::time::Duration) {
     eprintln!("posting_lists_decoded: {}", stats.posting_lists_decoded);
     eprintln!("candidate_files: {}", stats.candidate_files);
     eprintln!("files_verified: {}", stats.files_verified);
+    if stats.files_failed_verify > 0 {
+        eprintln!("files_failed_verify: {}", stats.files_failed_verify);
+    }
     eprintln!("bytes_verified: {}", stats.bytes_verified);
     eprintln!("total_matches: {}", stats.total_matches);
     if stats.posting_cache_hits > 0 || stats.posting_cache_misses > 0 {

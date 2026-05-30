@@ -55,6 +55,8 @@ pub struct QueryStats {
     pub candidate_files: u32,
     /// Number of files whose content was verified against the regex.
     pub files_verified: u32,
+    /// Number of files that could not be verified due to I/O errors.
+    pub files_failed_verify: u64,
     /// Total bytes of file content read during verification.
     pub bytes_verified: u64,
     /// Total number of matches produced.
@@ -72,6 +74,7 @@ pub struct QueryStats {
 /// Thread-safe accumulators for [`QueryStats`] during parallel verification.
 struct QueryStatsAccum {
     files_verified: AtomicU32,
+    files_failed_verify: AtomicU64,
     bytes_verified: AtomicU64,
     matches_found: AtomicU32,
     neg_cache_hits: AtomicU64,
@@ -82,6 +85,7 @@ impl QueryStatsAccum {
     fn new() -> Self {
         Self {
             files_verified: AtomicU32::new(0),
+            files_failed_verify: AtomicU64::new(0),
             bytes_verified: AtomicU64::new(0),
             matches_found: AtomicU32::new(0),
             neg_cache_hits: AtomicU64::new(0),
@@ -91,6 +95,7 @@ impl QueryStatsAccum {
 
     fn into_stats(self, candidate_files: u32, total_matches: u32, stats: &mut QueryStats) {
         stats.files_verified = self.files_verified.into_inner();
+        stats.files_failed_verify = self.files_failed_verify.into_inner();
         stats.bytes_verified = self.bytes_verified.into_inner();
         stats.neg_cache_hits += self.neg_cache_hits.into_inner();
         stats.neg_cache_misses += self.neg_cache_misses.into_inner();
@@ -830,7 +835,10 @@ impl<'a> Executor<'a> {
         }
         stats.neg_cache_misses.fetch_add(1, Ordering::Relaxed);
 
-        let matches = Self::verify_file(file_info, regex, options).ok()?;
+        let Ok(matches) = Self::verify_file(file_info, regex, options) else {
+            stats.files_failed_verify.fetch_add(1, Ordering::Relaxed);
+            return None;
+        };
         if matches.is_empty() {
             self.neg_cache
                 .record_negative(neg_fp, file_info.content_hash);

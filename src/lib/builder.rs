@@ -520,7 +520,7 @@ impl Builder {
             return self.build();
         };
 
-        let delta_reader = DeltaReader::open(&delta_file).unwrap_or_default();
+        let delta_reader = DeltaReader::open(&delta_file)?;
         let mut next_file_id = main_reader.header.file_count + delta_reader.total_file_entries;
 
         let is_new = !delta_file.exists();
