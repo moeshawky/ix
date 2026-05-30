@@ -64,6 +64,7 @@ impl RegexPool {
                     .write()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 stats.hits += 1;
+                drop(stats);
                 return Ok(re.clone());
             }
         }
@@ -98,6 +99,9 @@ impl RegexPool {
             pool.insert(pattern.to_owned(), re.clone());
             order.push(pattern.to_owned());
             stats.misses += 1;
+            drop(stats);
+            drop(order);
+            drop(pool);
         }
 
         Ok(re)
@@ -115,6 +119,8 @@ impl RegexPool {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         pool.remove(pattern);
         order.retain(|k| k != pattern);
+        drop(order);
+        drop(pool);
     }
 
     /// Clears all entries from the pool.
@@ -129,6 +135,8 @@ impl RegexPool {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         pool.clear();
         order.clear();
+        drop(order);
+        drop(pool);
     }
 
     /// Returns a snapshot of the pool hit/miss statistics.

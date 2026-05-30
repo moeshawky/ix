@@ -94,6 +94,7 @@ impl PostingCache {
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             stats.hits += 1;
+            drop(stats);
             Some(result)
         } else {
             drop(map);
@@ -102,6 +103,7 @@ impl PostingCache {
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             stats.misses += 1;
+            drop(stats);
             None
         }
     }
@@ -151,6 +153,9 @@ impl PostingCache {
             map.insert(trigram, list);
             order.push(trigram);
             *mem += entry_size;
+            drop(mem);
+            drop(order);
+            drop(map);
             return;
         }
 
@@ -191,6 +196,10 @@ impl PostingCache {
             map.insert(trigram, list);
             order.push(trigram);
             *mem += entry_size;
+            drop(stats);
+            drop(mem);
+            drop(order);
+            drop(map);
         }
     }
 
@@ -215,6 +224,9 @@ impl PostingCache {
             *mem = mem.saturating_sub(removed_size);
             order.retain(|t| *t != trigram);
         }
+        drop(mem);
+        drop(order);
+        drop(map);
     }
 
     /// # Panics
@@ -236,6 +248,9 @@ impl PostingCache {
         map.clear();
         order.clear();
         *mem = 0;
+        drop(mem);
+        drop(order);
+        drop(map);
     }
 
     /// # Panics

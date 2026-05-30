@@ -188,6 +188,7 @@ impl NegCache {
                 true
             }
         });
+        drop(set);
         self.stats
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
