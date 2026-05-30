@@ -82,7 +82,7 @@ struct QueryStatsAccum {
 }
 
 impl QueryStatsAccum {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             files_verified: AtomicU32::new(0),
             files_failed_verify: AtomicU64::new(0),
@@ -93,6 +93,7 @@ impl QueryStatsAccum {
         }
     }
 
+    #[allow(clippy::missing_const_for_fn)]
     fn into_stats(self, candidate_files: u32, total_matches: u32, stats: &mut QueryStats) {
         stats.files_verified = self.files_verified.into_inner();
         stats.files_failed_verify = self.files_failed_verify.into_inner();
@@ -576,6 +577,7 @@ impl<'a> Executor<'a> {
         }
 
         // Intersect across position groups
+        #[allow(clippy::option_if_let_else)]
         let mut final_candidates = if let Some(mut base) = group_candidates.pop() {
             for set in group_candidates {
                 base.retain(|fid| set.contains(fid));

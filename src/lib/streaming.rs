@@ -222,17 +222,10 @@ pub fn stream_file_with_windows(
 
         let window = mmap_data.get(s..e).unwrap_or_default();
 
-        let line_start = if s == 0 {
-            0
-        } else {
-            match mmap_data
-                .get(..s)
-                .and_then(|before| before.iter().rposition(|&b| b == b'\n'))
-            {
-                Some(pos) => pos + 1,
-                None => 0,
-            }
-        };
+        let line_start = mmap_data
+            .get(..s)
+            .and_then(|before| before.iter().rposition(|&b| b == b'\n'))
+            .map_or(0, |pos| pos + 1);
 
         let line_offsets =
             compute_line_offsets(mmap_data.get(line_start..e).unwrap_or_default(), line_start);

@@ -345,6 +345,7 @@ fn main() {
             let paths: Vec<PathBuf> = if cli.path.is_empty() {
                 vec![PathBuf::from(".")]
             } else {
+                #[allow(clippy::redundant_clone)]
                 cli.path.clone()
             };
             for path in &paths {
@@ -980,39 +981,36 @@ fn print_match(
         if context > 0 {
             for (i, line) in m.context_before.iter().enumerate() {
                 let line_num = (m.line_number as usize - m.context_before.len() + i) as u32;
-                if !printed_lines.contains(&line_num) {
+                if printed_lines.insert(line_num) {
                     println!(
                         "{}:{}:- :{}",
                         m.file_path.display(),
                         line_num,
                         truncate(line)
                     );
-                    printed_lines.insert(line_num);
                 }
             }
         }
 
-        if !printed_lines.contains(&m.line_number) {
+        if printed_lines.insert(m.line_number) {
             println!(
                 "{}:{}: {}",
                 m.file_path.display(),
                 m.line_number,
                 truncate(&m.line_content)
             );
-            printed_lines.insert(m.line_number);
         }
 
         if context > 0 {
             for (i, line) in m.context_after.iter().enumerate() {
                 let line_num = (m.line_number as usize + 1 + i) as u32;
-                if !printed_lines.contains(&line_num) {
+                if printed_lines.insert(line_num) {
                     println!(
                         "{}:{}:- :{}",
                         m.file_path.display(),
                         line_num,
                         truncate(line)
                     );
-                    printed_lines.insert(line_num);
                 }
             }
         }

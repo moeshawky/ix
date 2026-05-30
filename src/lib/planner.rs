@@ -130,9 +130,11 @@ impl Planner {
             );
             // ^$ matches end-of-line only — effectively matches nothing useful.
             // This is safer than "" which matches EVERY line.
+            #[allow(clippy::trivial_regex)]
             Regex::new("^$").unwrap_or_else(|_| {
                 // Absolute last resort: a literal 'a' pattern.
                 // This should never fail unless regex crate is broken.
+                #[allow(clippy::trivial_regex)]
                 Regex::new("a").unwrap()
             })
         })

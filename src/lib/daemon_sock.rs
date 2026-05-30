@@ -67,7 +67,7 @@ pub enum FileOp {
 impl FileOp {
     /// Convert from the notify crate's event kind to our serializable enum.
     #[must_use]
-    pub fn from_notify_kind(kind: notify::EventKind) -> Self {
+    pub const fn from_notify_kind(kind: notify::EventKind) -> Self {
         match kind {
             notify::EventKind::Create(_) => Self::Create,
             notify::EventKind::Remove(_) => Self::Delete,
@@ -806,6 +806,7 @@ fn now_secs() -> u64 {
 }
 
 /// Execute a search query against the index at the given root path.
+///
 /// This reads directly from the shard.ix file, ensuring consistency with
 /// the daemon's current state (since the daemon rebuilds the index on each change).
 ///

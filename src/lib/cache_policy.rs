@@ -74,7 +74,7 @@ impl AdaptiveCachePolicy {
     /// `ceiling_bytes` must match the guard's internal ceiling
     /// (i.e., the value passed to `ResourceGuard::new` or computed by `auto`).
     #[must_use]
-    pub fn new_with_guard(guard: ResourceGuard, ceiling_bytes: usize) -> Self {
+    pub const fn new_with_guard(guard: ResourceGuard, ceiling_bytes: usize) -> Self {
         Self {
             guard,
             ceiling: ceiling_bytes,
@@ -83,7 +83,7 @@ impl AdaptiveCachePolicy {
 
     /// Returns a reference to the underlying `ResourceGuard`.
     #[must_use]
-    pub fn guard(&self) -> &ResourceGuard {
+    pub const fn guard(&self) -> &ResourceGuard {
         &self.guard
     }
 
@@ -136,7 +136,7 @@ impl AdaptiveCachePolicy {
 
     /// Returns the memory ceiling in bytes that this policy is configured with.
     #[must_use]
-    pub fn ceiling_bytes(&self) -> usize {
+    pub const fn ceiling_bytes(&self) -> usize {
         self.ceiling
     }
 }
@@ -152,7 +152,7 @@ impl std::fmt::Debug for AdaptiveCachePolicy {
 impl PressureZone {
     /// Returns the zone corresponding to the given pressure percentage.
     #[must_use]
-    pub fn from_pressure(pressure: u8) -> Self {
+    pub const fn from_pressure(pressure: u8) -> Self {
         match pressure {
             0..=40 => Self::Green,
             41..=70 => Self::Yellow,

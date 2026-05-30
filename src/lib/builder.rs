@@ -989,14 +989,14 @@ impl Builder {
 
             let item = current_items
                 .get_mut(run_idx)
-                .ok_or(Error::Config("run_idx out of bounds".into()))?
+                .ok_or_else(|| Error::Config("run_idx out of bounds".into()))?
                 .take()
-                .ok_or(Error::Config("current item is None".into()))?;
+                .ok_or_else(|| Error::Config("current item is None".into()))?;
             merged_entries.extend(item.1);
 
             if let Some(next_item) = runs
                 .get_mut(run_idx)
-                .ok_or(Error::Config("run_idx out of bounds".into()))?
+                .ok_or_else(|| Error::Config("run_idx out of bounds".into()))?
                 .next_trigram()?
             {
                 heap.push(MergeItem {
@@ -1005,7 +1005,8 @@ impl Builder {
                 });
                 *current_items
                     .get_mut(run_idx)
-                    .ok_or(Error::Config("run_idx out of bounds".into()))? = Some(next_item);
+                    .ok_or_else(|| Error::Config("run_idx out of bounds".into()))? =
+                    Some(next_item);
             }
         }
 

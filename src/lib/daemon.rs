@@ -457,11 +457,10 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
 
     ctx.idle.record_change();
 
+    let prefix = ctx.log_prefix;
     if let Err(e) = ctx.builder.update(changed_files) {
-        let prefix = ctx.log_prefix;
         eprintln!("ixd [{prefix}]: update failed: {e} — retrying on next change");
     } else {
-        let prefix = ctx.log_prefix;
         tracing::debug!(
             "ixd [{prefix}]: index updated - caches will self-invalidate on next query"
         );
