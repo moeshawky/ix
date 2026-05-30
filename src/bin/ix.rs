@@ -721,7 +721,10 @@ fn looks_like_regex(pattern: &str) -> bool {
     while let Some(c) = chars.next() {
         if c == '\\'
             && let Some(next) = chars.next()
-            && matches!(next, '|' | '(' | ')' | '{' | '}' | '.' | '*' | '+' | '?' | '[' | ']' | '^' | '$')
+            && matches!(
+                next,
+                '|' | '(' | ')' | '{' | '}' | '.' | '*' | '+' | '?' | '[' | ']' | '^' | '$'
+            )
         {
             return true;
         }

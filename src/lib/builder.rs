@@ -514,6 +514,7 @@ impl Builder {
 
         let index_file = self.ix_dir.join("shard.ix");
         let delta_file = self.ix_dir.join("shard.ix.delta");
+        let delta_tmp = self.ix_dir.join("shard.ix.delta.tmp");
 
         let Ok(main_reader) = Reader::open(&index_file) else {
             return self.build();
@@ -523,10 +524,13 @@ impl Builder {
         let mut next_file_id = main_reader.header.file_count + delta_reader.total_file_entries;
 
         let is_new = !delta_file.exists();
+        if !is_new {
+            std::fs::copy(&delta_file, &delta_tmp)?;
+        }
         let mut delta_out = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&delta_file)?;
+            .open(&delta_tmp)?;
         if is_new {
             delta_out.write_all(&DELTA_MAGIC)?;
         }
@@ -550,6 +554,7 @@ impl Builder {
         }
 
         delta_out.flush()?;
+        std::fs::rename(&delta_tmp, &delta_file)?;
         Ok(index_file)
     }
 
