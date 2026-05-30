@@ -22,21 +22,27 @@
 //! # Library Usage
 //!
 //! ```rust,ignore
-//! use ix::{Reader, Executor};
+//! use ix::reader::Reader;
+//! use ix::executor::{Executor, QueryOptions};
+//! use ix::planner::Planner;
 //!
 //! let reader = Reader::open(".ix/shard.ix")?;
+//! let plan = Planner::plan("struct Config", false);
 //! let mut executor = Executor::new(&reader);
-//! let matches = executor.execute(query);
+//! let (matches, stats) = executor.execute(&plan, &QueryOptions::default())?;
 //! ```
 //!
 //! # Module Build Order
 //!
 //! `format` → `varint` → `trigram` → `bloom` → `posting` →
-//! `string_pool` → `builder` → `reader` → `planner` → `executor` → `scanner`
+//! `string_pool` → `builder` → `reader` → `planner` → `executor`
 //!
-//! Cache layer: `posting_cache` → `neg_cache` → `regex_pool` → `cache_policy`
+//! Cache layer: `posting_cache` · `neg_cache` · `regex_pool` (used by `executor`)
 //!
-//! Support: `streaming` → `api` → `config`
+//! Policy: `cache_policy` (standalone, adapts to `ResourceGuard` pressure)
+//!
+//! Support: `scanner` (fallback, no index) · `streaming` (line/mmap alternatives) ·
+//! `api` (convenience wrapper) · `config` (`.ixd.toml`)
 //!
 //! # See Also
 //!

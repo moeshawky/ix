@@ -32,10 +32,9 @@ fn test_json_escaping_backslash_quote() {
         .unwrap_or_else(|e| panic!("Invalid JSON output: {}\nRaw: {}", e, line));
 
     let content = json["content"].as_str().unwrap();
-    assert!(
-        content.contains("prefix"),
-        "Content should match: {}",
-        content
+    assert_eq!(
+        content, r#"prefix \" quote"#,
+        "Content should be the entire line, including backslash-quote"
     );
 }
 
@@ -103,7 +102,7 @@ fn test_json_output_golden() {
     let line = stdout.lines().next().expect("Should find match");
     let json: serde_json::Value = serde_json::from_str(line).unwrap();
 
-    assert!(json["file"].as_str().is_some());
-    assert!(json["line"].as_u64().is_some());
-    assert!(json["content"].as_str().is_some());
+    assert_eq!(json["file"].as_str().unwrap(), file_path.to_str().unwrap());
+    assert_eq!(json["line"].as_u64().unwrap(), 1, "Should be line 1");
+    assert_eq!(json["content"].as_str().unwrap(), "def test_func(): pass");
 }

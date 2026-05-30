@@ -1,6 +1,6 @@
 [package]
 name = "moeix"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 description = "Sub-millisecond code search via sparse trigram indexing."
 homepage = "https://github.com/moeshawky/ix"
@@ -86,6 +86,7 @@ tar = { version = "0.4", optional = true }
 tempfile = "3"
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
+proptest = "1"
 
 [[bench]]
 name = "search"

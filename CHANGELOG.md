@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.0] - 2026-05-30
+
+### Added
+- **Property-based tests** — 13 proptest-powered invariants spanning trigram, posting list, varint, bloom filter, binary detection, and string pool modules. Every G-SEM failure mode now has randomized edge-case coverage.
+- **CBP boundary tests** — 6 integration tests covering C1 (delta format contract), C3 (CDX block index semantic preservation), and C4 (build sequence independence).
+- **Concurrency test** — C5 resource contention verified: 8 threads × 50 queries on shared read-only index, confirming cache consistency under parallel access.
+- **UX hint** — When literal-mode search uses regex-like escapes (`\w`, `\d`, `\s`) and returns zero results, stderr suggests `--regex` flag.
+
+### Changed
+- **T-WEAKORACLE fixes** — Integration and JSON golden tests now assert exact content, line numbers, and file names instead of substring/length-only checks.
+- **Test count** — 102 → 123 tests (21 net new: 6 boundary + 2 concurrency + 13 property).
+- **Documentation updates** — Lib-level crate docs, README library example, CLI help text, and daemon module docs corrected for G-HALL issues (wrong API signatures, stale version claims).
+
+### Fixed
+- **F1-F4 CBP compound bugs** — Atomic delta rename, verify error counter, pressure divergence unification via `AdaptiveCachePolicy`, and `DeltaReader` `?` propagation.
+- **37 clippy warnings resolved** — Zero-warning gate across `all` + `nursery` + `pedantic` + `cargo` lint groups. Only 2 `#[allow]` annotations remain (justified: `trivial_regex` fallback patterns, `option_if_let_else` readability).
+- **Lock tightening** — 18 `significant_drop_tightening` violations fixed via explicit `drop(guard)` after last mutation in all cache hot paths.
+
+### Technical Details
+- Index format: unchanged (v1.3)
+- Backward compatible: yes
+- Breaking changes: no
+- Migration: none required
+- All 123 tests pass (76 lib + 47 integration)
+- Zero clippy warnings (all + nursery + pedantic + cargo)
+
 ## [0.10.0] - 2026-05-28
 
 ### Added

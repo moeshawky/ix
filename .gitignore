@@ -97,3 +97,6 @@ Dockerfile.*
 
 # Keep scripts/ directory tracked
 !scripts/*.sh
+tests/property_tests.proptest-regressions/
+tests/property_tests.proptest-regressions
+ix_test.ipynb

@@ -33,7 +33,19 @@ fn integration_search_literal() {
 
     let plan = Planner::plan("hello", false);
     let (matches, _) = executor.execute(&plan, &QueryOptions::default()).unwrap();
-    assert_eq!(matches.len(), 2);
+    assert_eq!(matches.len(), 2, "Expected 2 files matching 'hello'");
+    let file_names: std::collections::BTreeSet<&str> = matches
+        .iter()
+        .map(|m| m.file_path.file_name().unwrap().to_str().unwrap())
+        .collect();
+    assert_eq!(
+        file_names,
+        ["test1.txt", "test2.txt"]
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>(),
+        "Should match test1.txt and test2.txt"
+    );
 }
 
 #[test]
@@ -56,6 +68,19 @@ fn integration_search_regex() {
 
     let plan = Planner::plan("let [a-z] =", true);
     let (matches, _) = executor.execute(&plan, &QueryOptions::default()).unwrap();
-    assert_eq!(matches.len(), 1);
-    assert!(matches[0].line_content.contains("let x = 42"));
+    assert_eq!(
+        matches.len(),
+        1,
+        "Expected exactly 1 match for regex 'let [a-z] ='"
+    );
+    assert_eq!(
+        matches[0].file_path.file_name().unwrap().to_str().unwrap(),
+        "code.rs",
+        "Should match code.rs"
+    );
+    assert_eq!(
+        matches[0].line_content.trim(),
+        "let x = 42;",
+        "Should match exact line content"
+    );
 }

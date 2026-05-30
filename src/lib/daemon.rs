@@ -5,7 +5,7 @@
 //! checks system entropy via [`ResourceGuard`], and provides file-change
 //! notifications over a Unix domain socket (`daemon_sock`).
 //!
-//! # Multi-root support (v0.8+)
+//! # Multi-root support (v0.9+)
 //!
 //! The daemon can watch multiple roots in one process. Each root runs on
 //! its own thread with an independent [`Builder`], [`Watcher`], [`Beacon`],

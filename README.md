@@ -231,18 +231,18 @@ like ripgrep are faster.
 
 ```toml
 [dependencies]
-moeix = "0.9"
+moeix = "0.11"
 ```
 
 ```rust
 use ix::reader::Reader;
-use ix::executor::Executor;
+use ix::executor::{Executor, QueryOptions};
 use ix::planner::Planner;
 
 let reader = Reader::open(".ix/shard.ix")?;
 let plan = Planner::plan("struct Config", false);
 let mut executor = Executor::new(&reader);
-let (matches, stats) = executor.execute(&plan, &options)?;
+let (matches, stats) = executor.execute(&plan, &QueryOptions::default())?;
 ```
 
 See [docs.rs/moeix](https://docs.rs/moeix) for the full API reference.

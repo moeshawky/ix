@@ -4,7 +4,7 @@
 //! (`LLMOSafe` `ResourceGuard`, entropy monitoring, Unix-domain socket,
 //! file watching, beacon arbitration) lives in the library.
 //!
-//! ## Multi-root support (v0.8+)
+//! ## Multi-root support (v0.9+)
 //!
 //! Pass multiple paths to watch several projects in one daemon process:
 //!
@@ -15,10 +15,10 @@
 //! Each root runs on its own thread with independent index, watcher, beacon,
 //! and Unix domain socket. Signal handling and resource monitoring are shared.
 //!
-//! Safety guarantees (v0.1.2+):
+//! Safety guarantees:
 //! - `SIGTERM`/`SIGINT` → clean shutdown (beacon removed, watcher joined, no zombies)
 //! - `Builder::new` returns `Result` — no panics on unwritable `.ix` dir
-//! - RSS ceiling in builder (512MB) — OOM protection
+//! - `ResourceGuard` at 60% RAM (llmosafe) — OOM protection with 80% proportional RSS fallback
 //! - TOCTOU guards in `process_file` — skips vanished/permission-denied files
 
 #![warn(clippy::pedantic)]
