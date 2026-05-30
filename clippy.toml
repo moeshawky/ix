@@ -1,0 +1,93 @@
+# clippy.toml — ix project lint policy
+#
+# ALIGNMENT: AGENTS.md conventions + lib.rs global allow set + CI gate (-D warnings)
+# MSRV 1.85 anchors the lint baseline. Enterprise-grade policy:
+#   - No unwrap/expect/panic outside tests
+#   - No anyhow in library code
+#   - Pedantic with pragmatic scoped allows only
+#   - All public API documented (missing_docs)
+
+# ── Rust toolchain baseline ──────────────────────────────────────────
+msrv = "1.85"
+
+# ── Test exceptions ──────────────────────────────────────────────────
+# Tests are allowed to use convenience patterns that are banned in
+# production code. The project's lib.rs already has #[cfg_attr(test, allow(missing_docs))].
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-dbg-in-tests = true
+
+# ── Complexity gates ─────────────────────────────────────────────────
+# Cognitive complexity: functions above this threshold signal refactoring
+# candidates. Matches the project's "clean architecture" ethos without
+# being draconian — executor and scanner are long but well-structured.
+cognitive-complexity-threshold = 30
+
+# Too many arguments: more than this signals a configuration struct
+# should be used instead of loose parameters.
+too-many-arguments-threshold = 8
+
+# Type complexity: nested generics beyond this point suggest a type alias.
+type-complexity-threshold = 400
+
+# ── Banned methods (production code) ─────────────────────────────────
+# unwrap/expect/panic are banned in library. Tests exempt via flags above.
+# These fire as warnings (pedantic gate).
+# Note: not using disallowed-methods here — we want the standard
+# clippy::unwrap_used / clippy::expect_used lints which respect
+# allow-unwrap-in-tests. disallowed-methods does not.
+
+# ── Banned types ─────────────────────────────────────────────────────
+# anyhow is banned in library code — use thiserror (AGENTS.md).
+disallowed-types = [
+    { path = "anyhow::Error", reason = "use thiserror::Error in library code (AGENTS.md convention)" },
+]
+
+# ── Documentation identifiers ────────────────────────────────────────
+doc-valid-idents = [
+    "GitHub", "README", "CHANGELOG", "API",
+    "O(n)", "O(n^2)", "O(log n)", "XXH64", "CRC32C",
+    "NDJSON", "TOCTOU", "LRU", "FIFO", "RSS",
+    "ZSTD", "Gzip", "Bzip2", "XZ",
+    "BFS", "CDX", "SGL",
+    "Unix", "Linux", "macOS", "Windows",
+    "stdin", "stdout", "stderr",
+    "Mmap", "mmap", "MADV_WILLNEED",
+    "RwLock", "Mutex", "Arc", "Send", "Sync",
+    "CPU", "RAM", "IO", "OOM",
+]
+
+# ── Enum / type size limits ──────────────────────────────────────────
+# Error enums should remain compact — large variants bloat the Result
+# type across every call site.
+large-error-threshold = 256
+
+# Prevent large types from being stack-allocated in deep recursion.
+too-large-for-stack = 2048
+
+# ── Boolean parameter gates ──────────────────────────────────────────
+# Structs with many boolean fields should use a builder or bitflags.
+# Matches the #[allow(clippy::struct_excessive_bools)] pattern —
+# 3 is the default, bumped to 5 because CLI config structs naturally
+# carry many toggles.
+max-struct-bools = 5
+max-fn-params-bools = 4
+
+# ── Correctness enforcement ──────────────────────────────────────────
+# Enforce iterator loop reborrowing for correctness.
+enforce-iter-loop-reborrow = true
+
+# ── Copy / pass-by-value tuning ──────────────────────────────────────
+# When a type is trivial to copy, prefer passing by value.
+trivial-copy-size-limit = 128
+
+# Larger types should not be passed by value.
+pass-by-value-size-limit = 512
+
+# ── Path / naming hygiene ────────────────────────────────────────────
+# Disallow deeply nested paths — signals module structure issues.
+absolute-paths-max-segments = 6
+
+# Methods named `new` should return Self.
+# Methods named `from_*` should be conversion constructors.
+# (These are default clippy checks — noted here for explicitness.)
