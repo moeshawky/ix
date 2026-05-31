@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **False "index is stale" warning with ixd daemon** — `check_stale()` now considers delta file freshness via `max(header.created_at, delta_mtime)`, preventing false positives when the daemon's incremental `update()` keeps the index current but never refreshes the main shard's `created_at`. Also aligned `get_last_modified()` WalkBuilder filters with `Builder::build()` by adding `.git_global(true).git_exclude(true)`.
+- **Docstring drift** — `Header.created_at` docstring corrected from "seconds" to "microseconds" (code was always micros).
+
+### Changed
+- **Service install bug documented** — `docs/bugs/BUG--service-install-multi-root.md` records the single-path overwrite and multi-root dead-loop issues for future fix.
+
 ## [0.11.0] - 2026-05-30
 
 ### Added
