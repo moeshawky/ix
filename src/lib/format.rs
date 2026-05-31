@@ -86,7 +86,7 @@ pub struct Header {
     pub version_minor: u16,
     /// Bit-field of feature flags (see [`flags`]).
     pub flags: u64,
-    /// Unix timestamp (seconds) when the index was created.
+    /// Unix timestamp in microseconds when the index was created.
     pub created_at: u64,
     /// Sum of byte-sizes of all source files when indexed.
     pub source_bytes_total: u64,
