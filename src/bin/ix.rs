@@ -1047,7 +1047,20 @@ fn check_stale(reader: &Reader, index_root: &Path) -> ix::error::Result<()> {
     let last_mod = Reader::get_last_modified(index_root)?;
     // Add 5-second grace period to reduce false positives from concurrent edits
     let grace_period_micros: u64 = 5_000_000;
-    if last_mod > reader.header.created_at.saturating_add(grace_period_micros) {
+    let delta_mtime = std::fs::metadata(index_root.join(".ix").join("shard.ix.delta"))
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| {
+            u64::try_from(
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros(),
+            )
+            .ok()
+        })
+        .unwrap_or(0);
+    let effective_created_at = std::cmp::max(reader.header.created_at, delta_mtime);
+    if last_mod > effective_created_at.saturating_add(grace_period_micros) {
         let last_built_secs =
             i64::try_from(reader.header.created_at / 1_000_000).unwrap_or(i64::MAX);
         let datetime = chrono::DateTime::from_timestamp(last_built_secs, 0)

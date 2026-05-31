@@ -176,6 +176,8 @@ impl Reader {
         let walker = ignore::WalkBuilder::new(root)
             .hidden(false)
             .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
             .require_git(false)
             .add_custom_ignore_filename(".ixignore")
             .filter_entry(move |entry| {
