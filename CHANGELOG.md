@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.4] - 2026-06-01
+
+### Fixed
+- **Windows cross-compilation (release workflow)** — `daemon` and `daemon_sock` modules gated behind `#[cfg(all(feature = "notify", unix))]`; `Beacon::is_live()` body gated `#[cfg(unix)]` with Windows fallback. Fixes 6 additional compilation errors on `x86_64-pc-windows-msvc` (`nix::sys::signal`, `nix::unistd`, `os::unix::net`) that blocked the `cargo-dist` release workflow.
+
 ## [0.11.3] - 2026-06-01
 
 ### Fixed
