@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.3] - 2026-06-01
+
+### Fixed
+- **Windows cross-compilation in release build** — `free_bytes_at()` and `socket_path()` now gated behind `#[cfg(unix)]` with no-op fallbacks on Windows, fixing the `cargo-dist` release workflow on `x86_64-pc-windows-msvc` that failed due to missing `libc::statvfs` and `libc::getuid`.
+
 ## [0.11.2] - 2026-06-01
 
 ### Fixed
