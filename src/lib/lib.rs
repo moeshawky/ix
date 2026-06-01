@@ -82,10 +82,10 @@ pub mod builder;
 #[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub mod cache_policy;
 pub mod config;
-#[cfg(feature = "notify")]
+#[cfg(all(feature = "notify", unix))]
 #[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub mod daemon;
-#[cfg(feature = "notify")]
+#[cfg(all(feature = "notify", unix))]
 #[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub mod daemon_sock;
 pub mod decompress;
@@ -119,7 +119,7 @@ pub mod watcher;
 #[cfg(feature = "notify")]
 #[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub use crate::builder::Builder;
-#[cfg(feature = "notify")]
+#[cfg(all(feature = "notify", unix))]
 #[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub use crate::daemon_sock::{
     ClientMessage, DaemonClient, DaemonServer, FileChange, FileOp, ServerMessage,

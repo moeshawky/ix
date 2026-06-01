@@ -327,24 +327,31 @@ impl Beacon {
     /// and the watched root directory is still accessible.
     #[must_use]
     pub fn is_live(&self) -> bool {
-        use nix::sys::signal::kill;
-        use nix::unistd::Pid;
+        #[cfg(unix)]
+        {
+            use nix::sys::signal::kill;
+            use nix::unistd::Pid;
 
-        if kill(Pid::from_raw(self.pid), None).is_err() {
-            return false;
-        }
-
-        let comm_path = format!("/proc/{}/comm", self.pid);
-        if let Ok(comm) = std::fs::read_to_string(&comm_path) {
-            let comm = comm.trim();
-            if comm != "ixd" {
+            if kill(Pid::from_raw(self.pid), None).is_err() {
                 return false;
             }
-        } else {
-            return false;
-        }
 
-        self.root.exists()
+            let comm_path = format!("/proc/{}/comm", self.pid);
+            if let Ok(comm) = std::fs::read_to_string(&comm_path) {
+                let comm = comm.trim();
+                if comm != "ixd" {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+
+            self.root.exists()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
     }
 
     /// Write the beacon to `beacon.json` in the given folder.
