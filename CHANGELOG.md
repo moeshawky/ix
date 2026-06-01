@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.5] - 2026-06-01
+
+### Fixed
+- **Windows cross-compilation (release workflow, round 3)** — Remaining `ix::daemon_sock` references in `ix` binary IPC path gated behind `#[cfg(unix)]`. `ixd` binary given Windows stub. All platform-exclusive modules (`daemon`, `daemon_sock`) and their consumers now properly guarded.
+
 ## [0.11.4] - 2026-06-01
 
 ### Fixed
