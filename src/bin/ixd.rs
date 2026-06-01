@@ -47,7 +47,14 @@ struct Cli {
     paths: Vec<PathBuf>,
 }
 
+#[cfg(unix)]
 fn main() -> ix::error::Result<()> {
     let cli = Cli::parse();
     ix::daemon::run_many(&cli.paths)
+}
+
+#[cfg(not(unix))]
+fn main() {
+    eprintln!("ixd: the daemon is not supported on this platform");
+    std::process::exit(1);
 }

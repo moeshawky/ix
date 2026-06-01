@@ -141,7 +141,7 @@ pub use crate::watcher::Watcher;
 /// # Errors
 ///
 /// Delegates to [`daemon::run`]; see that function for error conditions.
-#[cfg(feature = "notify")]
+#[cfg(all(feature = "notify", unix))]
 #[deprecated(since = "0.7.0", note = "use ix::daemon::run instead")]
 pub fn run_daemon(path: &std::path::Path) -> crate::error::Result<()> {
     crate::daemon::run(path)

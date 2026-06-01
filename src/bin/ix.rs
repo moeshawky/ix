@@ -293,6 +293,7 @@ fn execute_local_search(
 /// Try to execute search via IPC to the daemon.
 /// Returns `Some((matches, stats))` on success, `None` if daemon is unavailable
 /// or the IPC call fails (triggers local fallback).
+#[cfg(unix)]
 fn try_ipc_search(
     params: &SearchParams,
     index_root: &Path,
@@ -340,7 +341,7 @@ fn main() {
         return;
     }
 
-    #[cfg(feature = "notify")]
+    #[cfg(all(feature = "notify", unix))]
     {
         if cli.daemon {
             let paths: Vec<PathBuf> = if cli.path.is_empty() {
@@ -805,17 +806,25 @@ fn do_search(params: &SearchParams) -> ix::error::Result<()> {
     };
 
     let (matches, stats) = if let Some((path, index_root, beacon_opt)) = &index_info {
-        // Check if daemon is live and try IPC search first
-        let daemon_managed = beacon_opt.as_ref().is_some_and(ix::format::Beacon::is_live);
+        // Check if daemon is live and try IPC search first (Unix only)
+        #[cfg(unix)]
+        {
+            let daemon_managed = beacon_opt.as_ref().is_some_and(ix::format::Beacon::is_live);
 
-        if daemon_managed {
-            // Try IPC search with silent fallback
-            match try_ipc_search(params, index_root, &search_path_abs) {
-                Some((m, s)) => (m, s),
-                None => execute_local_search(params, path, index_root, &options, &search_path_abs)?,
+            if daemon_managed {
+                // Try IPC search with silent fallback
+                match try_ipc_search(params, index_root, &search_path_abs) {
+                    Some((m, s)) => (m, s),
+                    None => {
+                        execute_local_search(params, path, index_root, &options, &search_path_abs)?
+                    }
+                }
+            } else {
+                execute_local_search(params, path, index_root, &options, &search_path_abs)?
             }
-        } else {
-            // No daemon, execute locally
+        }
+        #[cfg(not(unix))]
+        {
             execute_local_search(params, path, index_root, &options, &search_path_abs)?
         }
     } else {
