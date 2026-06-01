@@ -16,6 +16,7 @@ use ix::executor::{Match, QueryOptions, QueryStats};
 use ix::reader::Reader;
 use ix::scanner::Scanner;
 use regex::Regex;
+use regex_syntax::hir::HirKind;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 #[derive(Parser)]
@@ -722,19 +723,11 @@ fn truncate_safe(s: &mut String, max_bytes: usize) {
 }
 
 fn looks_like_regex(pattern: &str) -> bool {
-    let mut chars = pattern.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\'
-            && let Some(next) = chars.next()
-            && matches!(
-                next,
-                '|' | '(' | ')' | '{' | '}' | '.' | '*' | '+' | '?' | '[' | ']' | '^' | '$'
-            )
-        {
-            return true;
-        }
-    }
-    false
+    let mut parser = regex_syntax::ParserBuilder::new().utf8(false).build();
+    let Ok(hir) = parser.parse(pattern) else {
+        return false;
+    };
+    !matches!(hir.kind(), HirKind::Literal(_))
 }
 
 fn do_search(params: &SearchParams) -> ix::error::Result<()> {

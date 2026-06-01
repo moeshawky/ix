@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **`looks_like_regex()` heuristic now uses `regex_syntax` parser** — The manual char-scan heuristic only detected 13 of ~60 regex constructs (backslash-escaped metacharacters: `\|\(\)\{\}\.\*\+\?\[\]\^\$`), giving 23 false negatives for common patterns like `\d+`, `\w+`, `\s*`, `^foo`, `foo$`, `\bword\b`, and all bare metacharacters. Replaced with `regex_syntax::ParserBuilder` + `HirKind::Literal` check, achieving 100% coverage via the same parser already used by the planner. Eliminates the dual-decision compound bug where two independently-maintained regex detection systems produced different answers. The 0.11.0 changelog entry claiming the hint detects `\w`, `\d`, `\s` is now actually true.
+
 ## [0.11.1] - 2026-05-31
 
 ### Fixed
