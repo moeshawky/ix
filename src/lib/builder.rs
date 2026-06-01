@@ -587,6 +587,7 @@ impl Builder {
     }
 
     /// Returns free bytes available on the filesystem containing `path`.
+    #[cfg(unix)]
     fn free_bytes_at(path: &Path) -> std::io::Result<u64> {
         use std::os::unix::ffi::OsStrExt;
         let path_c = std::ffi::CString::new(path.as_os_str().as_bytes())
@@ -600,6 +601,12 @@ impl Builder {
         // cast required for multiplication safety on 32-bit targets.
         #[allow(clippy::unnecessary_cast)]
         Ok(stat.f_bavail as u64 * stat.f_frsize as u64)
+    }
+
+    /// Windows: skip the upfront disk check (no statvfs).
+    #[cfg(not(unix))]
+    fn free_bytes_at(_path: &Path) -> std::io::Result<u64> {
+        Ok(u64::MAX)
     }
 
     fn cleanup_temp_files(&self) {

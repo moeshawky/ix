@@ -319,7 +319,10 @@ pub fn socket_path(root: &Path) -> PathBuf {
         return dir.join(format!("{hash}.sock"));
     }
 
+    #[cfg(unix)]
     let uid = unsafe { libc::getuid() };
+    #[cfg(not(unix))]
+    let uid = 0u32;
     PathBuf::from(format!("/tmp/ixd-{uid}-{hash}.sock"))
 }
 
