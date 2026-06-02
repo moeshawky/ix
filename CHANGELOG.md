@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.6] - 2026-06-01
+
+### Added
+- **Daemon auto-compaction** — The ixd daemon now automatically rebuilds the index after 30+ minutes of inactivity when delta entries exist. Prevents unbounded delta growth that degraded query latency over the daemon's lifetime.
+
+### Fixed
+- **Delta not deleted after build** — `Builder::build()` now removes `shard.ix.delta` and `shard.ix.delta.tmp` after successful serialization, preventing stale tombstone corruption on the next update.
+
 ## [0.11.5] - 2026-06-01
 
 ### Fixed
