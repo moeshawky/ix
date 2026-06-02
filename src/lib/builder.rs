@@ -498,6 +498,8 @@ impl Builder {
         }
 
         let output_path = self.serialize()?;
+        let _ = std::fs::remove_file(self.ix_dir.join("shard.ix.delta"));
+        let _ = std::fs::remove_file(self.ix_dir.join("shard.ix.delta.tmp"));
         tracing::info!("Build completed in {:?}: {:?}", start.elapsed(), self.stats);
         Ok(output_path)
     }

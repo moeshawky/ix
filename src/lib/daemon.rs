@@ -486,6 +486,23 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
     if let Some(sock) = ctx.daemon_sock {
         sock.set_status(&idle_status, ctx.builder.files_len());
     }
+
+    if ctx.idle.state() == crate::idle::DaemonState::Dormant {
+        let delta_file = ctx.ix_dir.join("shard.ix.delta");
+        if delta_file.exists() && delta_file.metadata().map_or(0, |m| m.len()) > 0 {
+            ctx.beacon.status = "compacting".to_string();
+            let _ = ctx.beacon.write_to(ctx.ix_dir);
+            match ctx.builder.build() {
+                Ok(_) => {
+                    println!("ixd [{}]: compaction complete", ctx.log_prefix);
+                }
+                Err(e) => {
+                    eprintln!("ixd [{}]: compaction failed: {}", ctx.log_prefix, e);
+                }
+            }
+            ctx.idle.record_change();
+        }
+    }
 }
 
 fn evaluate_safety(guard: &ResourceGuard, log_prefix: &str) -> (u16, SafetyDecision) {
