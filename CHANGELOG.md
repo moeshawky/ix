@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.7] - 2026-06-03
+
+### Fixed
+- **Delta compaction unreachable during active development** — `record_change()` was resetting the idle timer before the `Dormant` check, making auto-compaction structurally unreachable when files changed frequently. The delta file grew unbounded (15MB → 182MB over hours), degrading query latency and eventually hitting `ENODEV` on `fsync()`.
+
+### Changed
+- **Delta size threshold** — Added a 50MB delta size threshold that triggers compaction even when the daemon never becomes `Dormant` (active development scenario).
+- **Periodic idle compaction** — The main loop timeout branch now checks for `Dormant` state and compacts during long idle periods, even without file changes.
+
 ## [0.11.6] - 2026-06-01
 
 ### Added
