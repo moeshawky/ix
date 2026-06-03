@@ -374,7 +374,30 @@ fn run_main_loop(
                 };
                 handle_changes(&mut ctx, &changed_files);
             }
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                if idle.state() == crate::idle::DaemonState::Dormant {
+                    let delta_file = ix_dir.join("shard.ix.delta");
+                    if delta_file.exists() && delta_file.metadata().map_or(0, |m| m.len()) > 0 {
+                        beacon.status = "compacting".to_string();
+                        let _ = beacon.write_to(ix_dir);
+                        match builder.build() {
+                            Ok(_) => {
+                                println!("ixd [{log_prefix}]: compaction complete (idle)");
+                            }
+                            Err(e) => {
+                                eprintln!("ixd [{log_prefix}]: compaction failed: {e}");
+                            }
+                        }
+                        idle.record_change();
+                        let idle_status = DaemonStatus::Idle;
+                        beacon.status = idle_status.to_string();
+                        let _ = beacon.write_to(ix_dir);
+                        if let Some(sock) = daemon_sock {
+                            sock.set_status(&idle_status, builder.files_len());
+                        }
+                    }
+                }
+            }
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
         }
     }
@@ -455,8 +478,6 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
         &beacon_status_msg(&daemon_status, ctx.builder.files_len()),
     );
 
-    ctx.idle.record_change();
-
     let prefix = ctx.log_prefix;
     if let Err(e) = ctx.builder.update(changed_files) {
         eprintln!("ixd [{prefix}]: update failed: {e} — retrying on next change");
@@ -487,22 +508,28 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
         sock.set_status(&idle_status, ctx.builder.files_len());
     }
 
-    if ctx.idle.state() == crate::idle::DaemonState::Dormant {
-        let delta_file = ctx.ix_dir.join("shard.ix.delta");
-        if delta_file.exists() && delta_file.metadata().map_or(0, |m| m.len()) > 0 {
-            ctx.beacon.status = "compacting".to_string();
-            let _ = ctx.beacon.write_to(ctx.ix_dir);
-            match ctx.builder.build() {
-                Ok(_) => {
-                    println!("ixd [{}]: compaction complete", ctx.log_prefix);
-                }
-                Err(e) => {
-                    eprintln!("ixd [{}]: compaction failed: {}", ctx.log_prefix, e);
-                }
+    let delta_file = ctx.ix_dir.join("shard.ix.delta");
+    let delta_size = delta_file
+        .exists()
+        .then(|| delta_file.metadata().ok().map(|m| m.len()))
+        .flatten()
+        .unwrap_or(0);
+    if delta_size > 0
+        && (ctx.idle.state() == crate::idle::DaemonState::Dormant || delta_size > 50 * 1024 * 1024)
+    {
+        ctx.beacon.status = "compacting".to_string();
+        let _ = ctx.beacon.write_to(ctx.ix_dir);
+        match ctx.builder.build() {
+            Ok(_) => {
+                println!("ixd [{}]: compaction complete", ctx.log_prefix);
             }
-            ctx.idle.record_change();
+            Err(e) => {
+                eprintln!("ixd [{}]: compaction failed: {}", ctx.log_prefix, e);
+            }
         }
+        ctx.idle.record_change();
     }
+    ctx.idle.record_change();
 }
 
 fn evaluate_safety(guard: &ResourceGuard, log_prefix: &str) -> (u16, SafetyDecision) {
