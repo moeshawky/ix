@@ -769,7 +769,7 @@ impl<'a> Executor<'a> {
             pending_matches = still_pending;
 
             if let Some(m) = regex.find(&line) {
-                let context_before_vec: Vec<String> = context_before.iter().cloned().collect();
+                let context_before_vec: Vec<String> = context_before.drain(..).collect();
 
                 let new_match = Match {
                     file_path: path.to_path_buf(),
@@ -778,7 +778,7 @@ impl<'a> Executor<'a> {
                     line_content: if options.count_only {
                         String::new()
                     } else {
-                        trimmed_line.clone()
+                        trimmed_line
                     },
                     byte_offset: byte_offset + m.start() as u64,
                     context_before: context_before_vec,
@@ -801,7 +801,7 @@ impl<'a> Executor<'a> {
             }
 
             if options.context_lines > 0 {
-                context_before.push_back(trimmed_line.clone());
+                context_before.push_back(line.trim_end().to_string());
                 if context_before.len() > options.context_lines {
                     context_before.pop_front();
                 }
@@ -852,26 +852,28 @@ impl<'a> Executor<'a> {
         let file = File::open(&info.path)?;
         let mmap = unsafe { memmap2::Mmap::map(&file)? };
 
-        let effective_options = if options.files_only && options.max_results == 0 {
-            QueryOptions {
+        let owned_opts;
+        let effective_options: &QueryOptions = if options.files_only && options.max_results == 0 {
+            owned_opts = QueryOptions {
                 max_results: 1,
                 ..options.clone()
-            }
+            };
+            &owned_opts
         } else {
-            options.clone()
+            options
         };
 
         if options.decompress
             && let Some(reader) = maybe_decompress(&info.path, &mmap)?
         {
-            return Self::verify_stream(reader, info.path.as_ref(), regex, &effective_options);
+            return Self::verify_stream(reader, info.path.as_ref(), regex, effective_options);
         }
 
         Self::verify_stream(
             Cursor::new(&mmap[..]),
             info.path.as_ref(),
             regex,
-            &effective_options,
+            effective_options,
         )
     }
 }

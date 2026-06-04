@@ -160,25 +160,35 @@ struct Cli {
     #[arg(long, hide = true)]
     daemon: bool,
 
-    /// Manage ixd as a system service.
+    /// Run a subcommand: service management or index statistics.
     #[command(subcommand)]
-    service: Option<ServiceCommand>,
+    command: Option<Command>,
 }
 
 #[derive(clap::Subcommand)]
-enum ServiceCommand {
-    /// Install ixd as a user-level systemd service.
+enum Command {
+    /// Manage ixd as a system service.
     #[command(name = "service")]
     Service {
         #[command(subcommand)]
         action: ServiceAction,
     },
+    /// Display detailed index statistics (version, file/trigram counts, section sizes, compression ratio).
+    #[command(name = "stats")]
+    Stats {
+        /// Path to the directory (walks upward to find .ix/, defaults to CWD).
+        #[arg(short = 'p', long = "path", value_name = "PATH", default_value = ".")]
+        path: PathBuf,
+
+        /// Output in JSON format for machine readability.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(clap::Subcommand)]
 enum ServiceAction {
-    /// Install ixd as a user-level systemd service. Writes a unit file to
-    /// ~/.config/systemd/user/ixd.service and enables it with `systemctl --user`.
+    /// Install ixd as a user-level systemd service.
     Install {
         /// Directory to watch (defaults to $HOME).
         #[arg(value_name = "PATH")]
@@ -190,6 +200,15 @@ enum ServiceAction {
     Stop,
     /// Restart the ixd systemd service.
     Restart,
+    /// Check the status of the ixd daemon.
+    Status {
+        /// Directory to check (walks upward to find .ix/, defaults to CWD).
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+        /// Output in JSON format for machine readability.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -330,13 +349,23 @@ fn main() {
         rayon::ThreadPoolBuilder::new()
             .num_threads(cli.threads)
             .build_global()
-            .unwrap();
+            .expect("failed to initialize global thread pool");
     }
 
-    if let Some(service) = cli.service {
-        if let Err(e) = handle_service(service) {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+    if let Some(cmd) = cli.command {
+        match cmd {
+            Command::Service { action } => {
+                if let Err(e) = handle_service(action) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            Command::Stats { path, json } => {
+                if let Err(e) = do_stats(&path, json) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
         }
         return;
     }
@@ -439,7 +468,12 @@ fn main() {
 }
 
 #[cfg(feature = "notify")]
-fn handle_service(cmd: ServiceCommand) -> ix::error::Result<()> {
+fn handle_service(action: ServiceAction) -> ix::error::Result<()> {
+    if let ServiceAction::Status { path, json } = &action {
+        handle_service_status(path.as_deref(), *json);
+        return Ok(());
+    }
+
     #[cfg(target_os = "linux")]
     {
         let home =
@@ -447,10 +481,8 @@ fn handle_service(cmd: ServiceCommand) -> ix::error::Result<()> {
         let service_dir = PathBuf::from(&home).join(".config/systemd/user");
         let service_file = service_dir.join("ixd.service");
 
-        match cmd {
-            ServiceCommand::Service {
-                action: ServiceAction::Install { path },
-            } => {
+        match action {
+            ServiceAction::Install { path } => {
                 let watch_path = path.unwrap_or_else(|| {
                     std::env::current_dir().unwrap_or_else(|_| PathBuf::from(&home))
                 });
@@ -496,9 +528,7 @@ WantedBy=default.target
                 println!("Watch path: {}", watch_path_abs.display());
                 println!("Run 'ix service start' to start the daemon.");
             }
-            ServiceCommand::Service {
-                action: ServiceAction::Start,
-            } => {
+            ServiceAction::Start => {
                 let status = std::process::Command::new("systemctl")
                     .args(["--user", "enable", "--now", "ixd"])
                     .status()?;
@@ -509,9 +539,7 @@ WantedBy=default.target
                 }
                 println!("ixd service started.");
             }
-            ServiceCommand::Service {
-                action: ServiceAction::Stop,
-            } => {
+            ServiceAction::Stop => {
                 let status = std::process::Command::new("systemctl")
                     .args(["--user", "stop", "ixd"])
                     .status()?;
@@ -522,9 +550,7 @@ WantedBy=default.target
                 }
                 println!("ixd service stopped.");
             }
-            ServiceCommand::Service {
-                action: ServiceAction::Restart,
-            } => {
+            ServiceAction::Restart => {
                 let status = std::process::Command::new("systemctl")
                     .args(["--user", "restart", "ixd"])
                     .status()?;
@@ -535,6 +561,7 @@ WantedBy=default.target
                 }
                 println!("ixd service restarted.");
             }
+            ServiceAction::Status { .. } => unreachable!(),
         }
         Ok(())
     }
@@ -546,10 +573,117 @@ WantedBy=default.target
 }
 
 #[cfg(not(feature = "notify"))]
-fn handle_service(_cmd: ServiceCommand) -> ix::error::Result<()> {
+fn handle_service(action: ServiceAction) -> ix::error::Result<()> {
+    if let ServiceAction::Status { path, json } = &action {
+        handle_service_status(path.as_deref(), *json);
+        return Ok(());
+    }
     eprintln!("Error: ix service commands require the 'notify' feature.");
     eprintln!("Install with: cargo install moeix --features notify");
     std::process::exit(1);
+}
+
+fn handle_service_status(path: Option<&Path>, json: bool) {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let search_path = path.unwrap_or(Path::new("."));
+    let beacon_opt = find_index(search_path).and_then(|(_, _, beacon)| beacon);
+
+    match beacon_opt {
+        Some(beacon) if beacon.is_live() => {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let uptime = now.saturating_sub(beacon.start_time);
+            if json {
+                print_json_status("running", &beacon, Some(uptime));
+            } else {
+                println!("ixd daemon is running");
+                println!("  PID: {}", beacon.pid);
+                println!("  Uptime: {}", format_uptime(uptime));
+                println!("  Status: {}", beacon.status);
+                println!("  Root: {}", beacon.root.display());
+                if let Some(ref sock) = beacon.socket_path {
+                    println!("  Socket: {}", sock.display());
+                }
+            }
+        }
+        Some(beacon) => {
+            #[cfg(unix)]
+            let is_orphan = {
+                use nix::sys::signal::kill;
+                use nix::unistd::Pid;
+                kill(Pid::from_raw(beacon.pid), None).is_ok()
+            };
+            #[cfg(not(unix))]
+            let is_orphan = false;
+
+            if is_orphan {
+                if json {
+                    println!("{{\"status\":\"orphan\",\"stale_pid\":{}}}", beacon.pid);
+                } else {
+                    println!("PID {} is not ixd (orphan beacon)", beacon.pid);
+                }
+            } else if json {
+                println!("{{\"status\":\"dead\",\"stale_pid\":{}}}", beacon.pid);
+            } else {
+                println!(
+                    "ixd daemon is not running (stale beacon from PID {})",
+                    beacon.pid
+                );
+            }
+        }
+        None => {
+            if json {
+                println!("{{\"status\":\"not_running\"}}");
+            } else {
+                println!("ixd daemon is not running");
+            }
+        }
+    }
+}
+
+fn print_json_status(status: &str, beacon: &ix::format::Beacon, uptime: Option<u64>) {
+    let sock = beacon.socket_path.as_ref().map_or_else(
+        || "null".to_string(),
+        |p| {
+            format!(
+                "\"{}\"",
+                p.display()
+                    .to_string()
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+            )
+        },
+    );
+    let u = uptime.map_or("null".to_string(), |v| v.to_string());
+    let root = beacon
+        .root
+        .display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    println!(
+        "{{\"status\":\"{}\",\"pid\":{},\"uptime_secs\":{},\"daemon_status\":\"{}\",\"root\":\"{}\",\"socket\":{},\"instance_id\":{}}}",
+        status, beacon.pid, u, beacon.status, root, sock, beacon.instance_id,
+    );
+}
+
+fn format_uptime(secs: u64) -> String {
+    let days = secs / 86_400;
+    let hours = (secs % 86_400) / 3_600;
+    let minutes = (secs % 3_600) / 60;
+    let seconds = secs % 60;
+    if days > 0 {
+        format!("{days}d {hours}h {minutes}m {seconds}s")
+    } else if hours > 0 {
+        format!("{hours}h {minutes}m {seconds}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 fn do_stdin_search(pattern: &str, cli: &Cli) -> ix::error::Result<()> {
@@ -681,6 +815,150 @@ fn do_build(
     let out = builder.build()?;
     println!("Index built at {}", out.display());
     Ok(())
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn do_stats(path: &Path, json: bool) -> ix::error::Result<()> {
+    let (index_path, index_root, _beacon) =
+        find_index(path).ok_or_else(|| ix::error::Error::Config("no index found".into()))?;
+
+    if !index_path.exists() {
+        if json {
+            println!(
+                "{{\"error\": \"No index found\", \"hint\": \"Run `ix build` to create one.\"}}"
+            );
+        } else {
+            println!("No index found. Run `ix build` to create one.");
+        }
+        return Ok(());
+    }
+
+    let reader = Reader::open(&index_path)?;
+    let h = &reader.header;
+    #[allow(clippy::cast_precision_loss)]
+    let shard_size = std::fs::metadata(&index_path)?.len();
+
+    let version = format!("{}.{}", h.version_major, h.version_minor);
+    let ts_secs = i64::try_from(h.created_at / 1_000_000).unwrap_or(0);
+    let ts_nanos = u32::try_from(h.created_at % 1_000_000 * 1000).unwrap_or(0);
+    let build_time = chrono::DateTime::from_timestamp(ts_secs, ts_nanos).map_or_else(
+        || "unknown".to_string(),
+        |dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+    );
+    let build_time_iso = chrono::DateTime::from_timestamp(ts_secs, ts_nanos)
+        .map_or_else(|| "unknown".to_string(), |dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+
+    let cdx_active = h.has_cdx() && h.cdx_block_index_size > 0;
+    let cdx_ratio: Option<f64> = if cdx_active && h.trigram_table_size > 0 {
+        Some(h.cdx_block_index_size as f64 / h.trigram_table_size as f64)
+    } else {
+        None
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let compression: f64 = if h.source_bytes_total > 0 && shard_size > 0 {
+        h.source_bytes_total as f64 / shard_size as f64
+    } else {
+        0.0
+    };
+
+    let ix_dir = index_root.join(".ix");
+    let delta_path = ix_dir.join("shard.ix.delta");
+    let delta_size = std::fs::metadata(&delta_path).map(|m| m.len()).ok();
+    let delta_entries = delta_size
+        .and_then(|_| {
+            let dr = ix::reader::DeltaReader::open(&delta_path).ok()?;
+            Some(u64::from(dr.total_file_entries))
+        })
+        .unwrap_or(0);
+
+    if json {
+        let mut obj = serde_json::Map::new();
+        obj.insert("index_path".into(), serde_json::Value::String(index_path.display().to_string()));
+        obj.insert("index_version".into(), serde_json::Value::String(version));
+        obj.insert("build_time".into(), serde_json::Value::String(build_time_iso));
+        obj.insert("build_timestamp_us".into(), serde_json::Value::Number(h.created_at.into()));
+        obj.insert("file_count".into(), serde_json::json!(h.file_count));
+        obj.insert("trigram_count".into(), serde_json::json!(h.trigram_count));
+        obj.insert("source_bytes_total".into(), serde_json::json!(h.source_bytes_total));
+        obj.insert("shard_size_bytes".into(), serde_json::json!(shard_size));
+        obj.insert("compression_ratio".into(), serde_json::json!(compression));
+        obj.insert("sections".into(), serde_json::json!({
+            "trigram_table": { "offset": h.trigram_table_offset, "size": h.trigram_table_size },
+            "file_table": { "offset": h.file_table_offset, "size": h.file_table_size },
+            "string_pool": { "offset": h.string_pool_offset, "size": h.string_pool_size },
+            "posting_data": { "offset": h.posting_data_offset, "size": h.posting_data_size },
+            "bloom_data": { "offset": h.bloom_offset, "size": h.bloom_size },
+            "cdx_block_index": { "offset": h.cdx_block_index_offset, "size": h.cdx_block_index_size },
+        }));
+        obj.insert("cdx_active".into(), serde_json::json!(cdx_active));
+        if let Some(ratio) = cdx_ratio {
+            obj.insert("cdx_compression_ratio".into(), serde_json::json!(ratio));
+        }
+        obj.insert("delta_size_bytes".into(), serde_json::json!(delta_size.unwrap_or(0)));
+        obj.insert("delta_entry_count".into(), serde_json::json!(delta_entries));
+        println!("{}", serde_json::Value::Object(obj));
+    } else {
+        println!("Index: {}", index_path.display());
+        println!("  Version: {version}");
+        println!("  Built at: {build_time}");
+        println!("  Files indexed: {}", h.file_count);
+        println!("  Unique trigrams: {}", h.trigram_count);
+        println!("  Source bytes: {}", format_bytes(h.source_bytes_total));
+        println!("  Shard size: {}", format_bytes(shard_size));
+        if compression > 0.0 {
+            println!("  Overall compression: {compression:.2}x");
+        }
+        if cdx_active {
+            println!("  CDX active: yes");
+            if let Some(ratio) = cdx_ratio {
+                println!("  CDX compression ratio: {ratio:.4}x");
+            }
+        }
+        println!("  Sections:");
+        println!(
+            "    trigram_table:  offset={}, size={} ({})",
+            h.trigram_table_offset, h.trigram_table_size, format_bytes(h.trigram_table_size)
+        );
+        println!(
+            "    file_table:     offset={}, size={} ({})",
+            h.file_table_offset, h.file_table_size, format_bytes(h.file_table_size)
+        );
+        println!(
+            "    string_pool:    offset={}, size={} ({})",
+            h.string_pool_offset, h.string_pool_size, format_bytes(h.string_pool_size)
+        );
+        println!(
+            "    posting_data:   offset={}, size={} ({})",
+            h.posting_data_offset, h.posting_data_size, format_bytes(h.posting_data_size)
+        );
+        println!(
+            "    bloom_data:     offset={}, size={} ({})",
+            h.bloom_offset, h.bloom_size, format_bytes(h.bloom_size)
+        );
+        println!(
+            "    cdx_block_index: offset={}, size={} ({})",
+            h.cdx_block_index_offset, h.cdx_block_index_size, format_bytes(h.cdx_block_index_size)
+        );
+        if let Some(ds) = delta_size {
+            println!("  Delta file: {}  ({})", format_bytes(ds), format_bytes(ds));
+            println!("  Delta entries: {delta_entries}");
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1_073_741_824 {
+        format!("{:.2} GB", bytes as f64 / 1_073_741_824.0)
+    } else if bytes >= 1_048_576 {
+        format!("{:.2} MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.2} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn find_index(path: &Path) -> Option<(PathBuf, PathBuf, Option<ix::format::Beacon>)> {

@@ -23,7 +23,7 @@ use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-/// Index builder — orchestrates the full pipeline from file discovery to shard
+/// Index builder — coordinates the full pipeline from file discovery to shard
 /// serialization.
 pub struct Builder {
     root: PathBuf,

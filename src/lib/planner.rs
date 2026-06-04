@@ -135,7 +135,7 @@ impl Planner {
                 // Absolute last resort: a literal 'a' pattern.
                 // This should never fail unless regex crate is broken.
                 #[allow(clippy::trivial_regex)]
-                Regex::new("a").unwrap()
+                Regex::new("a").expect("a is a valid regex pattern")
             })
         })
     }

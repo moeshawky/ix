@@ -271,7 +271,7 @@ impl Scanner {
                     line_content: if options.count_only {
                         String::new()
                     } else {
-                        trimmed_line.clone()
+                        trimmed_line
                     },
                     byte_offset: byte_offset + u64::try_from(m.start()).unwrap_or(0),
                     context_before: context_before_vec,

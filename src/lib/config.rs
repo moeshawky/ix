@@ -94,3 +94,24 @@ impl Config {
         Ok(merged)
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_default_watch_roots() {
+        let config = Config::default();
+        assert!(config.watch_roots.is_empty());
+    }
+
+    #[test]
+    fn test_config_default_exclude_patterns() {
+        let config = Config::default();
+        assert_eq!(config.exclude_patterns.len(), 3);
+        assert_eq!(config.exclude_patterns[0], ".git");
+        assert_eq!(config.exclude_patterns[1], "node_modules");
+        assert_eq!(config.exclude_patterns[2], "target");
+    }
+}

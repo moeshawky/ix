@@ -74,44 +74,63 @@
 
 extern crate llmosafe;
 
+/// HTTP API surface for programmatic index access.
 pub mod api;
+/// ZIP and tar archive indexing support.
 pub mod archive;
+/// Bloom filter implementation for fast membership testing.
 pub mod bloom;
+/// Index builder — coordinates the pipeline from file discovery to shard serialization.
 pub mod builder;
 /// Adaptive cache policy driven by `ResourceGuard` memory pressure.
 #[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub mod cache_policy;
+/// Runtime and build configuration, including `.ixd.toml` parsing.
 pub mod config;
+/// Background daemon that watches for file changes and rebuilds the index.
 #[cfg(all(feature = "notify", unix))]
 #[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub mod daemon;
+/// Unix domain socket IPC between the daemon and CLI clients.
 #[cfg(all(feature = "notify", unix))]
 #[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub mod daemon_sock;
+/// Decompression support for gz, zst, bz2, and xz files.
 pub mod decompress;
 /// Error types for the ix crate.
 pub mod error;
+/// Query executor — runs a search plan against the index.
 pub mod executor;
+/// Index file format definitions and magic bytes.
 pub mod format;
+/// Idle timeout tracker for the daemon process.
 #[cfg(feature = "notify")]
 #[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub mod idle;
 /// Negative result cache — skips re-verification of known non-matching files.
 pub mod neg_cache;
+/// Query planner — converts a pattern string into an execution plan.
 pub mod planner;
+/// Posting list storage for trigram-to-file mappings.
 pub mod posting;
 /// LRU cache for decoded posting lists, keyed by trigram.
 pub mod posting_cache;
+/// Index reader — loads and queries a pre-built shard.
 pub mod reader;
 /// Compiled regex pool — caches `Regex` objects to avoid recompilation.
 pub mod regex_pool;
+/// File scanner — fallback linear search when no index is available.
 pub mod scanner;
 /// Alternative streaming file search implementations — line-based and
 /// mmap-windowed verification with context support.
 pub mod streaming;
+/// Deduplicated string storage for file paths and identifiers.
 pub mod string_pool;
+/// Trigram extraction and byte-level pattern matching.
 pub mod trigram;
+/// Variable-length integer encoding for compact index storage.
 pub mod varint;
+/// Filesystem watcher — monitors directories for file changes.
 #[cfg(feature = "notify")]
 #[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub mod watcher;

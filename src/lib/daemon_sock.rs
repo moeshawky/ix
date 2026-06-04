@@ -413,16 +413,15 @@ impl DaemonServer {
         let sp = socket_path(root);
         ensure_socket_dir(&sp)?;
 
-        if sp.exists() || sp.is_symlink() {
-            let msg = if sp.is_symlink() {
-                format!("symlink attack detected at {}", sp.display())
-            } else {
-                format!("socket file already exists at {}", sp.display())
-            };
+        if sp.is_symlink() {
             return Err(DaemonSockError::Io(std::io::Error::new(
                 std::io::ErrorKind::AddrInUse,
-                msg,
+                format!("symlink attack detected at {}", sp.display()),
             )));
+        }
+
+        if sp.exists() {
+            std::fs::remove_file(&sp)?;
         }
 
         let listener = UnixListener::bind(&sp)?;
