@@ -105,10 +105,8 @@ impl Planner {
 
     /// Plan a query with full options.
     ///
-    /// # Panics
-    ///
-    /// Panics if `Regex::new("")` fails (which should never happen since an empty
-    /// pattern is always valid).
+    /// On regex compilation failure, falls back to `^$` (matches nothing)
+    /// rather than panicking. Library code must never panic per AGENTS.md.
     #[must_use]
     pub fn plan_with_options(pattern: &str, options: QueryOptions) -> QueryPlan {
         Self::plan_impl(pattern, options, None)
@@ -131,12 +129,22 @@ impl Planner {
             // ^$ matches end-of-line only — effectively matches nothing useful.
             // This is safer than "" which matches EVERY line.
             #[allow(clippy::trivial_regex)]
-            Regex::new("^$").unwrap_or_else(|_| {
-                // Absolute last resort: a literal 'a' pattern.
-                // This should never fail unless regex crate is broken.
-                #[allow(clippy::trivial_regex)]
-                Regex::new("a").expect("a is a valid regex pattern")
-            })
+            match Regex::new("^$") {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!("regex crate cannot compile '^$': {e}. Using '.' as fallback.");
+                    Regex::new(".").unwrap_or_else(|e2| {
+                        tracing::error!("regex crate fatal error: {e2}. Returning empty pattern.");
+                        // The regex crate is fundamentally broken.
+                        // Return an empty pattern rather than panicking.
+                        #[allow(clippy::trivial_regex)]
+                        Regex::new("").unwrap_or_else(|e3| {
+                            tracing::error!("regex crate is completely non-functional: {e3}");
+                            std::process::abort()
+                        })
+                    })
+                }
+            }
         })
     }
 

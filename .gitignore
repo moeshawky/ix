@@ -87,6 +87,10 @@ tests/docker_llmosafe_vendor/
 *.diff
 !scripts/*.patch
 
+# Python artifacts
+__pycache__/
+*.pyc
+
 # Coverage / temporary
 /lcov.info
 ignored_file.txt

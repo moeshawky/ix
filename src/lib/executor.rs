@@ -837,19 +837,28 @@ impl<'a> Executor<'a> {
         }
         stats.neg_cache_misses.fetch_add(1, Ordering::Relaxed);
 
-        let Ok(matches) = Self::verify_file(file_info, regex, options) else {
-            stats.files_failed_verify.fetch_add(1, Ordering::Relaxed);
-            return None;
-        };
-        if matches.is_empty() {
-            self.neg_cache
-                .record_negative(neg_fp, file_info.content_hash);
+        match Self::verify_file(file_info, regex, options) {
+            Ok(matches) => {
+                if matches.is_empty() {
+                    self.neg_cache
+                        .record_negative(neg_fp, file_info.content_hash);
+                }
+                Some(matches)
+            }
+            Err(e) => {
+                tracing::warn!("ix: cannot verify file {}: {e}", file_info.path.display());
+                stats.files_failed_verify.fetch_add(1, Ordering::Relaxed);
+                None
+            }
         }
-        Some(matches)
     }
 
     fn verify_file(info: &FileInfo, regex: &Regex, options: &QueryOptions) -> Result<Vec<Match>> {
         let file = File::open(&info.path)?;
+        // SAFETY: The file is opened read-only and held for the duration
+        // of this function. The mmap is used only within `verify_stream`
+        // which treats it as an immutable byte slice. No concurrent
+        // modification to the underlying file is expected during reading.
         let mmap = unsafe { memmap2::Mmap::map(&file)? };
 
         let owned_opts;

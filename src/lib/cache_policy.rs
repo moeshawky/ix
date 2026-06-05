@@ -336,4 +336,41 @@ mod tests {
             "guard pressure should match"
         );
     }
+
+    #[test]
+    fn deterministic_pressure_with_for_testing() {
+        let guard = ResourceGuard::for_testing(1024 * 1024, 0, 25);
+        let policy = AdaptiveCachePolicy::new_with_guard(guard, 1024 * 1024);
+        let directive = policy.directive();
+        assert_eq!(
+            directive.pressure, 25,
+            "for_testing should return the injected pressure value"
+        );
+        assert_eq!(
+            directive.zone,
+            PressureZone::Green,
+            "25 pressure should map to Green zone"
+        );
+        assert!(
+            directive.allow_new_entries,
+            "Green zone should admit entries"
+        );
+        assert!((directive.evict_fraction - 0.0).abs() < f64::EPSILON);
+
+        let guard_orange = ResourceGuard::for_testing(1024 * 1024, 0, 80);
+        let policy_orange = AdaptiveCachePolicy::new_with_guard(guard_orange, 1024 * 1024);
+        let directive_orange = policy_orange.directive();
+        assert_eq!(directive_orange.zone, PressureZone::Orange);
+        assert!(
+            !directive_orange.allow_new_entries,
+            "Orange zone should block admission"
+        );
+        assert!((directive_orange.evict_fraction - 0.5).abs() < f64::EPSILON);
+
+        let guard_red = ResourceGuard::for_testing(1024 * 1024, 0, 95);
+        let policy_red = AdaptiveCachePolicy::new_with_guard(guard_red, 1024 * 1024);
+        let directive_red = policy_red.directive();
+        assert_eq!(directive_red.zone, PressureZone::Red);
+        assert!((directive_red.evict_fraction - 1.0).abs() < f64::EPSILON);
+    }
 }

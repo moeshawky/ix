@@ -1,6 +1,6 @@
 [package]
 name = "ix-py"
-version = "0.11.7"
+version = "0.11.8"
 edition = "2024"
 description = "Python bindings for ix — sub-millisecond code search via sparse trigram indexing."
 license = "MIT"
@@ -12,10 +12,11 @@ name = "_ix"
 crate-type = ["cdylib"]
 
 [dependencies]
-moeix = { path = "..", default-features = false, features = ["notify"] }
+moeix = { version = "0.11.8", path = "..", default-features = false, features = ["notify"] }
 pyo3 = { version = "0.25", features = ["extension-module"] }
 memmap2 = "0.9"
 rayon = "1"
+llmosafe = "0.7.1"
 
 [features]
 default = ["notify"]

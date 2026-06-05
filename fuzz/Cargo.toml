@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 libfuzzer-sys = "0.4"
+moeix = { path = ".." }
 
 [lib]
 crate-type = ["staticlib", "cdylib"]

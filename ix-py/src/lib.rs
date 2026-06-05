@@ -26,6 +26,7 @@
 
 mod error;
 mod index;
+mod safety;
 mod types;
 
 use pyo3::prelude::*;
@@ -45,5 +46,6 @@ pub fn _ix(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<types::PyMatch>()?;
     m.add_class::<types::PySearchResult>()?;
     m.add_class::<index::PyIndex>()?;
+    m.add_class::<safety::PyPipeline>()?;
     Ok(())
 }

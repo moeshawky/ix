@@ -320,6 +320,9 @@ pub fn socket_path(root: &Path) -> PathBuf {
     }
 
     #[cfg(unix)]
+    // SAFETY: libc::getuid() is safe on all POSIX-compliant systems — it
+    // always succeeds and has no observable side effects. The return type
+    // uid_t fits in u32 on all supported platforms.
     let uid = unsafe { libc::getuid() };
     #[cfg(not(unix))]
     let uid = 0u32;

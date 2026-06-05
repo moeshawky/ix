@@ -26,6 +26,7 @@ try:
         IxWatcherError,
         Index,
         Match,
+        Pipeline,
         SearchResult,
     )
 except ImportError as exc:
@@ -41,6 +42,7 @@ except ImportError as exc:
 __all__ = [
     "Index",
     "Match",
+    "Pipeline",
     "SearchResult",
     "IxError",
     "IxIndexError",

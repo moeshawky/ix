@@ -48,6 +48,7 @@ pub struct Builder {
     dead_ends: Vec<PathBuf>,
     max_file_size: u64,
     exclude_patterns: Vec<String>,
+    watch_roots: Vec<PathBuf>,
     committed: bool,
 }
 
@@ -130,6 +131,69 @@ impl Ord for MergeItem {
     }
 }
 
+/// Default directory-entry filter shared across the builder walker, the
+/// watcher fallback walk, and the scanner.
+///
+/// Returns `true` if the entry should be **included** in the index/walk.
+///
+/// # Filtering rules (in order)
+///
+/// 1. **`watch_roots`** (`&[PathBuf]`) — if non-empty, files whose path does not
+///    start with any watch root are excluded (directories are always traversed
+///    so that children under watch roots are reachable).
+/// 2. **Directory exclusions** — `lost+found`, `.git`, `.ix`, and any name in
+///    `exclude_patterns` (`&[String]`).
+/// 3. **Index-internal files** — `shard.ix`, `shard.ix.tmp`, `shard.ix.*`.
+/// 4. **Binary extensions** — `.so`, `.o`, `.dylib`, `.a`, `.dll`, `.exe`,
+///    `.pyc`, `.jpg`, `.png`, `.gif`, `.mp4`, `.mp3`, `.pdf`, `.zip`, `.7z`,
+///    `.rar`, `.sqlite`, `.db`, `.bin`, `*.tar.gz`.
+#[must_use]
+pub(crate) fn default_filter_entry(
+    entry: &ignore::DirEntry,
+    exclude_patterns: &[String],
+    watch_roots: &[PathBuf],
+) -> bool {
+    let path = entry.path();
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+    if !watch_roots.is_empty() {
+        let is_file = entry.file_type().is_some_and(|t| t.is_file());
+        if is_file && !watch_roots.iter().any(|wr| path.starts_with(wr)) {
+            return false;
+        }
+    }
+
+    if entry.file_type().is_some_and(|t| t.is_dir())
+        && (name == "lost+found"
+            || name == ".git"
+            || name == ".ix"
+            || exclude_patterns.iter().any(|p| p == name))
+    {
+        return false;
+    }
+
+    if entry.file_type().is_some_and(|t| t.is_file())
+        && (name == "shard.ix" || name == "shard.ix.tmp" || name.starts_with("shard.ix."))
+    {
+        return false;
+    }
+
+    if entry.file_type().is_some_and(|t| t.is_file()) {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        match ext {
+            "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" | "jpg" | "png" | "gif" | "mp4"
+            | "mp3" | "pdf" | "zip" | "7z" | "rar" | "sqlite" | "db" | "bin" => {
+                return false;
+            }
+            _ => {}
+        }
+        if name.ends_with(".tar.gz") {
+            return false;
+        }
+    }
+    true
+}
+
 #[allow(clippy::as_conversions)] // binary format: usize→u32/u16 for index encoding
 #[allow(clippy::indexing_slicing)] // binary format: fixed-size buffer ops
 impl Builder {
@@ -160,6 +224,7 @@ impl Builder {
             dead_ends: Vec::new(),
             max_file_size: 100 * 1024 * 1024,
             exclude_patterns: Vec::new(),
+            watch_roots: Vec::new(),
             committed: false,
         })
     }
@@ -189,6 +254,17 @@ impl Builder {
     #[must_use]
     pub fn with_exclude_patterns(mut self, patterns: Vec<String>) -> Self {
         self.exclude_patterns = patterns;
+        self
+    }
+
+    /// Restrict file discovery to the given subdirectory paths.
+    ///
+    /// When non-empty, only files under one of the specified watch roots
+    /// are indexed. Paths are relative to the builder's root directory.
+    /// An empty set (default) indexes all files under the root.
+    #[must_use]
+    pub fn with_watch_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.watch_roots = roots;
         self
     }
 
@@ -383,41 +459,8 @@ impl Builder {
             .add_custom_ignore_filename(".ixignore")
             .filter_entry({
                 let exclude_patterns = self.exclude_patterns.clone();
-                move |entry| {
-                    let path = entry.path();
-                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-                    if entry.file_type().is_some_and(|t| t.is_dir())
-                        && (name == "lost+found"
-                            || name == ".git"
-                            || name == ".ix"
-                            || exclude_patterns.iter().any(|p| p == name))
-                    {
-                        return false;
-                    }
-
-                    if entry.file_type().is_some_and(|t| t.is_file())
-                        && (name == "shard.ix"
-                            || name == "shard.ix.tmp"
-                            || name.starts_with("shard.ix."))
-                    {
-                        return false;
-                    }
-
-                    if entry.file_type().is_some_and(|t| t.is_file()) {
-                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                        match ext {
-                            "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" | "jpg" | "png"
-                            | "gif" | "mp4" | "mp3" | "pdf" | "zip" | "7z" | "rar" | "sqlite"
-                            | "db" | "bin" => return false,
-                            _ => {}
-                        }
-                        if name.ends_with(".tar.gz") {
-                            return false;
-                        }
-                    }
-                    true
-                }
+                let watch_roots = self.watch_roots.clone();
+                move |entry| default_filter_entry(entry, &exclude_patterns, &watch_roots)
             })
             .build();
 
@@ -545,6 +588,12 @@ impl Builder {
         }
 
         for path in changed_files {
+            if !self.watch_roots.is_empty()
+                && !self.watch_roots.iter().any(|wr| path.starts_with(wr))
+            {
+                continue;
+            }
+
             if let Some(&old_id) = path_to_id.get(path) {
                 delta_out.write_all(&[DELTA_TOMBSTONE])?;
                 delta_out.write_all(&old_id.to_le_bytes())?;
@@ -600,7 +649,13 @@ impl Builder {
         use std::os::unix::ffi::OsStrExt;
         let path_c = std::ffi::CString::new(path.as_os_str().as_bytes())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        // SAFETY: libc::statvfs only requires a pointer to an initialized
+        // statvfs struct. std::mem::zeroed() produces a valid zeroed struct
+        // on Linux. path_c is a null-terminated CString with valid UTF-8
+        // content.
         let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+        // SAFETY: stat is a valid, initialized statvfs struct. path_c is a
+        // null-terminated CString.
         let ret = unsafe { libc::statvfs(path_c.as_ptr(), &raw mut stat) };
         if ret != 0 {
             return Err(std::io::Error::last_os_error());
@@ -671,6 +726,10 @@ impl Builder {
             }
             Err(e) => return Err(e.into()),
         };
+        // SAFETY: The file is held open for the duration of this method,
+        // and no concurrent modification is expected — the file is either
+        // being indexed from disk (read-only) or watched by the daemon
+        // which serializes rebuilds through the builder.
         let mmap = unsafe { Mmap::map(&file)? };
 
         let raw_data = if self.decompress {
@@ -840,7 +899,6 @@ impl Builder {
         file_id: u32,
         delta: &mut W,
     ) -> Result<bool> {
-        use crate::bloom::BloomFilter;
         use crate::format::{DELTA_FILE_ENTRY, DELTA_TRIGRAM_ENTRY};
 
         let metadata = match fs::metadata(path) {
@@ -858,6 +916,9 @@ impl Builder {
             return Ok(false);
         }
         let file = fs::File::open(path)?;
+        // SAFETY: The file is held open via `file` for the duration of this
+        // method. The file system will not truncate the file while we hold
+        // the open handle. The mmap region covers the entire file as mapped.
         let mmap = unsafe { memmap2::Mmap::map(&file)? };
         let data = &mmap[..];
         if crate::format::is_binary(data) {
@@ -1082,6 +1143,7 @@ impl Builder {
         header_bytes[0x08..0x10].copy_from_slice(
             &(flags::HAS_BLOOM_FILTERS
                 | flags::HAS_CONTENT_HASHES
+                | flags::POSTING_LISTS_COMPRESSED
                 | flags::POSTING_LISTS_CHECKSUMMED
                 | flags::HAS_CDX_INDEX)
                 .to_le_bytes(),

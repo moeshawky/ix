@@ -316,6 +316,10 @@ impl Scanner {
             return Ok(vec![]);
         }
 
+        // SAFETY: The file is opened read-only and the mmap is used only
+        // within this function via a Cursor, which treats the mapped memory
+        // as an immutable byte slice. No concurrent modification to the
+        // underlying file is expected during scanning.
         let mmap = unsafe { Mmap::map(&file)? };
 
         if options.decompress

@@ -12,8 +12,14 @@ use std::time::Duration;
 
 /// A file-system watcher that detects changes in a directory tree and
 /// batches them into debounced event batches.
+///
+/// When `watch_roots` is non-empty, only events whose parent path falls
+/// within a watch root are collected. `exclude_patterns` filter out
+/// directory entries from the manual-walk fallback path.
 pub struct Watcher {
     root: PathBuf,
+    watch_roots: Vec<PathBuf>,
+    exclude_patterns: Vec<String>,
     inner: Option<RecommendedWatcher>,
     join_handle: Option<thread::JoinHandle<()>>,
 }
@@ -21,12 +27,20 @@ pub struct Watcher {
 impl Watcher {
     /// Create a new watcher for the given root directory.
     ///
+    /// - `root`: absolute or relative path to the directory tree to watch.
+    /// - `watch_roots`: if non-empty, only events whose path has a parent in
+    ///   `watch_roots` are collected. Empty means watch everything.
+    /// - `exclude_patterns`: directory names to skip in the manual-walk
+    ///   fallback (applied in addition to built-in exclusions).
+    ///
     /// The watcher is not started yet; call [`Watcher::start`] to begin
     /// receiving events.
     #[must_use]
-    pub fn new(root: &Path) -> Self {
+    pub fn new(root: &Path, watch_roots: &[PathBuf], exclude_patterns: &[String]) -> Self {
         Self {
             root: root.to_owned(),
+            watch_roots: watch_roots.to_vec(),
+            exclude_patterns: exclude_patterns.to_vec(),
             inner: None,
             join_handle: None,
         }
@@ -48,6 +62,7 @@ impl Watcher {
         if let Err(err) = watcher.watch(&self.root, RecursiveMode::Recursive) {
             eprintln!("ix: warning: recursive watch failed: {err}. Falling back to manual walk.");
 
+            let exclude_patterns = self.exclude_patterns.clone();
             let walker = ignore::WalkBuilder::new(&self.root)
                 .hidden(false)
                 .git_ignore(true)
@@ -67,7 +82,8 @@ impl Watcher {
                             || name == ".tox"
                             || name == ".venv"
                             || name == "venv"
-                            || name == ".ix")
+                            || name == ".ix"
+                            || exclude_patterns.iter().any(|p| p == name))
                     {
                         return false;
                     }
@@ -147,19 +163,20 @@ impl Watcher {
 
         self.inner = Some(watcher);
 
+        let watch_roots = self.watch_roots.clone();
         let handle = thread::spawn(move || {
             let mut changed_paths = HashSet::new();
             loop {
                 // Wait for the first event
                 match event_rx.recv() {
                     Ok(Ok(event)) => {
-                        Self::collect_paths(&mut changed_paths, event);
+                        Self::collect_paths(&mut changed_paths, event, &watch_roots);
 
                         // Debounce loop: keep collecting for 500ms after the last event
                         loop {
                             match event_rx.recv_timeout(Duration::from_millis(500)) {
                                 Ok(Ok(event)) => {
-                                    Self::collect_paths(&mut changed_paths, event);
+                                    Self::collect_paths(&mut changed_paths, event, &watch_roots);
                                 }
                                 Ok(Err(_)) => {} // notify error, skip
                                 Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -200,11 +217,18 @@ impl Watcher {
         self.inner.is_some()
     }
 
-    fn collect_paths(set: &mut HashSet<PathBuf>, event: Event) {
+    fn collect_paths(set: &mut HashSet<PathBuf>, event: Event, watch_roots: &[PathBuf]) {
         if event.kind.is_modify() || event.kind.is_create() || event.kind.is_remove() {
             for path in event.paths {
                 // Ignore the .ix directory changes to avoid loops
                 if path.components().any(|c| c.as_os_str() == ".ix") {
+                    continue;
+                }
+                if !watch_roots.is_empty()
+                    && !watch_roots.iter().any(|wr| {
+                        path.starts_with(wr) || path.parent().is_some_and(|p| p.starts_with(wr))
+                    })
+                {
                     continue;
                 }
                 set.insert(path);
@@ -225,7 +249,7 @@ mod tests {
     #[test]
     fn test_watcher_basic() -> Result<()> {
         let dir = tempdir().map_err(Error::Io)?;
-        let mut watcher = Watcher::new(dir.path());
+        let mut watcher = Watcher::new(dir.path(), &[], &[]);
         let rx = watcher.start()?;
 
         let file_path = dir.path().join("test.txt");

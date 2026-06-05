@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.8] - 2026-06-05
+
+### Added
+- **llmosafe v0.7.1** — Upgraded from 0.6.2. DesignAssuranceLevel-A wired into daemon EscalationPolicy preventing silent safety regression.
+- **Pipeline safety binding for ix-py** — New `Pipeline` class wrapping llmosafe cognitive safety pipeline via C-ABI for Python consumers.
+- **PostingCache evict_fraction()** — Proportional eviction method for CacheDirective-driven memory pressure management.
+
+### Changed
+- **PostingCache memory ceiling unified with CachePolicy** — `PostingCache::with_ceiling()` added; daemon passes CachePolicy ceiling to PostingCache instead of hard-coded 64MB.
+- **Watcher receives watch_roots and exclude_patterns** — Watcher now scopes to configured watch roots and excludes patterns, preventing out-of-scope file indexing.
+- **Header flag contract enforced** — `POSTING_LISTS_COMPRESSED` flag now set (reflects reality: postings are ZSTD-compressed). Added `has_compressed_postings()` and `has_checksum()` methods.
+- **Shared file-walk filter** — `default_filter_entry()` extracted to builder.rs reducing duplication across builder/watcher modules.
+- **ResourceGuard::for_testing()** — Added `testing` feature for deterministic pressure injection in cache_policy tests.
+- **Daemon cache invalidation on update** — Both PostingCache and NegCache invalidated after builder.update(), preventing stale cache entries in long-running daemons.
+
+### Fixed
+- **Missing SAFETY comments** — Added SAFETY documentation on `libc::statvfs`, `Mmap::map`, and `libc::getuid` unsafe blocks.
+- **Fuzz Cargo.toml build** — Fuzz manifest now links against moeix; both fuzz targets updated for current API.
+- **Property test doc comments** — Converted doc-comment-on-proptest-macro warnings to regular comments.
+- **Unnecessary clippy allows** — Scoped `too_many_lines` allow from crate-level to module-level.
+
 ## [0.11.7] - 2026-06-03
 
 ### Fixed

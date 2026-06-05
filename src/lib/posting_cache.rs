@@ -3,6 +3,11 @@
 //! Avoids re-decoding compressed posting lists from the mmap when the same
 //! trigram is queried repeatedly (e.g., across multiple queries in a daemon
 //! session, or when the same trigram appears in multiple query plan variants).
+//!
+//! Eviction is FIFO oldest-first: when the memory ceiling is exceeded, the
+//! oldest entries (front of the access-order list) are removed first.
+//! [`evict_fraction`](PostingCache::evict_fraction) removes a specified
+//! fraction of the oldest entries under cache-policy control.
 
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -33,8 +38,9 @@ pub struct CacheStats {
 /// Thread-safe, memory-bounded LRU cache mapping [`Trigram`] → [`PostingList`].
 ///
 /// Uses FIFO eviction (oldest first) when the `memory_ceiling` is exceeded.
-/// Admission can be toggled via [`set_admit`](Self::set_admit) for adaptive
-/// cache policy integration.
+/// [`evict_fraction`](Self::evict_fraction) removes the specified fraction of
+/// oldest entries for adaptive cache policy control. Admission can be toggled
+/// via [`set_admit`](Self::set_admit).
 #[derive(Debug)]
 pub struct PostingCache {
     map: RwLock<HashMap<Trigram, PostingList>>,
@@ -61,6 +67,18 @@ impl PostingCache {
                 evictions: 0,
             }),
         }
+    }
+
+    /// Create a cache with the given ceiling, synced to the cache-policy
+    /// ceiling. This is the constructor to use when a [`crate::cache_policy::AdaptiveCachePolicy`]
+    /// manages the same memory budget.
+    ///
+    /// # Parameters
+    ///
+    /// - `ceiling`: byte budget, must match the policy's [`ceiling_bytes`](crate::cache_policy::AdaptiveCachePolicy::ceiling_bytes). 0 = reject all inserts.
+    #[must_use]
+    pub fn with_ceiling(ceiling: usize) -> Self {
+        Self::new(ceiling)
     }
 
     /// Set whether new entries are admitted.
@@ -224,6 +242,69 @@ impl PostingCache {
             *mem = mem.saturating_sub(removed_size);
             order.retain(|t| *t != trigram);
         }
+        drop(mem);
+        drop(order);
+        drop(map);
+    }
+
+    /// Evict the oldest `fraction` of entries (FIFO order from the front of
+    /// the access-order list). Used by the adaptive cache policy under memory
+    /// pressure.
+    ///
+    /// # Parameters
+    ///
+    /// - `fraction` (`f64`): portion of entries to evict. Must be in (0.0, 1.0];
+    ///   values outside this range are no-ops (0.0 or less) or flush everything
+    ///   (≥ 1.0, delegates to [`invalidate_all`](Self::invalidate_all)).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `RwLock` is poisoned.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        clippy::as_conversions
+    )]
+    pub fn evict_fraction(&self, fraction: f64) {
+        if fraction <= 0.0_f64 {
+            return;
+        }
+        if fraction >= 1.0_f64 {
+            self.invalidate_all();
+            return;
+        }
+        let mut map = self
+            .map
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut order = self
+            .order
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut mem = self
+            .memory_used
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut stats = self
+            .stats
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let total = order.len();
+        let to_remove = (total as f64 * fraction).ceil() as usize;
+        for _ in 0..to_remove {
+            if let Some(evict) = order.first().copied() {
+                order.remove(0);
+                if let Some(removed) = map.remove(&evict) {
+                    let removed_size = estimate_posting_size(&removed);
+                    *mem = mem.saturating_sub(removed_size);
+                }
+                stats.evictions += 1;
+            } else {
+                break;
+            }
+        }
+        drop(stats);
         drop(mem);
         drop(order);
         drop(map);

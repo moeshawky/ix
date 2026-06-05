@@ -28,8 +28,12 @@ use crate::config::Config;
 use crate::daemon_sock::{DaemonServer, DaemonStatus, FileChange, FileOp, ServerMessage};
 use crate::format::{self, Beacon};
 use crate::idle::IdleTracker;
+use crate::neg_cache::NegCache;
+use crate::posting_cache::PostingCache;
 use crate::watcher::Watcher;
-use llmosafe::{EscalationPolicy, PressureLevel, ResourceGuard, SafetyDecision};
+use llmosafe::{
+    DesignAssuranceLevel, EscalationPolicy, PressureLevel, ResourceGuard, SafetyDecision,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -40,6 +44,8 @@ const ENTROPY_CRITICAL: u16 = 1000;
 const PRE_BUILD_WAIT_SECS: u64 = 5;
 const WARN_COOLDOWN_MS: u64 = 300;
 
+/// Per-root daemon context carrying the builder, index state, caches, and
+/// lifecycle handles used by the main event loop.
 struct DaemonCtx<'a> {
     builder: &'a mut Builder,
     ix_dir: &'a Path,
@@ -47,6 +53,10 @@ struct DaemonCtx<'a> {
     idle: &'a mut IdleTracker,
     guard: &'a ResourceGuard,
     cache_policy: &'a AdaptiveCachePolicy,
+    /// LRU cache for decoded posting lists, keyed by trigram.
+    posting_cache: &'a Arc<PostingCache>,
+    /// Negative-result cache skipping re-verification of non-matching files.
+    neg_cache: &'a Arc<NegCache>,
     daemon_sock: Option<&'a DaemonServer>,
     running: &'a Arc<AtomicBool>,
     log_prefix: &'a str,
@@ -169,20 +179,34 @@ fn run_single_root(
     };
 
     // Discover and apply `.ixd.toml` configuration
-    if let Ok(config) = Config::discover_under(&root)
-        && !config.exclude_patterns.is_empty()
-    {
-        eprintln!(
-            "ixd [{name}]: loaded config — {} exclude patterns, {} watch roots",
-            config.exclude_patterns.len(),
-            config.watch_roots.len()
-        );
+    let (watch_roots, exclude_patterns) = if let Ok(config) = Config::discover_under(&root) {
+        if !config.exclude_patterns.is_empty() || !config.watch_roots.is_empty() {
+            eprintln!(
+                "ixd [{name}]: loaded config — {} exclude patterns, {} watch roots",
+                config.exclude_patterns.len(),
+                config.watch_roots.len()
+            );
+        }
+        let wr = config.watch_roots.clone();
+        let ep = config.exclude_patterns.clone();
         builder = builder.with_exclude_patterns(config.exclude_patterns);
-    }
+        if !config.watch_roots.is_empty() {
+            builder = builder.with_watch_roots(config.watch_roots);
+        }
+        (wr, ep)
+    } else {
+        (Vec::new(), Vec::new())
+    };
 
     // Cache policy for memory-pressure-driven cache management
     let ceiling_bytes = (ResourceGuard::system_memory_bytes().saturating_mul(3)) / 5;
     let cache_policy = AdaptiveCachePolicy::new_with_guard(guard.clone(), ceiling_bytes);
+
+    // Cache layers managed by the adaptive cache policy. PostingCache
+    // avoids re-decoding compressed posting lists; NegCache skips
+    // re-verification of files known to produce no matches.
+    let posting_cache = Arc::new(PostingCache::with_ceiling(ceiling_bytes));
+    let neg_cache = Arc::new(NegCache::new(65_536));
 
     wait_for_memory(guard, &name);
 
@@ -196,7 +220,7 @@ fn run_single_root(
         );
     }
 
-    let mut watcher = Watcher::new(&root);
+    let mut watcher = Watcher::new(&root, &watch_roots, &exclude_patterns);
     let rx = watcher.start()?;
 
     let ix_dir = root.join(".ix");
@@ -234,6 +258,8 @@ fn run_single_root(
         &mut idle,
         guard,
         &cache_policy,
+        &posting_cache,
+        &neg_cache,
         &running,
         daemon_sock.as_ref(),
         &name,
@@ -346,6 +372,8 @@ fn run_main_loop(
     idle: &mut IdleTracker,
     guard: &ResourceGuard,
     cache_policy: &AdaptiveCachePolicy,
+    posting_cache: &Arc<PostingCache>,
+    neg_cache: &Arc<NegCache>,
     running: &Arc<AtomicBool>,
     daemon_sock: Option<&DaemonServer>,
     log_prefix: &str,
@@ -368,6 +396,8 @@ fn run_main_loop(
                     idle,
                     guard,
                     cache_policy,
+                    posting_cache,
+                    neg_cache,
                     daemon_sock,
                     running,
                     log_prefix,
@@ -482,9 +512,9 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
     if let Err(e) = ctx.builder.update(changed_files) {
         eprintln!("ixd [{prefix}]: update failed: {e} — retrying on next change");
     } else {
-        tracing::debug!(
-            "ixd [{prefix}]: index updated - caches will self-invalidate on next query"
-        );
+        ctx.posting_cache.invalidate_all();
+        ctx.neg_cache.clear();
+        tracing::debug!("ixd [{prefix}]: index updated - caches invalidated");
     }
 
     let directive = ctx.cache_policy.directive();
@@ -497,6 +527,16 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
             directive.evict_fraction,
             directive.allow_new_entries
         );
+    }
+
+    // Apply the cache directive to live cache layers.
+    // PostingCache admission is gated; NegCache supports fractional eviction
+    // under memory pressure. Red zone (evict_fraction >= 1.0) flushes both.
+    ctx.posting_cache.set_admit(directive.allow_new_entries);
+    ctx.neg_cache.set_admit(directive.allow_new_entries);
+    if directive.evict_fraction > 0.0 {
+        ctx.neg_cache.evict_fraction(directive.evict_fraction);
+        ctx.posting_cache.evict_fraction(directive.evict_fraction);
     }
 
     broadcast_file_changes(ctx, changed_files);
@@ -539,7 +579,7 @@ fn evaluate_safety(guard: &ResourceGuard, log_prefix: &str) -> (u16, SafetyDecis
             let surprise = synapse.raw_surprise();
             let has_bias = synapse.has_bias();
             let pressure = PressureLevel::from(guard.pressure());
-            let policy = EscalationPolicy::default();
+            let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
             let decision = policy.decide_with_pressure(raw_entropy, surprise, has_bias, pressure);
             (raw_entropy, decision)
         }
