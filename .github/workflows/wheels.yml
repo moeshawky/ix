@@ -1,0 +1,96 @@
+name: Wheels
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sdist
+        working-directory: ix-py
+        run: pipx run build --sdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: ix-py/dist/*.tar.gz
+
+  build:
+    needs: [sdist]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64
+            os: ubuntu-latest
+            container: quay.io/pypa/manylinux_2_28_x86_64
+          - target: aarch64
+            os: ubuntu-24.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64
+          - target: x86_64
+            os: macos-latest
+          - target: aarch64
+            os: macos-latest
+          - target: x86_64
+            os: windows-latest
+          - target: i686
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (Linux container)
+        if: matrix.container
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: ix-py
+          args: --release --out dist
+          before-script-linux: |
+            yum install -y openssl-devel
+          manylinux: ${{ matrix.container && 'auto' || 'off' }}
+
+      - name: Run pytest
+        if: ${{ !matrix.container }}
+        working-directory: ix-py
+        run: |
+          pip install --no-index --find-links dist ix
+          pip install '.[dev]'
+          python -m pytest tests/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.target }}
+          path: ix-py/dist
+
+  publish:
+    if: github.event_name == 'release'
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*"
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

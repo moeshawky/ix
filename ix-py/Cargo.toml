@@ -1,6 +1,6 @@
 [package]
 name = "ix-py"
-version = "0.1.0"
+version = "0.11.7"
 edition = "2024"
 description = "Python bindings for ix — sub-millisecond code search via sparse trigram indexing."
 license = "MIT"

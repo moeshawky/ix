@@ -3,27 +3,42 @@ requires = ["maturin>=1.10,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "ix"
-version = "0.1.0"
-description = "Python bindings for ix — sub-millisecond code search via sparse trigram indexing."
+name = "moeix"
+version = "0.11.7"
+description = "Sub-millisecond code search via sparse trigram indexing."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [{ name = "ix contributors" }]
 keywords = ["search", "trigram", "code-search", "indexing", "grep"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Rust",
+    "Topic :: Software Development",
+    "Topic :: Text Processing :: Indexing",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.15",
+    "mypy>=2.0",
+    "pytest>=8",
+    "pytest-cov>=6",
 ]
 
 [project.urls]
+Homepage = "https://github.com/moeshawky/ix"
+Documentation = "https://docs.rs/moeix"
 Repository = "https://github.com/moeshawky/ix"
 
 [tool.maturin]
@@ -53,4 +68,11 @@ show_error_codes = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v"
+addopts = "--import-mode=importlib -v"
+
+[tool.coverage.run]
+source = ["python/ix"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
