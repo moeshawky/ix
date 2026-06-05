@@ -845,8 +845,10 @@ fn do_stats(path: &Path, json: bool) -> ix::error::Result<()> {
         || "unknown".to_string(),
         |dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
     );
-    let build_time_iso = chrono::DateTime::from_timestamp(ts_secs, ts_nanos)
-        .map_or_else(|| "unknown".to_string(), |dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+    let build_time_iso = chrono::DateTime::from_timestamp(ts_secs, ts_nanos).map_or_else(
+        || "unknown".to_string(),
+        |dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    );
 
     let cdx_active = h.has_cdx() && h.cdx_block_index_size > 0;
     let cdx_ratio: Option<f64> = if cdx_active && h.trigram_table_size > 0 {
@@ -873,13 +875,25 @@ fn do_stats(path: &Path, json: bool) -> ix::error::Result<()> {
 
     if json {
         let mut obj = serde_json::Map::new();
-        obj.insert("index_path".into(), serde_json::Value::String(index_path.display().to_string()));
+        obj.insert(
+            "index_path".into(),
+            serde_json::Value::String(index_path.display().to_string()),
+        );
         obj.insert("index_version".into(), serde_json::Value::String(version));
-        obj.insert("build_time".into(), serde_json::Value::String(build_time_iso));
-        obj.insert("build_timestamp_us".into(), serde_json::Value::Number(h.created_at.into()));
+        obj.insert(
+            "build_time".into(),
+            serde_json::Value::String(build_time_iso),
+        );
+        obj.insert(
+            "build_timestamp_us".into(),
+            serde_json::Value::Number(h.created_at.into()),
+        );
         obj.insert("file_count".into(), serde_json::json!(h.file_count));
         obj.insert("trigram_count".into(), serde_json::json!(h.trigram_count));
-        obj.insert("source_bytes_total".into(), serde_json::json!(h.source_bytes_total));
+        obj.insert(
+            "source_bytes_total".into(),
+            serde_json::json!(h.source_bytes_total),
+        );
         obj.insert("shard_size_bytes".into(), serde_json::json!(shard_size));
         obj.insert("compression_ratio".into(), serde_json::json!(compression));
         obj.insert("sections".into(), serde_json::json!({
@@ -894,7 +908,10 @@ fn do_stats(path: &Path, json: bool) -> ix::error::Result<()> {
         if let Some(ratio) = cdx_ratio {
             obj.insert("cdx_compression_ratio".into(), serde_json::json!(ratio));
         }
-        obj.insert("delta_size_bytes".into(), serde_json::json!(delta_size.unwrap_or(0)));
+        obj.insert(
+            "delta_size_bytes".into(),
+            serde_json::json!(delta_size.unwrap_or(0)),
+        );
         obj.insert("delta_entry_count".into(), serde_json::json!(delta_entries));
         println!("{}", serde_json::Value::Object(obj));
     } else {
@@ -917,27 +934,39 @@ fn do_stats(path: &Path, json: bool) -> ix::error::Result<()> {
         println!("  Sections:");
         println!(
             "    trigram_table:  offset={}, size={} ({})",
-            h.trigram_table_offset, h.trigram_table_size, format_bytes(h.trigram_table_size)
+            h.trigram_table_offset,
+            h.trigram_table_size,
+            format_bytes(h.trigram_table_size)
         );
         println!(
             "    file_table:     offset={}, size={} ({})",
-            h.file_table_offset, h.file_table_size, format_bytes(h.file_table_size)
+            h.file_table_offset,
+            h.file_table_size,
+            format_bytes(h.file_table_size)
         );
         println!(
             "    string_pool:    offset={}, size={} ({})",
-            h.string_pool_offset, h.string_pool_size, format_bytes(h.string_pool_size)
+            h.string_pool_offset,
+            h.string_pool_size,
+            format_bytes(h.string_pool_size)
         );
         println!(
             "    posting_data:   offset={}, size={} ({})",
-            h.posting_data_offset, h.posting_data_size, format_bytes(h.posting_data_size)
+            h.posting_data_offset,
+            h.posting_data_size,
+            format_bytes(h.posting_data_size)
         );
         println!(
             "    bloom_data:     offset={}, size={} ({})",
-            h.bloom_offset, h.bloom_size, format_bytes(h.bloom_size)
+            h.bloom_offset,
+            h.bloom_size,
+            format_bytes(h.bloom_size)
         );
         println!(
             "    cdx_block_index: offset={}, size={} ({})",
-            h.cdx_block_index_offset, h.cdx_block_index_size, format_bytes(h.cdx_block_index_size)
+            h.cdx_block_index_offset,
+            h.cdx_block_index_size,
+            format_bytes(h.cdx_block_index_size)
         );
         if let Some(ds) = delta_size {
             println!("  Delta file: {}  ({})", format_bytes(ds), format_bytes(ds));
