@@ -13,7 +13,7 @@ categories = ["command-line-utilities", "development-tools", "text-processing"]
 rust-version = "1.85"
 
 [workspace]
-members = ["."]
+members = [".", "ix-py"]
 
 # Config for 'dist'
 [workspace.metadata.dist]

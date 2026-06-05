@@ -572,6 +572,12 @@ impl Builder {
         self.stats.unique_trigrams as usize
     }
 
+    /// Returns a reference to the accumulated [`BuildStats`] for this build run.
+    #[must_use]
+    pub const fn stats(&self) -> &BuildStats {
+        &self.stats
+    }
+
     /// Returns current process RSS in bytes by reading /proc/self/status.
     fn current_rss_bytes() -> std::io::Result<u64> {
         let status = std::fs::read_to_string("/proc/self/status")?;
