@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "moeix"
-version = "0.11.8"
+version = "0.11.9"
 description = "Sub-millisecond code search via sparse trigram indexing."
 readme = "README.md"
 license = "MIT"
@@ -42,7 +42,7 @@ Documentation = "https://docs.rs/moeix"
 Repository = "https://github.com/moeshawky/ix"
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
+features = ["pyo3/extension-module", "full"]
 module-name = "ix._ix"
 python-source = "python"
 manifest-path = "Cargo.toml"

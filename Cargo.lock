@@ -771,7 +771,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "ix-py"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "llmosafe",
  "memmap2",
@@ -852,9 +852,9 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "llmosafe"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7e740662002494948b59efd1ea4f0853d25d17d9cdce951abe5b50637767b66"
+checksum = "5ba65ff6a248d5cdc9bd53b2d202e06e3b16432305f6d939df20820d5600f6f1"
 dependencies = [
  "cbindgen",
  "libc",
@@ -957,7 +957,7 @@ dependencies = [
 
 [[package]]
 name = "moeix"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "bzip2",
  "chrono",

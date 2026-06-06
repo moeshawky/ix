@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.9] - 2026-06-06
+
+### Added
+- **llmosafe v0.7.2** — Upgraded from 0.7.1. Spin-loop DoS fix, Python bindings mirror, u128 FFI fixes, generation counter for handle reuse.
+- **Python feature mirror** — `ix-py` now ships with `full` feature set (notify + decompress + archive) in PyPI wheels.
+- **5 new regression tests** — delta-only keyword search, regex delta-only search, PostingCache oversized entry rejection, PostingCache evict_fraction FIFO semantics, daemon_sock `from_notify_kind()` rename mapping.
+
+### Fixed
+- **Stale detection timestamp** — `check_stale()` now displays `effective_created_at` (max of header + delta mtime) instead of stale header `created_at`.
+- **Delta search - tombstoned files** — Tombstoned delta files no longer appear in candidate set.
+- **Delta search - literal intersection** — Literal search delta candidates no longer eliminated by base-index intersection.
+- **Delta search - regex merge** — Regex indexed search now merges delta postings during fragment intersection.
+- **Planner non-UTF-8 regex** — Non-UTF-8 regex literals now use raw bytes for trigram extraction instead of `from_utf8_lossy()`.
+- **Builder stream position** — Error propagation for stream position (no more silent `unwrap_or(0)`).
+- **Builder offset chunking** — Trigram entries with >10,000 offsets now chunked into multiple PostingEntry records.
+- **PostingCache oversized entries** — Entries exceeding memory ceiling now rejected instead of violating budget.
+- **Daemon `from_notify_kind()`** — Rename events now correctly map to `FileOp::Rename`.
+- **Daemon beacon write errors** — 10 `beacon.write_to()` calls now emit `eprintln!` warnings on failure.
+- **Daemon idle double-count** — `idle.record_change()` no longer called twice in compaction path.
+- **Watcher race condition** — Events accumulated during `build()` are now drained to prevent duplicate delta entries.
+- **Watcher `.ix` path filter** — Now uses `starts_with(ix_dir)` instead of component matching to prevent false exclusion of paths like `src/.ix_utils/`.
+- **CLI flag gaps** — `--archive` warns without `--no-index`; `--max-file-size` warns in scanner mode; `--daemon` errors on non-Unix with notify feature.
+
+### Docs
+- Fixed `.ixd.toml.md` format, broken intra-doc links, outdated entropy thresholds in DAEMON-RUNBOOK, added `service status` to README, Pipeline stub in `ix-py/__init__.pyi`.
+
 ## [0.11.8] - 2026-06-05
 
 ### Added
