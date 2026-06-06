@@ -1370,8 +1370,7 @@ fn check_stale(reader: &Reader, index_root: &Path) -> ix::error::Result<()> {
         .unwrap_or(0);
     let effective_created_at = std::cmp::max(reader.header.created_at, delta_mtime);
     if last_mod > effective_created_at.saturating_add(grace_period_micros) {
-        let last_built_secs =
-            i64::try_from(reader.header.created_at / 1_000_000).unwrap_or(i64::MAX);
+        let last_built_secs = i64::try_from(effective_created_at / 1_000_000).unwrap_or(i64::MAX);
         let datetime = chrono::DateTime::from_timestamp(last_built_secs, 0)
             .unwrap_or(chrono::DateTime::UNIX_EPOCH);
         let time_str = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
