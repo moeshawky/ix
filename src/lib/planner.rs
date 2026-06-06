@@ -1,7 +1,7 @@
 //! Query planner — transforms user input into an optimal index query plan.
 //!
 //! Decomposes regex patterns into required trigram sets.
-//! When a [`RegexPool`] is available, compiled
+//! When a [`crate::regex_pool::RegexPool`] is available, compiled
 //! regexes are sourced from the pool to avoid redundant compilation.
 
 use crate::regex_pool::RegexPool;
@@ -227,7 +227,7 @@ impl Planner {
 
         let required_trigram_sets: Vec<Vec<Trigram>> = literals
             .iter()
-            .map(|lit| Extractor::extract_set(lit.as_bytes()))
+            .map(|lit| Extractor::extract_set(lit))
             .filter(|t| !t.is_empty())
             .collect();
 
@@ -241,16 +241,16 @@ impl Planner {
         }
     }
 
-    fn walk_hir(hir: &Hir, out: &mut Vec<String>) {
+    fn walk_hir(hir: &Hir, out: &mut Vec<Vec<u8>>) {
         match hir.kind() {
             HirKind::Literal(lit) => {
-                out.push(String::from_utf8_lossy(&lit.0).to_string());
+                out.push(lit.0.to_vec());
             }
             HirKind::Concat(children) => {
-                let mut current = String::new();
+                let mut current = Vec::new();
                 for child in children {
                     if let HirKind::Literal(lit) = child.kind() {
-                        current.push_str(&String::from_utf8_lossy(&lit.0));
+                        current.extend_from_slice(&lit.0);
                     } else {
                         if current.len() >= 3 {
                             out.push(current.clone());

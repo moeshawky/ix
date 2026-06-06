@@ -21,17 +21,17 @@ cargo build --all-targets --all-features --verbose
 ```bash
 # Unit tests
 cargo test --lib
-# Expected: 73 passed
+# Expected: 79 passed
 
 # Full suite (unit + integration + streaming)
 cargo test --all-features
-# Expected: 97 passed (1 ignored)
+# Expected: 126 passed (1 ignored)
 ```
 
 ### Formatting
 ```bash
 # Check formatting
-cargo fmt -- --check
+cargo fmt --check --all
 ```
 
 ### Linting
@@ -70,7 +70,7 @@ cargo deny check licenses advisories bans
 # Generate coverage report (requires cargo-llvm-cov)
 cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 cargo llvm-cov --all-features --workspace --summary-only
-# Expected coverage: 47.14% total (see lcov.info for detail)
+# Expected coverage: 51.11% total (see lcov.info for detail)
 ```
 
 ### Benchmarks
@@ -95,7 +95,7 @@ src/lib/
 ├── api.rs — Public API surface
 ├── builder.rs — Index builder
 ├── reader.rs — Shard reader
-├── executor.rs — Execution engine
+├── executor.rs — Execution engine (Pipeline safety binding)
 ├── planner.rs — Query planner
 ├── scanner.rs — File scanner (optional: ignore)
 ├── format.rs — Index format constants, header, Beacon

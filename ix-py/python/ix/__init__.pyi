@@ -72,6 +72,12 @@ class Index:
 class IxError(Exception):
     """Root exception for all ix errors."""
 
+class Pipeline:
+    """LLMOSafe cognitive safety pipeline for Python consumers."""
+
+    def __init__(self, capacity: int = 16) -> None: ...
+    def is_safe(self, text: str) -> bool: ...
+
 class IxIndexError(IxError):
     """Index file cannot be opened or parsed."""
 

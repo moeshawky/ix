@@ -6,7 +6,7 @@
 //!
 //! Eviction is FIFO oldest-first: when the memory ceiling is exceeded, the
 //! oldest entries (front of the access-order list) are removed first.
-//! [`evict_fraction`](PostingCache::evict_fraction) removes a specified
+//! `evict_fraction` removes a specified
 //! fraction of the oldest entries under cache-policy control.
 
 use std::collections::HashMap;
@@ -211,9 +211,11 @@ impl PostingCache {
                 }
             }
 
-            map.insert(trigram, list);
-            order.push(trigram);
-            *mem += entry_size;
+            if entry_size <= self.memory_ceiling {
+                map.insert(trigram, list);
+                order.push(trigram);
+                *mem += entry_size;
+            }
             drop(stats);
             drop(mem);
             drop(order);

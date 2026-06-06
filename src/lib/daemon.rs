@@ -2,14 +2,14 @@
 //!
 //! This module contains the single background-loop implementation used by
 //! both the `ixd` binary and `ix --daemon`. It enforces a 60% RSS ceiling,
-//! checks system entropy via [`ResourceGuard`], and provides file-change
+//! checks system entropy via `ResourceGuard`, and provides file-change
 //! notifications over a Unix domain socket (`daemon_sock`).
 //!
 //! # Multi-root support (v0.9+)
 //!
 //! The daemon can watch multiple roots in one process. Each root runs on
 //! its own thread with an independent [`Builder`], [`Watcher`], [`Beacon`],
-//! and [`DaemonServer`]. Signal handling, a single [`ResourceGuard`], and
+//! and [`DaemonServer`]. Signal handling, a single `ResourceGuard`, and
 //! the shutdown flag are shared across all roots.
 //!
 //! # Safety

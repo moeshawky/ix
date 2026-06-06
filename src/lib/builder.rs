@@ -771,7 +771,7 @@ impl Builder {
         let path_off = u32::try_from(
             Self::get_writer(&mut self.strings_writer, "strings_writer")?.stream_position()?,
         )
-        .unwrap_or(0);
+        .map_err(|e| Error::Io(std::io::Error::other(e)))?;
         let path_len = u16::try_from(path_bytes.len()).unwrap_or(0);
 
         self.strings_writer

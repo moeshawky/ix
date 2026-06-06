@@ -37,20 +37,20 @@ pub const DELTA_TRIGRAM_ENTRY: u8 = 0x03;
 /// Bit-flag constants stored in the [`Header::flags`] field.
 pub mod flags {
     /// The index contains per-trigram bloom filters.
-    /// Always set by the current builder — verified via [`Header::has_bloom`].
+    /// Always set by the current builder — verified via [`super::Header::has_bloom`].
     pub const HAS_BLOOM_FILTERS: u64 = 1 << 0;
     /// Per-file content hashes (`XXH64`) are stored in the file table.
     /// Set by the builder; verified if needed for delta deduplication.
     pub const HAS_CONTENT_HASHES: u64 = 1 << 1;
     /// Posting-list data is ZSTD-compressed.
     /// Always set by the current builder (postings are compressed in
-    /// CDX blocks). Verified via [`Header::has_compressed_postings`].
+    /// CDX blocks). Verified via [`super::Header::has_compressed_postings`].
     pub const POSTING_LISTS_COMPRESSED: u64 = 1 << 2;
     /// Each posting-list chunk carries an `XXHash64` checksum.
-    /// Verified via [`Header::has_checksum`].
+    /// Verified via [`super::Header::has_checksum`].
     pub const POSTING_LISTS_CHECKSUMMED: u64 = 1 << 3;
     /// Trigram table uses CDX (Concentrated Delta X) compression.
-    /// Always-on since v1.3. Verified via [`Header::has_cdx`].
+    /// Always-on since v1.3. Verified via [`super::Header::has_cdx`].
     pub const HAS_CDX_INDEX: u64 = 1 << 4;
 }
 

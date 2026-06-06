@@ -2,8 +2,7 @@
 
 **Purpose:** Operate and troubleshoot the `ixd` background indexing daemon  
 **Last Verified:** 2026-05-14  
-**Time to Complete:** 10 minutes  
-**Verification Command:** `./scripts/verify-daemon.sh`  
+**Time to Complete:** 10 minutes
 
 ---
 
@@ -110,7 +109,7 @@ ls -la /run/user/1000/ixd/a1b2c3d4e5f67890.sock
 ### Idle State
 
 **Status string:** `"idle"`  
-**Entropy:** < 800  
+**Entropy:** < 1000  
 **Behavior:** Waiting for file changes, socket queries served immediately
 
 ```json
@@ -147,7 +146,7 @@ ls -la /run/user/1000/ixd/a1b2c3d4e5f67890.sock
 ### Deferred State
 
 **Status string:** `"deferred (entropy: N)`  
-**Trigger:** System entropy > 800  
+**Trigger:** System entropy > 1000  
 **Behavior:** Indexing postponed, queries served from current index
 
 ```json
@@ -361,12 +360,15 @@ The daemon uses `ResourceGuard` to monitor:
 
 The daemon prevents multiple instances watching the same root:
 
-```rust
-// Beacon file: .ix/beacon.json
+```json
 {
   "pid": 12345,
   "root": "/path/to/repo",
-  "started_at": "2026-05-14T15:00:00Z"
+  "start_time": 1684089600,
+  "status": "idle",
+  "last_event_at": 1684089600,
+  "socket_path": "/run/user/1000/ixd/a1b2c3d4e5f67890.sock",
+  "instance_id": 1684089600000000000
 }
 ```
 
@@ -438,20 +440,6 @@ sudo sysctl -p
 ```
 
 ---
-
-## Verification Commands
-
-```bash
-# Full daemon verification
-./scripts/verify-daemon.sh
-
-# Expected output:
-# [✓] Daemon process running
-# [✓] Socket accessible
-# [✓] Status query responds
-# [✓] Index up to date
-# All checks passed.
-```
 
 ---
 

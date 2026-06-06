@@ -97,10 +97,11 @@ are shared.
 # Install as a user-level systemd service
 ix service install /path/to/repo
 
-# Start / stop / restart the service
+# Start / stop / restart / status the service
 ix service start
 ix service stop
 ix service restart
+ix service status
 ```
 
 The service auto-starts on login and survives reboots. See

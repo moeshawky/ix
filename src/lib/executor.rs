@@ -373,7 +373,17 @@ impl<'a> Executor<'a> {
 
             let next_postings = self.decode_postings_cached(*tri, info, &mut stats)?;
 
-            let next_set: HashSet<u32> = next_postings.entries.iter().map(|e| e.file_id).collect();
+            let mut next_set: HashSet<u32> =
+                next_postings.entries.iter().map(|e| e.file_id).collect();
+            if let Some(ref delta) = self.delta {
+                if let Some(entries) = delta.postings.get(tri) {
+                    for entry in entries {
+                        if !self.is_tombstoned(entry.file_id) {
+                            next_set.insert(entry.file_id);
+                        }
+                    }
+                }
+            }
             candidates.retain(|fid| next_set.contains(fid));
         }
 
@@ -465,6 +475,8 @@ impl<'a> Executor<'a> {
             let postings = self.decode_postings_cached(*rarest_tri, rarest_info, &mut stats)?;
             let mut set_candidates: HashSet<u32> =
                 postings.entries.iter().map(|e| e.file_id).collect();
+            set_candidates.retain(|&fid| !self.is_tombstoned(fid));
+            self.merge_delta_candidates(&mut set_candidates, *rarest_tri);
 
             // Intersect with up to 2 more lists if large
             for (tri, info) in infos.iter().take(infos.len().min(3)).skip(1) {
@@ -472,8 +484,17 @@ impl<'a> Executor<'a> {
                     break;
                 }
                 let next_postings = self.decode_postings_cached(*tri, info, &mut stats)?;
-                let next_set: HashSet<u32> =
+                let mut next_set: HashSet<u32> =
                     next_postings.entries.iter().map(|e| e.file_id).collect();
+                if let Some(ref delta) = self.delta {
+                    if let Some(entries) = delta.postings.get(tri) {
+                        for entry in entries {
+                            if !self.is_tombstoned(entry.file_id) {
+                                next_set.insert(entry.file_id);
+                            }
+                        }
+                    }
+                }
                 set_candidates.retain(|fid| next_set.contains(fid));
             }
 
@@ -492,11 +513,8 @@ impl<'a> Executor<'a> {
             final_candidates.retain(|fid: &u32| set.contains(fid));
         }
 
-        // Tombstone filtering + delta merge
+        // Tombstone filtering
         final_candidates.retain(|&fid| !self.is_tombstoned(fid));
-        if let Some(ref delta) = self.delta {
-            final_candidates.extend(delta.id_to_fileinfo.keys().copied());
-        }
 
         stats.candidate_files = final_candidates.len() as u32;
 
@@ -592,7 +610,13 @@ impl<'a> Executor<'a> {
         // Tombstone filtering + delta merge
         final_candidates.retain(|&fid| !self.is_tombstoned(fid));
         if let Some(ref delta) = self.delta {
-            final_candidates.extend(delta.id_to_fileinfo.keys().copied());
+            final_candidates.extend(
+                delta
+                    .id_to_fileinfo
+                    .keys()
+                    .copied()
+                    .filter(|fid| !self.is_tombstoned(*fid)),
+            );
         }
 
         stats.candidate_files = final_candidates.len() as u32;

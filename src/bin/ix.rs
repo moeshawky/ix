@@ -399,6 +399,14 @@ fn main() {
         }
     }
 
+    #[cfg(all(feature = "notify", not(unix)))]
+    {
+        if cli.daemon {
+            eprintln!("Error: daemon mode is not supported on this platform");
+            std::process::exit(1);
+        }
+    }
+
     // Determine path and handle build action
     let search_path = if let Some(ref build_path) = cli.build {
         // Build mode: path comes from --build flag, or CWD if not specified
@@ -1096,6 +1104,16 @@ fn do_search(params: &SearchParams) -> ix::error::Result<()> {
             "json" => extensions.push("json".to_string()),
             other => extensions.push(other.to_string()),
         }
+    }
+
+    if params.flags.archive && !params.flags.no_index {
+        eprintln!("ix: --archive is only supported with --no-index (raw file scanner)");
+    }
+
+    if params.flags.no_index && params.max_file_size != 100 {
+        eprintln!(
+            "ix: --max-file-size is for index building; scanner uses its own file-size limits"
+        );
     }
 
     let options = QueryOptions {
