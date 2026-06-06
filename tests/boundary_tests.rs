@@ -286,3 +286,136 @@ fn test_c1_empty_index_contract() {
         "C1: Empty index rebuild must be idempotent"
     );
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// C3: Reclassification — Delta-only file inclusion in search results
+//
+// Regression test for the delta intersection fix. Searches for a keyword
+// that exists ONLY in delta-added files (not in base index). If the delta
+// intersection is broken and ignores delta entries, this test FAILS because
+// the delta-only keyword won't match base-indexed files.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+#[test]
+fn test_c3_delta_only_keyword_included_in_results() {
+    use std::fs::File;
+    use std::io::Write;
+
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    let index_dir = root.join(".ix");
+    std::fs::create_dir(&index_dir).unwrap();
+
+    // Build base index with ONE file containing "alpha"
+    let a_path = root.join("a.txt");
+    let mut a = File::create(&a_path).unwrap();
+    writeln!(a, "alpha base file content").unwrap();
+    drop(a);
+
+    let mut builder = Builder::new(root).unwrap();
+    builder.build().unwrap();
+
+    // Verify base search works
+    let index_path = index_dir.join("shard.ix");
+    let reader = Reader::open(&index_path).unwrap();
+    let mut executor = Executor::new(&reader);
+    let plan_alpha = Planner::plan("alpha", false);
+    let (matches, _) = executor
+        .execute(&plan_alpha, &QueryOptions::default())
+        .unwrap();
+    assert_eq!(matches.len(), 1, "base index should find alpha in a.txt");
+
+    // Now add a NEW file with a UNIQUE keyword that does NOT appear in base
+    let b_path = root.join("b.txt");
+    let mut b = File::create(&b_path).unwrap();
+    writeln!(b, "xyzzy delta_only_keyword unique").unwrap();
+    drop(b);
+
+    // Rebuild to create delta file (simulates daemon update)
+    let mut builder2 = Builder::new(root).unwrap();
+    builder2.build().unwrap();
+
+    // Search for the delta-only term
+    let reader2 = Reader::open(&index_path).unwrap();
+    let mut executor2 = Executor::new(&reader2);
+    let plan_delta = Planner::plan("delta_only_keyword", false);
+    let (matches2, _) = executor2
+        .execute(&plan_delta, &QueryOptions::default())
+        .unwrap();
+
+    assert!(
+        !matches2.is_empty(),
+        "C3: delta-only keyword should return results from delta file"
+    );
+    assert!(
+        matches2.iter().any(|m| m.file_path == b_path),
+        "C3: result should include the delta file b.txt, got: {:?}",
+        matches2.iter().map(|m| &m.file_path).collect::<Vec<_>>()
+    );
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// C3: Reclassification — Regex search across delta-only files
+//
+// Regression test for the regex delta merge fix. Searches with a regex
+// pattern that matches content ONLY in delta-added files. If the regex
+// delta merge is broken, the delta-only pattern won't match.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+#[test]
+fn test_c3_regex_delta_only_pattern_included_in_results() {
+    use std::fs::File;
+    use std::io::Write;
+
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    let index_dir = root.join(".ix");
+    std::fs::create_dir(&index_dir).unwrap();
+
+    // Build base index with ONE file containing simple content
+    let a_path = root.join("a.txt");
+    let mut a = File::create(&a_path).unwrap();
+    writeln!(a, "plain text line").unwrap();
+    drop(a);
+
+    let mut builder = Builder::new(root).unwrap();
+    builder.build().unwrap();
+
+    // Verify base search works for literal
+    let index_path = index_dir.join("shard.ix");
+    let reader = Reader::open(&index_path).unwrap();
+    let mut executor = Executor::new(&reader);
+    let plan_plain = Planner::plan("plain", false);
+    let (matches, _) = executor
+        .execute(&plan_plain, &QueryOptions::default())
+        .unwrap();
+    assert_eq!(matches.len(), 1, "base should find plain in a.txt");
+
+    // Add a NEW file with content matching a regex that does NOT appear in base
+    let c_path = root.join("c.txt");
+    let mut c = File::create(&c_path).unwrap();
+    writeln!(c, "ERROR: timeout exceeded at line 42").unwrap();
+    drop(c);
+
+    // Rebuild to create delta file
+    let mut builder2 = Builder::new(root).unwrap();
+    builder2.build().unwrap();
+
+    // Regex search for pattern that only matches delta file
+    let reader2 = Reader::open(&index_path).unwrap();
+    let mut executor2 = Executor::new(&reader2);
+    let plan_regex = Planner::plan("ERROR.*tim", true);
+    let (matches2, _) = executor2
+        .execute(&plan_regex, &QueryOptions::default())
+        .unwrap();
+
+    assert!(
+        !matches2.is_empty(),
+        "C3: regex matching only delta content must return results"
+    );
+    assert!(
+        matches2.iter().any(|m| m.file_path == c_path),
+        "C3: regex result should include delta file c.txt, got: {:?}",
+        matches2.iter().map(|m| &m.file_path).collect::<Vec<_>>()
+    );
+}

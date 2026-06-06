@@ -236,7 +236,9 @@ fn run_single_root(
         Ok(s) => {
             println!("ixd [{name}]: socket at {}", s.path().display());
             beacon.socket_path = Some(s.path().to_path_buf());
-            let _ = beacon.write_to(&ix_dir);
+            if let Err(e) = beacon.write_to(&ix_dir) {
+                eprintln!("ixd [{name}]: beacon write error: {e}");
+            }
             Some(s)
         }
         Err(e) => {
@@ -267,7 +269,9 @@ fn run_single_root(
 
     eprintln!("ixd [{name}]: shutting down...");
     watcher.stop();
-    let _ = fs::remove_file(ix_dir.join("beacon.json"));
+    if let Err(e) = fs::remove_file(ix_dir.join("beacon.json")) {
+        eprintln!("ixd [{name}]: warning: could not remove beacon file: {e}");
+    }
 
     Ok(())
 }
@@ -402,14 +406,16 @@ fn run_main_loop(
                     running,
                     log_prefix,
                 };
-                handle_changes(&mut ctx, &changed_files);
+                handle_changes(&mut ctx, &changed_files, rx);
             }
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
                 if idle.state() == crate::idle::DaemonState::Dormant {
                     let delta_file = ix_dir.join("shard.ix.delta");
                     if delta_file.exists() && delta_file.metadata().map_or(0, |m| m.len()) > 0 {
                         beacon.status = "compacting".to_string();
-                        let _ = beacon.write_to(ix_dir);
+                        if let Err(e) = beacon.write_to(ix_dir) {
+                            eprintln!("ixd [{log_prefix}]: beacon write error: {e}");
+                        }
                         match builder.build() {
                             Ok(_) => {
                                 println!("ixd [{log_prefix}]: compaction complete (idle)");
@@ -418,10 +424,13 @@ fn run_main_loop(
                                 eprintln!("ixd [{log_prefix}]: compaction failed: {e}");
                             }
                         }
+                        while rx.try_recv().is_ok() {}
                         idle.record_change();
                         let idle_status = DaemonStatus::Idle;
                         beacon.status = idle_status.to_string();
-                        let _ = beacon.write_to(ix_dir);
+                        if let Err(e) = beacon.write_to(ix_dir) {
+                            eprintln!("ixd [{log_prefix}]: beacon write error: {e}");
+                        }
                         if let Some(sock) = daemon_sock {
                             sock.set_status(&idle_status, builder.files_len());
                         }
@@ -433,7 +442,11 @@ fn run_main_loop(
     }
 }
 
-fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
+fn handle_changes(
+    ctx: &mut DaemonCtx,
+    changed_files: &[PathBuf],
+    rx: &crossbeam_channel::Receiver<Vec<PathBuf>>,
+) {
     let (entropy, safety_decision) = evaluate_safety(ctx.guard, ctx.log_prefix);
 
     match &safety_decision {
@@ -443,7 +456,9 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
                 "ixd [{prefix}]: critical safety decision (Halt: {err:?}) — pausing operations",
             );
             ctx.beacon.status = "safety halt".to_string();
-            let _ = ctx.beacon.write_to(ctx.ix_dir);
+            if let Err(e) = ctx.beacon.write_to(ctx.ix_dir) {
+                eprintln!("ixd [{prefix}]: beacon write error: {e}");
+            }
             std::thread::sleep(Duration::from_millis(u64::from(*cooldown)));
             return;
         }
@@ -467,7 +482,9 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
                 entropy: *esc_entropy,
             };
             ctx.beacon.status = deferred_status.to_string();
-            let _ = ctx.beacon.write_to(ctx.ix_dir);
+            if let Err(e) = ctx.beacon.write_to(ctx.ix_dir) {
+                eprintln!("ixd [{prefix}]: beacon write error: {e}");
+            }
             if let Some(sock) = ctx.daemon_sock {
                 sock.set_status(&deferred_status, ctx.builder.files_len());
             }
@@ -482,7 +499,9 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
                     safety_decision.severity()
                 );
                 ctx.beacon.status = format!("warned: {reason}");
-                let _ = ctx.beacon.write_to(ctx.ix_dir);
+                if let Err(e) = ctx.beacon.write_to(ctx.ix_dir) {
+                    eprintln!("ixd [{prefix}]: beacon write error: {e}");
+                }
                 std::thread::sleep(Duration::from_millis(WARN_COOLDOWN_MS));
             }
         }
@@ -501,7 +520,9 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let _ = ctx.beacon.write_to(ctx.ix_dir);
+    if let Err(e) = ctx.beacon.write_to(ctx.ix_dir) {
+        eprintln!("ixd [{prefix}]: beacon write error: {e}");
+    }
 
     broadcast_status(
         ctx,
@@ -543,7 +564,9 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
 
     let idle_status = DaemonStatus::Idle;
     ctx.beacon.status = idle_status.to_string();
-    let _ = ctx.beacon.write_to(ctx.ix_dir);
+    if let Err(e) = ctx.beacon.write_to(ctx.ix_dir) {
+        eprintln!("ixd [{}]: beacon write error: {e}", ctx.log_prefix);
+    }
     if let Some(sock) = ctx.daemon_sock {
         sock.set_status(&idle_status, ctx.builder.files_len());
     }
@@ -558,7 +581,9 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
         && (ctx.idle.state() == crate::idle::DaemonState::Dormant || delta_size > 50 * 1024 * 1024)
     {
         ctx.beacon.status = "compacting".to_string();
-        let _ = ctx.beacon.write_to(ctx.ix_dir);
+        if let Err(e) = ctx.beacon.write_to(ctx.ix_dir) {
+            eprintln!("ixd [{}]: beacon write error: {e}", ctx.log_prefix);
+        }
         match ctx.builder.build() {
             Ok(_) => {
                 println!("ixd [{}]: compaction complete", ctx.log_prefix);
@@ -567,7 +592,7 @@ fn handle_changes(ctx: &mut DaemonCtx, changed_files: &[PathBuf]) {
                 eprintln!("ixd [{}]: compaction failed: {}", ctx.log_prefix, e);
             }
         }
-        ctx.idle.record_change();
+        while rx.try_recv().is_ok() {}
     }
     ctx.idle.record_change();
 }

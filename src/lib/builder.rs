@@ -798,17 +798,21 @@ impl Builder {
                 j += 1;
             }
 
-            let take_count = (j - i).min(10_000);
-            let offsets: Vec<u32> = pairs[i..i + take_count].iter().map(|p| p.1).collect();
-
             bloom.insert(tri);
-            self.postings
-                .entry(tri)
-                .or_default()
-                .push(PostingEntry { file_id, offsets });
-            self.postings_count += take_count + 8;
-
             trigram_count += 1;
+
+            let mut start = i;
+            while start < j {
+                let end = (start + 10_000).min(j);
+                let offsets: Vec<u32> = pairs[start..end].iter().map(|p| p.1).collect();
+                let take = end - start;
+                self.postings
+                    .entry(tri)
+                    .or_default()
+                    .push(PostingEntry { file_id, offsets });
+                self.postings_count += take + 8;
+                start = end;
+            }
             i = j;
         }
 

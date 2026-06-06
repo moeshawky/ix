@@ -164,19 +164,25 @@ impl Watcher {
         self.inner = Some(watcher);
 
         let watch_roots = self.watch_roots.clone();
+        let ix_dir = self.root.join(".ix");
         let handle = thread::spawn(move || {
             let mut changed_paths = HashSet::new();
             loop {
                 // Wait for the first event
                 match event_rx.recv() {
                     Ok(Ok(event)) => {
-                        Self::collect_paths(&mut changed_paths, event, &watch_roots);
+                        Self::collect_paths(&mut changed_paths, event, &watch_roots, &ix_dir);
 
                         // Debounce loop: keep collecting for 500ms after the last event
                         loop {
                             match event_rx.recv_timeout(Duration::from_millis(500)) {
                                 Ok(Ok(event)) => {
-                                    Self::collect_paths(&mut changed_paths, event, &watch_roots);
+                                    Self::collect_paths(
+                                        &mut changed_paths,
+                                        event,
+                                        &watch_roots,
+                                        &ix_dir,
+                                    );
                                 }
                                 Ok(Err(_)) => {} // notify error, skip
                                 Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -217,11 +223,15 @@ impl Watcher {
         self.inner.is_some()
     }
 
-    fn collect_paths(set: &mut HashSet<PathBuf>, event: Event, watch_roots: &[PathBuf]) {
+    fn collect_paths(
+        set: &mut HashSet<PathBuf>,
+        event: Event,
+        watch_roots: &[PathBuf],
+        ix_dir: &Path,
+    ) {
         if event.kind.is_modify() || event.kind.is_create() || event.kind.is_remove() {
             for path in event.paths {
-                // Ignore the .ix directory changes to avoid loops
-                if path.components().any(|c| c.as_os_str() == ".ix") {
+                if path.starts_with(ix_dir) {
                     continue;
                 }
                 if !watch_roots.is_empty()

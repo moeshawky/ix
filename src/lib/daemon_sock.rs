@@ -71,6 +71,7 @@ impl FileOp {
         match kind {
             notify::EventKind::Create(_) => Self::Create,
             notify::EventKind::Remove(_) => Self::Delete,
+            notify::EventKind::Modify(notify::event::ModifyKind::Name(_)) => Self::Rename,
             _ => Self::Modify,
         }
     }
@@ -930,6 +931,33 @@ mod tests {
         assert!(p.starts_with("/tmp/xdg-test-runtime/ixd/"));
         assert!(p.extension().is_some_and(|e| e == "sock"));
         unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+    }
+
+    #[test]
+    fn from_notify_kind_maps_rename_correctly() {
+        use notify::EventKind;
+        use notify::event::ModifyKind;
+
+        // Rename events must map to FileOp::Rename, not Modify
+        let kind = EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::To));
+        assert_eq!(FileOp::from_notify_kind(kind), FileOp::Rename);
+
+        let kind = EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::From));
+        assert_eq!(FileOp::from_notify_kind(kind), FileOp::Rename);
+
+        let kind = EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Both));
+        assert_eq!(FileOp::from_notify_kind(kind), FileOp::Rename);
+
+        // Non-name Modify events must map to Modify, not Rename
+        let kind = EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content));
+        assert_eq!(FileOp::from_notify_kind(kind), FileOp::Modify);
+
+        // Create/Remove must NOT map to Rename
+        let kind = EventKind::Create(notify::event::CreateKind::File);
+        assert_eq!(FileOp::from_notify_kind(kind), FileOp::Create);
+
+        let kind = EventKind::Remove(notify::event::RemoveKind::File);
+        assert_eq!(FileOp::from_notify_kind(kind), FileOp::Delete);
     }
 
     #[test]

@@ -505,4 +505,53 @@ mod tests {
         cache.insert(t, list);
         assert!(cache.get(t).is_none());
     }
+
+    #[test]
+    fn oversized_entry_rejected() {
+        let cache = PostingCache::new(100); // 100 byte ceiling
+        let t = trigram(b'a', b'b', b'c');
+        // Create a posting list larger than 100 bytes
+        let list = PostingList {
+            entries: vec![PostingEntry {
+                file_id: 1,
+                offsets: vec![0; 500], // 500 offsets * 8 bytes = 4000+ bytes
+            }],
+        };
+
+        cache.insert(t, list);
+        // Oversized entry should NOT be stored
+        assert!(cache.get(t).is_none());
+        assert_eq!(*cache.memory_used.read().unwrap(), 0);
+    }
+
+    #[test]
+    fn evict_fraction_removes_oldest() {
+        let cache = PostingCache::new(10_000);
+        let t1 = trigram(b'a', b'b', b'c');
+        let t2 = trigram(b'b', b'c', b'd');
+        let t3 = trigram(b'c', b'd', b'e');
+        let t4 = trigram(b'd', b'e', b'f');
+
+        // Insert 4 entries in order
+        for &t in &[t1, t2, t3, t4] {
+            cache.insert(
+                t,
+                PostingList {
+                    entries: vec![PostingEntry {
+                        file_id: 1,
+                        offsets: vec![10],
+                    }],
+                },
+            );
+        }
+
+        // Evict 50% (should remove ~2 oldest entries)
+        cache.evict_fraction(0.5);
+
+        // t1 and t2 (oldest) should be evicted, t3 and t4 should remain
+        assert!(cache.get(t1).is_none());
+        assert!(cache.get(t2).is_none());
+        assert!(cache.get(t3).is_some());
+        assert!(cache.get(t4).is_some());
+    }
 }
