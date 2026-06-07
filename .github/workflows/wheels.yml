@@ -70,6 +70,9 @@ jobs:
             yum install -y openssl-devel
           manylinux: off
 
+      - name: Build CLI (for tests)
+        run: cargo build --release --bin ix
+
       - name: Run pytest
         if: ${{ !matrix.container }}
         working-directory: ix-py

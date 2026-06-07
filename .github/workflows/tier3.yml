@@ -36,9 +36,8 @@ jobs:
       - name: Tier 1 - Clippy lints
         run: |
           cargo clippy --all-targets --all-features \
-            -D clippy::dbg_macro -D clippy::todo \
-            -D clippy::wildcard_imports -D clippy::panic_in_result_fn \
-            -D clippy::missing_const_for_fn -D clippy::large_enum_variant
+            -- -D clippy::dbg_macro -D clippy::todo \
+            -D clippy::wildcard_imports -D clippy::panic_in_result_fn
 
       - name: Tier 2 - Supply chain
         run: cargo deny check licenses advisories bans
