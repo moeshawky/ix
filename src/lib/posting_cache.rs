@@ -394,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn basic_insert_get() -> Result<(), Box<dyn std::error::Error>> {
+    fn basic_insert_get() {
         let cache = PostingCache::new(1024 * 1024);
         let t = trigram(b'a', b'b', b'c');
         let list = PostingList {
@@ -412,12 +412,12 @@ mod tests {
         cache.insert(t, list.clone());
         let result = cache.get(t);
         assert!(result.is_some());
-        assert_eq!(result.ok_or("expected cached posting")?, list);
+        assert_eq!(result.unwrap(), list);
 
         let stats = cache.stats();
         assert_eq!(stats.hits, 1);
         assert_eq!(stats.misses, 1);
-        Ok(())
+
     }
 
     #[test]

@@ -170,31 +170,30 @@ mod tests {
     use super::RegexPool;
 
     #[test]
-    fn get_or_compile_hit_and_miss() -> Result<(), Box<dyn std::error::Error>> {
+    fn get_or_compile_hit_and_miss() {
         let pool = RegexPool::new(10);
-        let re = pool.get_or_compile(r"\d+")?;
+        let re = pool.get_or_compile(r"\d+").unwrap();
         assert!(re.is_match("123"));
 
-        let re2 = pool.get_or_compile(r"\d+")?;
+        let re2 = pool.get_or_compile(r"\d+").unwrap();
         assert!(re2.is_match("456"));
 
         let stats = pool.stats();
         assert_eq!(stats.hits, 1);
         assert_eq!(stats.misses, 1);
-        Ok(())
     }
 
     #[test]
-    fn eviction_at_max_entries() -> Result<(), Box<dyn std::error::Error>> {
+    fn eviction_at_max_entries() {
         let pool = RegexPool::new(2);
 
-        pool.get_or_compile("a")?;
+        pool.get_or_compile("a").unwrap();
         assert_eq!(pool.len(), 1);
 
-        pool.get_or_compile("b")?;
+        pool.get_or_compile("b").unwrap();
         assert_eq!(pool.len(), 2);
 
-        pool.get_or_compile("c")?;
+        pool.get_or_compile("c").unwrap();
         assert_eq!(pool.len(), 2);
 
         let stats = pool.stats();
@@ -208,14 +207,13 @@ mod tests {
         assert!(pool_read.contains_key("b"));
         assert!(pool_read.contains_key("c"));
         assert!(!pool_read.contains_key("a"));
-        Ok(())
     }
 
     #[test]
-    fn clear_empties_pool() -> Result<(), Box<dyn std::error::Error>> {
+    fn clear_empties_pool() {
         let pool = RegexPool::new(10);
-        pool.get_or_compile("x")?;
-        pool.get_or_compile("y")?;
+        pool.get_or_compile("x").unwrap();
+        pool.get_or_compile("y").unwrap();
         assert_eq!(pool.len(), 2);
 
         pool.clear();
@@ -224,33 +222,33 @@ mod tests {
 
         let stats = pool.stats();
         assert_eq!(stats.misses, 2);
-        Ok(())
+
     }
 
     #[test]
-    fn invalidate_removes_specific_entry() -> Result<(), Box<dyn std::error::Error>> {
+    fn invalidate_removes_specific_entry() {
         let pool = RegexPool::new(10);
-        pool.get_or_compile("alpha")?;
-        pool.get_or_compile("beta")?;
+        pool.get_or_compile("alpha").unwrap();
+        pool.get_or_compile("beta").unwrap();
         assert_eq!(pool.len(), 2);
 
         pool.invalidate("alpha");
         assert_eq!(pool.len(), 1);
 
-        pool.get_or_compile("alpha")?;
+        pool.get_or_compile("alpha").unwrap();
         let stats = pool.stats();
         assert_eq!(stats.misses, 3);
-        Ok(())
+
     }
 
     #[test]
-    fn unlimited_capacity() -> Result<(), Box<dyn std::error::Error>> {
+    fn unlimited_capacity() {
         let pool = RegexPool::new(0);
         for i in 0_u32..50_u32 {
-            pool.get_or_compile(&format!("p{i}"))?;
+            pool.get_or_compile(&format!("p{i}")).unwrap();
         }
         assert_eq!(pool.len(), 50);
-        Ok(())
+
     }
 
     #[test]
