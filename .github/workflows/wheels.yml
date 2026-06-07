@@ -64,7 +64,7 @@ jobs:
           args: --release --out dist
           before-script-linux: |
             yum install -y openssl-devel
-          manylinux: ${{ matrix.container && 'auto' || 'off' }}
+          manylinux: auto
 
       - name: Run pytest
         if: ${{ !matrix.container }}
