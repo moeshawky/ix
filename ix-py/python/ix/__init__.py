@@ -33,7 +33,7 @@ except ImportError as exc:
     raise ImportError(
         "ix native extension not available. "
         "Install a pre-built wheel for your platform:\n"
-        f"    pip install ix\n"
+        f"    pip install moeix\n"
         f"Platform: {_sys.platform}, "
         f"Python: {_sys.version_info.major}.{_sys.version_info.minor}\n"
         f"Original error: {exc}"
