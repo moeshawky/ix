@@ -109,12 +109,12 @@ fn match_content_stream<R: Read>(
     while buf_reader.read_line(&mut line)? > 0 {
         line_number += 1;
         let line_len = u64::try_from(line.len()).unwrap_or(0);
-        let trimmed_line = line.trim_end().to_string();
+        let trimmed_line_str = line.trim_end();
 
         // Fill context_after for pending matches
         for m in &mut pending_matches {
             if m.context_after.len() < options.context_lines {
-                m.context_after.push(trimmed_line.clone());
+                m.context_after.push(trimmed_line_str.to_string());
             }
         }
 
@@ -138,7 +138,7 @@ fn match_content_stream<R: Read>(
                 line_content: if options.count_only {
                     String::new()
                 } else {
-                    trimmed_line
+                    trimmed_line_str.to_string()
                 },
                 byte_offset: byte_offset + u64::try_from(m.start()).unwrap_or(0),
                 context_before: context_before_vec,
