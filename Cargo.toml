@@ -87,7 +87,7 @@ tempfile = "3"
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
 proptest = "1"
-llmosafe = { version = "0.7.2", features = ["testing"] }
+llmosafe = { version = "0.7.3", features = ["testing"] }
 
 [[bench]]
 name = "search"
