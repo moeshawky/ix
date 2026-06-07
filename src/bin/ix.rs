@@ -492,6 +492,11 @@ fn find_systemctl() -> std::ffi::OsString {
     std::ffi::OsString::from("systemctl")
 }
 
+#[cfg(not(target_os = "linux"))]
+fn find_systemctl() -> std::ffi::OsString {
+    std::ffi::OsString::from("systemctl")
+}
+
 #[cfg(feature = "notify")]
 #[allow(clippy::unnecessary_wraps)]
 fn handle_service(action: &ServiceAction) -> ix::error::Result<()> {
@@ -1149,6 +1154,7 @@ fn do_search(params: &SearchParams) -> ix::error::Result<()> {
         word_boundary: params.flags.word_boundary,
     };
 
+    #[allow(unused_variables)]
     let (matches, stats) = if let Some((path, index_root, beacon_opt)) = &index_info {
         // Check if daemon is live and try IPC search first (Unix only)
         #[cfg(unix)]

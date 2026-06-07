@@ -197,6 +197,7 @@ fn test_large_file_streaming() {
 }
 
 #[test]
+#[cfg(all(feature = "notify", unix))]
 fn test_search_path_prefix_filtering() {
     use ix::daemon_sock::{SearchQuery, execute_search};
 
