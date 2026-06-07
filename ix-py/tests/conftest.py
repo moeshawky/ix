@@ -60,7 +60,9 @@ def sample_project() -> Generator[Path, None, None]:
         "function hello() {\n    console.log('hello');\n}\n"
     )
 
-    # Build index using the ix CLI binary
+    # Build index using the ix CLI binary if available,
+    # otherwise use ix.build() from the library.
+    built = False
     cargo_target = Path(__file__).parent.parent.parent / "target" / "debug" / "ix"
     if not cargo_target.exists():
         cargo_target = Path(__file__).parent.parent.parent / "target" / "release" / "ix"
@@ -74,8 +76,14 @@ def sample_project() -> Generator[Path, None, None]:
                 timeout=30,
                 check=True,
             )
+            built = True
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
+
+    if not built:
+        import ix
+
+        ix.build(str(root))
 
     yield root
     shutil.rmtree(tmp, ignore_errors=True)
