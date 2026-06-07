@@ -64,6 +64,10 @@ def sample_project() -> Generator[Path, None, None]:
     cargo_target = Path(__file__).parent.parent.parent / "target" / "debug" / "ix"
     if not cargo_target.exists():
         cargo_target = Path(__file__).parent.parent.parent / "target" / "release" / "ix"
+    if not cargo_target.exists():
+        cargo_target = Path(__file__).parent.parent.parent / "target" / "debug" / "ix.exe"
+    if not cargo_target.exists():
+        cargo_target = Path(__file__).parent.parent.parent / "target" / "release" / "ix.exe"
 
     if cargo_target.exists():
         try:
