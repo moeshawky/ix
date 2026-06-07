@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// ix runtime configuration, loaded from `.ixd.toml`.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     /// Root directories to watch for indexing.
     #[serde(default)]
@@ -101,17 +101,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_config_default_watch_roots() {
+    fn test_config_default() {
         let config = Config::default();
-        assert!(config.watch_roots.is_empty());
-    }
-
-    #[test]
-    fn test_config_default_exclude_patterns() {
-        let config = Config::default();
-        assert_eq!(config.exclude_patterns.len(), 3);
-        assert_eq!(config.exclude_patterns[0], ".git");
-        assert_eq!(config.exclude_patterns[1], "node_modules");
-        assert_eq!(config.exclude_patterns[2], "target");
+        assert_eq!(
+            config,
+            Config {
+                watch_roots: Vec::new(),
+                exclude_patterns: vec![
+                    ".git".to_string(),
+                    "node_modules".to_string(),
+                    "target".to_string(),
+                ],
+            }
+        );
     }
 }

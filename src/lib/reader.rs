@@ -46,6 +46,8 @@ pub struct Reader {
     string_pool: StringPoolReader<'static>,
     inode: Option<u64>,
     cdx_blocks: Vec<CdxBlockEntry>,
+    /// Root directory derived from the shard path (parent of `.ix/`).
+    root: PathBuf,
 }
 
 /// Descriptor pointing into the trigram table for a single trigram.
@@ -157,12 +159,18 @@ impl Reader {
             Vec::new()
         };
 
+        let root = path
+            .parent()
+            .and_then(|p| p.parent())
+            .map_or_else(|| path.to_path_buf(), Path::to_path_buf);
+
         Ok(Self {
             mmap,
             header,
             string_pool,
             inode,
             cdx_blocks,
+            root,
         })
     }
 
@@ -461,9 +469,20 @@ impl Reader {
 
         let path = self.string_pool.resolve(path_off)?;
 
+        // Resolve relative paths against the index root so that file I/O
+        // works regardless of the caller's current working directory.
+        let resolved_path = {
+            let p = PathBuf::from(&path);
+            if p.is_relative() {
+                self.root.join(p)
+            } else {
+                p
+            }
+        };
+
         Ok(FileInfo {
             file_id,
-            path: PathBuf::from(path),
+            path: resolved_path,
             status,
             mtime_ns,
             size_bytes,

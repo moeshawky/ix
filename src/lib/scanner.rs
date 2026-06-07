@@ -259,10 +259,7 @@ impl Scanner {
             pending_matches = still_pending;
 
             if let Some(m) = regex.find(&line) {
-                let context_before_vec: Vec<String> = context_before
-                    .iter()
-                    .map(|s: &String| s.trim_end().to_string())
-                    .collect();
+                let context_before_vec: Vec<String> = context_before.iter().cloned().collect();
 
                 let new_match = Match {
                     file_path: path.to_owned(),
@@ -271,7 +268,7 @@ impl Scanner {
                     line_content: if options.count_only {
                         String::new()
                     } else {
-                        trimmed_line
+                        trimmed_line.clone()
                     },
                     byte_offset: byte_offset + u64::try_from(m.start()).unwrap_or(0),
                     context_before: context_before_vec,
@@ -294,9 +291,14 @@ impl Scanner {
             }
 
             if options.context_lines > 0 {
-                context_before.push_back(line.clone());
-                if context_before.len() > options.context_lines {
-                    context_before.pop_front();
+                if context_before.len() == options.context_lines {
+                    if let Some(mut old_line) = context_before.pop_front() {
+                        old_line.clear();
+                        old_line.push_str(&trimmed_line);
+                        context_before.push_back(old_line);
+                    }
+                } else {
+                    context_before.push_back(trimmed_line);
                 }
             }
 

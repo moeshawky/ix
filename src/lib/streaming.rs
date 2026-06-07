@@ -100,9 +100,14 @@ pub fn stream_file<R: Read>(
         }
 
         if options.context_lines > 0 {
-            context_before.push_back(trimmed_line.clone());
-            if context_before.len() > options.context_lines {
-                context_before.pop_front();
+            if context_before.len() == options.context_lines {
+                if let Some(mut old_line) = context_before.pop_front() {
+                    old_line.clear();
+                    old_line.push_str(&trimmed_line);
+                    context_before.push_back(old_line);
+                }
+            } else {
+                context_before.push_back(trimmed_line.clone());
             }
         }
 
