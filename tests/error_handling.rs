@@ -106,7 +106,7 @@ fn test_concurrent_file_modification_grace_period() {
     // As long as the reader opens successfully and we can execute a query,
     // the grace period is working (otherwise stale check would prevent reading).
     let mut executor = ix::executor::Executor::new(&reader);
-    let plan = ix::planner::Planner::plan("hello", false);
+    let plan = ix::planner::Planner::plan("hello", false).unwrap();
     let result = executor.execute(&plan, &ix::executor::QueryOptions::default());
 
     // The key assertion: the query should execute without error

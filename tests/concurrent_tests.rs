@@ -55,7 +55,7 @@ fn test_c5_concurrent_readers_same_index() {
             let mut results = Vec::new();
 
             for &(pattern, is_regex) in &queries {
-                let plan = Planner::plan(pattern, is_regex);
+                let plan = Planner::plan(pattern, is_regex).unwrap();
                 let (matches, _) = executor
                     .execute(&plan, &QueryOptions::default())
                     .expect("C5: Query must not fail under concurrency");
@@ -129,7 +129,7 @@ fn test_c5_parallel_cache_does_not_corrupt_results() {
             let mut executor = Executor::new(&reader);
             let mut results = Vec::new();
             for i in 0..50 {
-                let plan = Planner::plan("specific_match_found", false);
+                let plan = Planner::plan("specific_match_found", false).unwrap();
                 let (matches, _) = executor
                     .execute(&plan, &QueryOptions::default())
                     .expect("C5: Repeated query must not fail");

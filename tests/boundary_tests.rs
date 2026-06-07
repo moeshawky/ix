@@ -34,7 +34,7 @@ fn test_c1_delta_roundtrip_after_rebuild() {
     let reader = Reader::open(&index_path).unwrap();
     let mut executor = Executor::new(&reader);
 
-    let plan = Planner::plan("needle", false);
+    let plan = Planner::plan("needle", false).unwrap();
     let (matches, _) = executor.execute(&plan, &QueryOptions::default()).unwrap();
     assert_eq!(
         matches.len(),
@@ -73,7 +73,7 @@ fn test_c1_delta_tombstone_removes_file() {
     // Verify initial match
     let reader = Reader::open(&index_path).unwrap();
     let mut executor = Executor::new(&reader);
-    let plan = Planner::plan("remove_me", false);
+    let plan = Planner::plan("remove_me", false).unwrap();
     let (matches, _) = executor.execute(&plan, &QueryOptions::default()).unwrap();
     assert_eq!(matches.len(), 1, "C1: File must exist before tombstone");
 
@@ -124,7 +124,7 @@ fn test_c3_cdx_trigram_identity_at_block_boundaries() {
     let reader = Reader::open(&index_path).unwrap();
     let mut executor = Executor::new(&reader);
 
-    let plan = Planner::plan("abc", false);
+    let plan = Planner::plan("abc", false).unwrap();
     let (matches, stats) = executor.execute(&plan, &QueryOptions::default()).unwrap();
 
     assert!(
@@ -166,7 +166,7 @@ fn test_c3_cdx_block_index_binary_search_correct() {
     let mut executor = Executor::new(&reader);
 
     for kw in ["key_0000", "key_0063"] {
-        let plan = Planner::plan(kw, false);
+        let plan = Planner::plan(kw, false).unwrap();
         let (matches, _) = executor.execute(&plan, &QueryOptions::default()).unwrap();
         assert_eq!(
             matches.len(),
@@ -176,7 +176,7 @@ fn test_c3_cdx_block_index_binary_search_correct() {
     }
 
     // Search for a non-existent key near the end
-    let plan = Planner::plan("zzz_not_found", false);
+    let plan = Planner::plan("zzz_not_found", false).unwrap();
     let (matches, _) = executor.execute(&plan, &QueryOptions::default()).unwrap();
     assert!(
         matches.is_empty(),
@@ -211,14 +211,14 @@ fn test_c4_build_sequence_independent_results() {
     let reader = Reader::open(&index_path).unwrap();
     let mut executor = Executor::new(&reader);
 
-    let plan_a = Planner::plan("alpha", false);
+    let plan_a = Planner::plan("alpha", false).unwrap();
     let (matches_a, _) = executor.execute(&plan_a, &QueryOptions::default()).unwrap();
     let names_a: std::collections::BTreeSet<&str> = matches_a
         .iter()
         .map(|m| m.file_path.file_name().unwrap().to_str().unwrap())
         .collect();
 
-    let plan_b = Planner::plan("beta", false);
+    let plan_b = Planner::plan("beta", false).unwrap();
     let (matches_b, _) = executor.execute(&plan_b, &QueryOptions::default()).unwrap();
     let names_b: std::collections::BTreeSet<&str> = matches_b
         .iter()
@@ -236,7 +236,7 @@ fn test_c4_build_sequence_independent_results() {
     let reader2 = Reader::open(&index_path).unwrap();
     let mut executor2 = Executor::new(&reader2);
 
-    let plan_alpha = Planner::plan("alpha", false);
+    let plan_alpha = Planner::plan("alpha", false).unwrap();
     let (matches, _) = executor2
         .execute(&plan_alpha, &QueryOptions::default())
         .unwrap();
@@ -268,7 +268,7 @@ fn test_c1_empty_index_contract() {
     let reader = Reader::open(&index_path).unwrap();
     let mut executor = Executor::new(&reader);
 
-    let plan = Planner::plan("anything", false);
+    let plan = Planner::plan("anything", false).unwrap();
     let (matches, _) = executor.execute(&plan, &QueryOptions::default()).unwrap();
     assert!(
         matches.is_empty(),
@@ -319,7 +319,7 @@ fn test_c3_delta_only_keyword_included_in_results() {
     let index_path = index_dir.join("shard.ix");
     let reader = Reader::open(&index_path).unwrap();
     let mut executor = Executor::new(&reader);
-    let plan_alpha = Planner::plan("alpha", false);
+    let plan_alpha = Planner::plan("alpha", false).unwrap();
     let (matches, _) = executor
         .execute(&plan_alpha, &QueryOptions::default())
         .unwrap();
@@ -338,7 +338,7 @@ fn test_c3_delta_only_keyword_included_in_results() {
     // Search for the delta-only term
     let reader2 = Reader::open(&index_path).unwrap();
     let mut executor2 = Executor::new(&reader2);
-    let plan_delta = Planner::plan("delta_only_keyword", false);
+    let plan_delta = Planner::plan("delta_only_keyword", false).unwrap();
     let (matches2, _) = executor2
         .execute(&plan_delta, &QueryOptions::default())
         .unwrap();
@@ -385,7 +385,7 @@ fn test_c3_regex_delta_only_pattern_included_in_results() {
     let index_path = index_dir.join("shard.ix");
     let reader = Reader::open(&index_path).unwrap();
     let mut executor = Executor::new(&reader);
-    let plan_plain = Planner::plan("plain", false);
+    let plan_plain = Planner::plan("plain", false).unwrap();
     let (matches, _) = executor
         .execute(&plan_plain, &QueryOptions::default())
         .unwrap();
@@ -404,7 +404,7 @@ fn test_c3_regex_delta_only_pattern_included_in_results() {
     // Regex search for pattern that only matches delta file
     let reader2 = Reader::open(&index_path).unwrap();
     let mut executor2 = Executor::new(&reader2);
-    let plan_regex = Planner::plan("ERROR.*tim", true);
+    let plan_regex = Planner::plan("ERROR.*tim", true).unwrap();
     let (matches2, _) = executor2
         .execute(&plan_regex, &QueryOptions::default())
         .unwrap();

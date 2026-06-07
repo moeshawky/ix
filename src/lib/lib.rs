@@ -27,7 +27,7 @@
 //! use ix::planner::Planner;
 //!
 //! let reader = Reader::open(".ix/shard.ix")?;
-//! let plan = Planner::plan("struct Config", false);
+//! let plan = Planner::plan("struct Config", false)?;
 //! let mut executor = Executor::new(&reader);
 //! let (matches, stats) = executor.execute(&plan, &QueryOptions::default())?;
 //! ```

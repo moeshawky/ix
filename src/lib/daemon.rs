@@ -115,7 +115,7 @@ pub fn run_many(roots: &[PathBuf]) -> crate::error::Result<()> {
     }
 
     SHUTDOWN.store(false, Ordering::SeqCst);
-    install_signal_handlers();
+    install_signal_handlers()?;
 
     let guard = ResourceGuard::auto(0.6);
     let instance_id = format::instance_id_now();
@@ -337,7 +337,7 @@ fn check_concurrent_instance(
     Ok(())
 }
 
-fn install_signal_handlers() {
+fn install_signal_handlers() -> crate::error::Result<()> {
     use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
     let action = SigAction::new(
         SigHandler::Handler(handle_signal),
@@ -346,9 +346,12 @@ fn install_signal_handlers() {
     );
     // SAFETY: handler only stores to an atomic bool — async-signal-safe.
     unsafe {
-        sigaction(Signal::SIGTERM, &action).expect("failed to install SIGTERM handler");
-        sigaction(Signal::SIGINT, &action).expect("failed to install SIGINT handler");
+        sigaction(Signal::SIGTERM, &action)
+            .map_err(|e| crate::error::Error::Config(format!("SIGTERM handler: {e}")))?;
+        sigaction(Signal::SIGINT, &action)
+            .map_err(|e| crate::error::Error::Config(format!("SIGINT handler: {e}")))?;
     }
+    Ok(())
 }
 
 fn wait_for_memory(guard: &ResourceGuard, log_prefix: &str) {

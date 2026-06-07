@@ -29,7 +29,7 @@ fn test_edge_case_file_sizes() {
     let mut executor = Executor::new(&reader);
 
     // Search for "abc"
-    let plan = Planner::plan("abc", false);
+    let plan = Planner::plan("abc", false).unwrap();
     let (matches, _) = executor.execute(&plan, &QueryOptions::default()).unwrap();
 
     // Should find in three.txt and four.txt
@@ -58,7 +58,7 @@ fn test_repetitive_data_explosion() {
     let reader = Reader::open(&index_path).unwrap();
     let mut executor = Executor::new(&reader);
 
-    let plan = Planner::plan("abc", false);
+    let plan = Planner::plan("abc", false).unwrap();
     let (matches, stats) = executor
         .execute(
             &plan,
@@ -98,7 +98,7 @@ fn test_context_merging_logic() {
     let reader = Reader::open(&index_path).unwrap();
     let mut executor = Executor::new(&reader);
 
-    let plan = Planner::plan("match", false);
+    let plan = Planner::plan("match", false).unwrap();
     let (matches, _) = executor
         .execute(
             &plan,
@@ -136,7 +136,7 @@ fn test_type_filtering_robustness() {
     let reader = Reader::open(&index_path).unwrap();
     let mut executor = Executor::new(&reader);
 
-    let plan = Planner::plan("findme", false);
+    let plan = Planner::plan("findme", false).unwrap();
 
     // Only Rust
     let (matches, _) = executor
@@ -183,7 +183,7 @@ fn test_large_file_streaming() {
     let reader = Reader::open(&index_path).unwrap();
     let mut executor = Executor::new(&reader);
 
-    let plan = Planner::plan("pattern", false);
+    let plan = Planner::plan("pattern", false).unwrap();
     let options = QueryOptions {
         max_results: 10,
         ..Default::default()
@@ -231,6 +231,7 @@ fn test_search_path_prefix_filtering() {
         archive: false,
         binary: false,
         search_path: Some(root.join("src")),
+        threads: 0,
     };
 
     let results = execute_search(root, &query).expect("execute_search with path filter");
@@ -284,7 +285,7 @@ fn test_builder_rss_fallback_code_path() {
 
     let reader = Reader::open(&output).unwrap();
     let mut executor = Executor::new(&reader);
-    let plan = Planner::plan("line", false);
+    let plan = Planner::plan("line", false).unwrap();
     let (matches, _) = executor.execute(&plan, &QueryOptions::default()).unwrap();
     assert_eq!(matches.len(), 300);
 }

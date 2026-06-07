@@ -240,6 +240,9 @@ pub struct SearchQuery {
     /// Absolute path prefix to filter results (None = search entire root).
     #[serde(default)]
     pub search_path: Option<std::path::PathBuf>,
+    /// Number of Rayon threads to use for parallel work.
+    #[serde(default)]
+    pub threads: usize,
 }
 
 /// Graceful shutdown notice sent from server to clients.
@@ -852,7 +855,7 @@ pub fn execute_search(
             word_boundary: query.word_boundary,
         },
         executor.regex_pool(),
-    );
+    )?;
 
     let options = QueryOptions {
         count_only: false,
@@ -861,7 +864,7 @@ pub fn execute_search(
         type_filter: query.file_types.clone(),
         context_lines: query.context_lines,
         decompress: query.decompress,
-        threads: 0,
+        threads: query.threads,
         multiline: query.multiline,
         archive: query.archive,
         binary: query.binary,
@@ -1205,6 +1208,7 @@ mod tests {
             archive: false,
             binary: false,
             search_path: Some(PathBuf::from("/abs/path")),
+            threads: 0,
         };
         let json = serde_json::to_string(&q).expect("serialize");
         let back: SearchQuery = serde_json::from_str(&json).expect("deserialize");

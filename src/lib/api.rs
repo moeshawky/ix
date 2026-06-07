@@ -29,7 +29,7 @@ pub fn execute(
             is_regex,
             ..Default::default()
         },
-    );
+    )?;
     let mut executor = Executor::new(reader);
     executor.execute(&plan, options)
 }

@@ -265,7 +265,7 @@ fn execute_local_search(
             multiline: params.flags.multiline,
             word_boundary: params.flags.word_boundary,
         },
-    );
+    )?;
     let mut executor = Executor::new(&reader);
 
     if let Some(delta_path) = index_path.parent().map(|p| p.join("shard.ix.delta")) {
@@ -336,6 +336,7 @@ fn try_ipc_search(
         archive: params.flags.archive,
         binary: params.flags.binary,
         search_path: Some(search_path_abs.to_path_buf()),
+        threads: params.threads,
     };
 
     let results = client.search(query).ok()?;

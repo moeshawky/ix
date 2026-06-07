@@ -83,8 +83,11 @@ impl Planner {
     /// Plan a literal or regex query with default options (non-unicode,
     /// case-sensitive). See [`plan_with_options`](Self::plan_with_options)
     /// for full control.
-    #[must_use]
-    pub fn plan(pattern: &str, is_regex: bool) -> QueryPlan {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if regex compilation fails.
+    pub fn plan(pattern: &str, is_regex: bool) -> crate::error::Result<QueryPlan> {
         Self::plan_with_options(
             pattern,
             QueryOptions {
@@ -98,57 +101,49 @@ impl Planner {
     ///
     /// Identical to [`plan_with_options`](Self::plan_with_options) but
     /// sources compiled regexes from `pool` when available.
-    #[must_use]
-    pub fn plan_with_pool(pattern: &str, options: QueryOptions, pool: &RegexPool) -> QueryPlan {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if regex compilation fails.
+    pub fn plan_with_pool(
+        pattern: &str,
+        options: QueryOptions,
+        pool: &RegexPool,
+    ) -> crate::error::Result<QueryPlan> {
         Self::plan_impl(pattern, options, Some(pool))
     }
 
     /// Plan a query with full options.
     ///
-    /// On regex compilation failure, falls back to `^$` (matches nothing)
-    /// rather than panicking. Library code must never panic per AGENTS.md.
-    #[must_use]
-    pub fn plan_with_options(pattern: &str, options: QueryOptions) -> QueryPlan {
+    /// # Errors
+    ///
+    /// Returns an error if regex compilation fails.
+    pub fn plan_with_options(
+        pattern: &str,
+        options: QueryOptions,
+    ) -> crate::error::Result<QueryPlan> {
         Self::plan_impl(pattern, options, None)
     }
 
-    /// Compile a regex, preferring the pool if available. On failure,
-    /// logs a warning and returns `"^$"` (matches nothing) instead of
-    /// panicking. Library code must never call expect/panic per AGENTS.md.
-    fn compile_regex(pat: &str, pool: Option<&RegexPool>) -> Regex {
+    /// Compile a regex, preferring the pool if available.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::Regex`] if the pattern is invalid.
+    fn compile_regex(pat: &str, pool: Option<&RegexPool>) -> crate::error::Result<Regex> {
         if let Some(p) = pool
             && let Ok(re) = p.get_or_compile(pat)
         {
-            return re;
+            return Ok(re);
         }
-        Regex::new(pat).unwrap_or_else(|_| {
-            tracing::warn!(
-                "ix: regex compilation failed for '{}', using '^$' fallback",
-                pat
-            );
-            // ^$ matches end-of-line only — effectively matches nothing useful.
-            // This is safer than "" which matches EVERY line.
-            #[allow(clippy::trivial_regex)]
-            match Regex::new("^$") {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::error!("regex crate cannot compile '^$': {e}. Using '.' as fallback.");
-                    Regex::new(".").unwrap_or_else(|e2| {
-                        tracing::error!("regex crate fatal error: {e2}. Returning empty pattern.");
-                        // The regex crate is fundamentally broken.
-                        // Return an empty pattern rather than panicking.
-                        #[allow(clippy::trivial_regex)]
-                        Regex::new("").unwrap_or_else(|e3| {
-                            tracing::error!("regex crate is completely non-functional: {e3}");
-                            std::process::abort()
-                        })
-                    })
-                }
-            }
-        })
+        Ok(Regex::new(pat)?)
     }
 
-    fn plan_impl(pattern: &str, options: QueryOptions, pool: Option<&RegexPool>) -> QueryPlan {
+    fn plan_impl(
+        pattern: &str,
+        options: QueryOptions,
+        pool: Option<&RegexPool>,
+    ) -> crate::error::Result<QueryPlan> {
         let mut final_pattern = pattern.to_string();
         let mut use_regex = options.is_regex;
         if options.multiline && use_regex {
@@ -172,17 +167,17 @@ impl Planner {
             let trigrams = Extractor::extract_set(&bytes);
 
             let escaped = regex::escape(&final_pattern);
-            let regex = Self::compile_regex(&escaped, pool);
+            let regex = Self::compile_regex(&escaped, pool)?;
 
             if trigrams.is_empty() {
-                return QueryPlan::FullScan { regex };
+                return Ok(QueryPlan::FullScan { regex });
             }
 
-            return QueryPlan::Literal {
+            return Ok(QueryPlan::Literal {
                 pattern: bytes,
                 trigrams,
                 regex,
-            };
+            });
         }
 
         // Case-insensitive literal: per-position trigram groups.
@@ -191,16 +186,16 @@ impl Planner {
             let bytes = final_pattern.as_bytes();
             let groups = Extractor::extract_groups_case_insensitive(bytes);
             let regex_pat = format!("(?i){}", regex::escape(&final_pattern));
-            let regex = Self::compile_regex(&regex_pat, pool);
+            let regex = Self::compile_regex(&regex_pat, pool)?;
 
             if groups.is_empty() {
-                return QueryPlan::FullScan { regex };
+                return Ok(QueryPlan::FullScan { regex });
             }
 
-            return QueryPlan::CaseInsensitive {
+            return Ok(QueryPlan::CaseInsensitive {
                 regex,
                 trigram_groups: groups,
-            };
+            });
         }
 
         let regex_pat = if options.ignore_case && !final_pattern.starts_with("(?i)") {
@@ -209,10 +204,10 @@ impl Planner {
             final_pattern.clone()
         };
 
-        let regex = Self::compile_regex(&regex_pat, pool);
+        let regex = Self::compile_regex(&regex_pat, pool)?;
 
         let Ok(hir) = regex_syntax::parse(&final_pattern) else {
-            return QueryPlan::FullScan { regex };
+            return Ok(QueryPlan::FullScan { regex });
         };
 
         let mut literals = Vec::new();
@@ -222,7 +217,7 @@ impl Planner {
         // handles matching, and extracting trigram groups from regex literals
         // adds complexity without much narrowing benefit.
         if options.ignore_case {
-            return QueryPlan::FullScan { regex };
+            return Ok(QueryPlan::FullScan { regex });
         }
 
         let required_trigram_sets: Vec<Vec<Trigram>> = literals
@@ -232,12 +227,12 @@ impl Planner {
             .collect();
 
         if required_trigram_sets.is_empty() {
-            QueryPlan::FullScan { regex }
+            Ok(QueryPlan::FullScan { regex })
         } else {
-            QueryPlan::RegexWithLiterals {
+            Ok(QueryPlan::RegexWithLiterals {
                 regex,
                 required_trigram_sets,
-            }
+            })
         }
     }
 

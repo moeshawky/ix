@@ -31,7 +31,7 @@ fn integration_search_literal() {
     let reader = Reader::open(&index_path).unwrap();
     let mut executor = Executor::new(&reader);
 
-    let plan = Planner::plan("hello", false);
+    let plan = Planner::plan("hello", false).unwrap();
     let (matches, _) = executor.execute(&plan, &QueryOptions::default()).unwrap();
     assert_eq!(matches.len(), 2, "Expected 2 files matching 'hello'");
     let file_names: std::collections::BTreeSet<&str> = matches
@@ -66,7 +66,7 @@ fn integration_search_regex() {
     let reader = Reader::open(&index_path).unwrap();
     let mut executor = Executor::new(&reader);
 
-    let plan = Planner::plan("let [a-z] =", true);
+    let plan = Planner::plan("let [a-z] =", true).unwrap();
     let (matches, _) = executor.execute(&plan, &QueryOptions::default()).unwrap();
     assert_eq!(
         matches.len(),
