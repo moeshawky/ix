@@ -16,7 +16,7 @@ moeix = { version = "0.12.0", path = "..", default-features = false, features = 
 pyo3 = { version = "0.25", features = ["extension-module"] }
 memmap2 = "0.9"
 rayon = "1"
-llmosafe = "0.7.2"
+llmosafe = "0.7.3"
 
 [features]
 default = ["notify"]
