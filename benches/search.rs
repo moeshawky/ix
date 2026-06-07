@@ -53,7 +53,7 @@ fn bench_search_literal(c: &mut Criterion) {
     let index_path = root.join(".ix/shard.ix");
     let reader = Reader::open(&index_path).unwrap();
     let mut executor = Executor::new(&reader);
-    let plan = Planner::plan("hello", false);
+    let plan = Planner::plan("hello", false).unwrap();
     let options = ix::executor::QueryOptions::default();
 
     c.bench_function("search_literal_100_files_1mb_total", |b| {
