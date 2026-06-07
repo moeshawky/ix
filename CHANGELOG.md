@@ -4,11 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.12.0] - 2026-06-07
+## [0.12.1] - 2026-06-07
 
 ### Fixed
 - **Library panic elimination** — `sigaction()` in `daemon.rs` now returns `Result` instead of panicking via `expect()`. `compile_regex()` in `planner.rs` now returns `Result<Regex>` instead of calling `abort()`. Both comply with AGENTS.md no-panic library constraint.
 - **CLI→daemon thread forwarding** — `SearchQuery` wire protocol now carries `threads` field. The `-j`/`--threads` CLI flag is forwarded to the daemon instead of being silently ignored.
+- **Python bindings QueryPlan error handling** — Handle `Result<QueryPlan>` in Python bindings properly when compiling regular expressions.
+- **Upgrade llmosafe to 0.7.3** — Tightened memory safety net and dependency upgrades.
+
+### Fixed (clippy & test)
+- Suppressed `clippy::unnecessary_wraps` in handle_service stubs.
+- Fixed `cast_lossless` clippy lint in builder `free_bytes_at`.
+- Fixed `sample_project` test fixture to use `ix.build()` as fallback.
+- Fixed two macOS CI test failures (such as `rss_bytes_is_non_negative` test).
+
+## [0.12.0] - 2026-06-07
+
+### Fixed
 - **Reader path resolution** — `Reader::get_file()` now resolves relative paths from the string pool against the index root, so file I/O works regardless of the caller's CWD. Previously, Python bindings returned `files_failed_verify: 1` when CWD differed from the index root.
 - **`ix.build()` on fresh directories** — `Index.build()` is now a `@staticmethod` that creates an index without requiring an existing `.ix/shard.ix`. The convenience `ix.build(path)` function works on first build.
 - **Stale cache after rebuild** — `Index.rebuild()` now clears posting, neg, and regex caches after rebuilding, preventing stale cached results from being returned.
