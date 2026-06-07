@@ -205,10 +205,11 @@ impl PyIndex {
         }
     }
 
-    /// Build or rebuild the index for this root directory.
+    /// Rebuild the index for this root directory.
     ///
     /// Requires the `notify` feature. Runs the full builder pipeline
-    /// (walk, scan, serialize) with the GIL released.
+    /// (walk, scan, serialize) with the GIL released, then reopens
+    /// the reader so subsequent searches see the fresh data.
     ///
     /// # Arguments
     /// * `max_file_size_mb` - Skip files larger than this limit in MB.
@@ -222,7 +223,7 @@ impl PyIndex {
     /// Raises `IxIoError` / `IxConfigError` on build failures.
     #[cfg(feature = "notify")]
     #[pyo3(signature = (*, max_file_size_mb = 100, exclude_dirs = None))]
-    pub fn build(
+    pub fn rebuild(
         &mut self,
         py: Python<'_>,
         max_file_size_mb: u64,
@@ -261,6 +262,9 @@ impl PyIndex {
             })
             .map_err(crate::error::to_pyerr)?;
 
+        self.posting_cache.invalidate_all();
+        self.neg_cache.clear();
+        self.regex_pool.clear();
         self.reader = Reader::open(&self.index_path).map_err(crate::error::to_pyerr)?;
         self.closed
             .store(false, std::sync::atomic::Ordering::Release);
@@ -269,12 +273,77 @@ impl PyIndex {
         Ok(dict.unbind())
     }
 
+    /// Build an index for `path` without requiring an existing index.
+    ///
+    /// This is a `@staticmethod` so `ix.build(path)` works even when no
+    /// `.ix/shard.ix` exists yet.  Creates the builder, runs the full
+    /// pipeline (walk, scan, serialize), and returns build statistics.
+    ///
+    /// # Arguments
+    /// * `path` - Root directory containing source files.
+    /// * `max_file_size_mb` - Skip files larger than this limit in MB.
+    /// * `exclude_dirs` - Directory names to exclude from the walk.
+    ///
+    /// # Returns
+    /// Dictionary with 6 build-statistics fields.
+    ///
+    /// # Errors
+    /// Raises `NotImplementedError` if built without the `notify` feature.
+    /// Raises `IxIoError` / `IxConfigError` on build failures.
+    #[cfg(feature = "notify")]
+    #[staticmethod]
+    #[pyo3(signature = (path, *, max_file_size_mb = 100, exclude_dirs = None))]
+    pub fn build(
+        py: Python<'_>,
+        path: &str,
+        max_file_size_mb: u64,
+        exclude_dirs: Option<Vec<String>>,
+    ) -> PyResult<Py<PyDict>> {
+        let root = std::path::absolute(path)
+            .map_err(|e| PyErr::new::<crate::error::IxIoError, _>(format!("invalid path: {e}")))?;
+        let max_bytes = max_file_size_mb * 1024 * 1024;
+        let exclude = exclude_dirs;
+
+        let fields = py
+            .allow_threads(|| -> Result<(u64, u64, u64, u64, u64), ix::error::Error> {
+                let mut builder = ix::builder::Builder::new(&root)?;
+                builder.set_max_file_size(max_bytes);
+                if let Some(dirs) = exclude {
+                    let mut b = builder.with_exclude_patterns(dirs);
+                    b.build()?;
+                    let s = b.stats();
+                    Ok((
+                        s.files_scanned,
+                        s.files_skipped_binary,
+                        s.files_skipped_size,
+                        s.bytes_scanned,
+                        s.unique_trigrams,
+                    ))
+                } else {
+                    builder.build()?;
+                    let s = builder.stats();
+                    Ok((
+                        s.files_scanned,
+                        s.files_skipped_binary,
+                        s.files_skipped_size,
+                        s.bytes_scanned,
+                        s.unique_trigrams,
+                    ))
+                }
+            })
+            .map_err(crate::error::to_pyerr)?;
+
+        let dict = build_stats_dict(py, &root, fields)?;
+        Ok(dict.unbind())
+    }
+
     /// Stub for build when notify feature is absent.
     #[cfg(not(feature = "notify"))]
     #[allow(unused_variables)]
-    #[pyo3(signature = (*, max_file_size_mb = 100, exclude_dirs = None))]
+    #[pyo3(signature = (path, *, max_file_size_mb = 100, exclude_dirs = None))]
     pub fn build(
-        &self,
+        _py: Python<'_>,
+        path: &str,
         max_file_size_mb: u64,
         exclude_dirs: Option<Vec<String>>,
     ) -> PyResult<Py<PyDict>> {

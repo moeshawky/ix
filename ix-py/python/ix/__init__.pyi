@@ -19,6 +19,7 @@ class Match:
     is_binary: bool
 
     def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
     def __repr__(self) -> str: ...
 
 class SearchResult:
@@ -51,7 +52,14 @@ class Index:
         count_only: bool = False,
         files_only: bool = False,
     ) -> SearchResult: ...
+    @staticmethod
     def build(
+        path: str,
+        *,
+        max_file_size_mb: int = 100,
+        exclude_dirs: list[str] | None = None,
+    ) -> dict[str, Any]: ...
+    def rebuild(
         self,
         *,
         max_file_size_mb: int = 100,

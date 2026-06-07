@@ -122,7 +122,7 @@ def test_wrong_path_type_error() -> None:
 
 
 def test_build_no_notify_stub() -> None:
-    """build() on index with notify may succeed or raise NotImplementedError."""
+    """rebuild() on index with notify may succeed or raise NotImplementedError."""
     import tempfile
     from pathlib import Path
 
@@ -143,8 +143,8 @@ def test_build_no_notify_stub() -> None:
         )
         idx = ix.Index(str(root))
         try:
-            result = idx.build()
-            # If build succeeds, verify dict format
+            result = idx.rebuild()
+            # If rebuild succeeds, verify dict format
             assert "files_scanned" in result
         except NotImplementedError:
             pass  # ok if notify feature absent

@@ -96,8 +96,7 @@ def build(path: str, **kwargs: object) -> dict[str, object]:
         IxConfigError: On configuration errors.
         NotImplementedError: If ix-py was built without the notify feature.
     """
-    idx = Index(path)
-    return idx.build(**kwargs)
+    return Index.build(path, **kwargs)
 
 
 def stats(path: str) -> dict[str, object]:
