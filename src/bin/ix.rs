@@ -347,10 +347,12 @@ fn main() {
     let cli = Cli::parse();
 
     if cli.threads > 0 {
-        rayon::ThreadPoolBuilder::new()
+        if let Err(e) = rayon::ThreadPoolBuilder::new()
             .num_threads(cli.threads)
             .build_global()
-            .expect("failed to initialize global thread pool");
+        {
+            eprintln!("ix: warning: failed to initialize global thread pool: {e}");
+        }
     }
 
     if let Some(cmd) = cli.command {
@@ -476,6 +478,19 @@ fn main() {
     }
 }
 
+fn find_systemctl() -> std::ffi::OsString {
+    let usr_bin = std::path::Path::new("/usr/bin/systemctl");
+    if usr_bin.exists() {
+        return usr_bin.as_os_str().to_os_string();
+    }
+    let bin = std::path::Path::new("/bin/systemctl");
+    if bin.exists() {
+        return bin.as_os_str().to_os_string();
+    }
+    // Fallback to path lookup if neither exists
+    std::ffi::OsString::from("systemctl")
+}
+
 #[cfg(feature = "notify")]
 #[allow(clippy::unnecessary_wraps)]
 fn handle_service(action: ServiceAction) -> ix::error::Result<()> {
@@ -525,7 +540,7 @@ WantedBy=default.target
                 std::fs::write(&service_file, service_content)?;
 
                 // Reload systemd
-                let status = std::process::Command::new("systemctl")
+                let status = std::process::Command::new(find_systemctl())
                     .args(["--user", "daemon-reload"])
                     .status()?;
                 if !status.success() {
@@ -539,7 +554,7 @@ WantedBy=default.target
                 println!("Run 'ix service start' to start the daemon.");
             }
             ServiceAction::Start => {
-                let status = std::process::Command::new("systemctl")
+                let status = std::process::Command::new(find_systemctl())
                     .args(["--user", "enable", "--now", "ixd"])
                     .status()?;
                 if !status.success() {
@@ -550,7 +565,7 @@ WantedBy=default.target
                 println!("ixd service started.");
             }
             ServiceAction::Stop => {
-                let status = std::process::Command::new("systemctl")
+                let status = std::process::Command::new(find_systemctl())
                     .args(["--user", "stop", "ixd"])
                     .status()?;
                 if !status.success() {
@@ -561,7 +576,7 @@ WantedBy=default.target
                 println!("ixd service stopped.");
             }
             ServiceAction::Restart => {
-                let status = std::process::Command::new("systemctl")
+                let status = std::process::Command::new(find_systemctl())
                     .args(["--user", "restart", "ixd"])
                     .status()?;
                 if !status.success() {
