@@ -230,7 +230,7 @@ fn test_search_path_prefix_filtering() {
         multiline: false,
         archive: false,
         binary: false,
-        search_path: Some(root.join("src").canonicalize().unwrap()),
+        search_path: Some(root.join("src")),
     };
 
     let results = execute_search(root, &query).expect("execute_search with path filter");
