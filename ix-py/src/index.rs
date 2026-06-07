@@ -178,7 +178,8 @@ impl PyIndex {
                 multiline,
                 word_boundary,
             },
-        );
+        )
+        .map_err(crate::error::to_pyerr)?;
 
         let options = ix::executor::QueryOptions {
             context_lines,
