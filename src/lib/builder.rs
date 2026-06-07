@@ -661,8 +661,12 @@ impl Builder {
             return Err(std::io::Error::last_os_error());
         }
         // statvfs fields are fsblkcnt_t (platform-width); explicit u64
-        // cast required for multiplication safety on 32-bit targets.
-        #[allow(clippy::unnecessary_cast)]
+        // conversion required for multiplication safety on 32-bit targets.
+        #[allow(
+            clippy::unnecessary_cast,
+            clippy::cast_lossless,
+            clippy::useless_conversion
+        )]
         Ok(stat.f_bavail as u64 * stat.f_frsize as u64)
     }
 
