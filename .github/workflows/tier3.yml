@@ -66,4 +66,4 @@ jobs:
 
       - name: Deny report
         if: always()
-        run: cargo deny check licenses advisories bans --output json > deny-report.json || true
+        run: cargo deny --format json check licenses advisories bans > deny-report.json || true
