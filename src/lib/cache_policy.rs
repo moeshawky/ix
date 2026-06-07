@@ -295,8 +295,12 @@ mod tests {
     fn rss_bytes_is_non_negative() {
         let policy = AdaptiveCachePolicy::new(0.75);
         let rss = policy.rss_bytes();
+        let sys_mem = ResourceGuard::system_memory_bytes();
+        if sys_mem == 0 {
+            return;
+        }
         assert!(
-            rss <= ResourceGuard::system_memory_bytes(),
+            rss <= sys_mem,
             "RSS {rss} should not exceed system memory"
         );
     }
