@@ -61,9 +61,10 @@ def sample_project() -> Generator[Path, None, None]:
     )
 
     # Build index using the ix CLI binary
-    cargo_target = Path(__file__).parent.parent.parent / "target" / "debug" / "ix"
+    binary_name = "ix.exe" if sys.platform == "win32" else "ix"
+    cargo_target = Path(__file__).parent.parent.parent / "target" / "debug" / binary_name
     if not cargo_target.exists():
-        cargo_target = Path(__file__).parent.parent.parent / "target" / "release" / "ix"
+        cargo_target = Path(__file__).parent.parent.parent / "target" / "release" / binary_name
 
     if cargo_target.exists():
         try:
