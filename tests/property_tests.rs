@@ -10,9 +10,9 @@ use proptest::prelude::*;
 // Trigram extraction properties
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// Property: Trigram roundtrip is lossless.
-/// For any 3 bytes without NUL, `from_bytes` followed by byte decomposition
-/// must recover the original bytes.
+// Property: Trigram roundtrip is lossless.
+// For any 3 bytes without NUL, `from_bytes` followed by byte decomposition
+// must recover the original bytes.
 proptest! {
     #[test]
     fn prop_trigram_roundtrip_lossless(a in 1u8..=255, b in 1u8..=255, c in 1u8..=255) {
@@ -26,8 +26,8 @@ proptest! {
     }
 }
 
-/// Property: Trigram extraction from an indexed file must produce the same
-/// set of unique trigrams as direct extraction.
+// Property: Trigram extraction from an indexed file must produce the same
+// set of unique trigrams as direct extraction.
 proptest! {
     #[test]
     fn prop_extraction_idempotent(s in "[a-zA-Z0-9 \t\n]{3,200}") {
@@ -71,7 +71,7 @@ fn arb_posting_list() -> impl Strategy<Value = ix::posting::PostingList> {
     )
 }
 
-/// Property: PostingList encode→decode roundtrip is lossless
+// Property: PostingList encode→decode roundtrip is lossless
 proptest! {
     #[test]
     fn prop_posting_roundtrip_lossless(list in arb_posting_list()) {
@@ -87,7 +87,7 @@ proptest! {
     }
 }
 
-/// Property: Encoding is never empty for non-empty lists
+// Property: Encoding is never empty for non-empty lists
 proptest! {
     #[test]
     fn prop_posting_encode_nonempty(list in arb_posting_list()) {
@@ -117,7 +117,7 @@ fn prop_posting_empty_list_identity() {
 // Varint encode/decode properties
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// Property: Varint roundtrip is lossless for any u64 value
+// Property: Varint roundtrip is lossless for any u64 value
 proptest! {
     #[test]
     fn prop_varint_roundtrip_lossless(value: u64) {
@@ -131,7 +131,7 @@ proptest! {
     }
 }
 
-/// Property: Varint-encoded lengths are monotonic with value magnitude
+// Property: Varint-encoded lengths are monotonic with value magnitude
 proptest! {
     #[test]
     fn prop_varint_length_monotonic(a: u64, b: u64) {
@@ -154,7 +154,7 @@ proptest! {
 // Bloom filter properties
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// Property: Bloom filter has zero false negatives
+// Property: Bloom filter has zero false negatives
 proptest! {
     #[test]
     fn prop_bloom_zero_false_negatives(
@@ -179,7 +179,7 @@ proptest! {
     }
 }
 
-/// Property: Bloom filter operations are order-independent
+// Property: Bloom filter operations are order-independent
 proptest! {
     #[test]
     fn prop_bloom_order_independent(
@@ -213,7 +213,7 @@ proptest! {
 // Format module properties
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// Property: is_binary returns false for all-ASCII content
+// Property: is_binary returns false for all-ASCII content
 proptest! {
     #[test]
     fn prop_is_binary_false_for_ascii(s in "[ -~]{1,5000}") {
@@ -224,7 +224,7 @@ proptest! {
     }
 }
 
-/// Property: is_binary returns true when >30% non-printable bytes
+// Property: is_binary returns true when >30% non-printable bytes
 proptest! {
     #[test]
     fn prop_is_binary_true_when_over_threshold(
@@ -233,7 +233,7 @@ proptest! {
     ) {
         let mut data = Vec::new();
         data.extend_from_slice(text.as_bytes());
-        data.extend(std::iter::repeat(0u8).take(null_count));
+        data.extend(std::iter::repeat_n(0u8, null_count));
         assert!(
             ix::format::is_binary(&data),
             "Content with {null_count} NULLs in {} bytes must be binary",
@@ -300,7 +300,7 @@ proptest! {
     }
 }
 
-/// Property: StringPoolReader resolves empty pool without panicking
+// Property: StringPoolReader resolves empty pool without panicking
 #[test]
 fn prop_string_pool_empty_roundtrip() {
     use ix::string_pool::{StringPool, StringPoolReader};

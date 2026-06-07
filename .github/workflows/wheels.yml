@@ -48,6 +48,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
     steps:
+      - name: Install git (Linux container)
+        if: matrix.container
+        run: |
+          yum install -y git
+
       - uses: actions/checkout@v4
 
       - name: Install Rust (Linux container)
@@ -63,7 +68,7 @@ jobs:
           args: --release --out dist
           before-script-linux: |
             yum install -y openssl-devel
-          manylinux: ${{ matrix.container && 'auto' || 'off' }}
+          manylinux: off
 
       - name: Run pytest
         if: ${{ !matrix.container }}
