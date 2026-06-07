@@ -358,7 +358,7 @@ fn main() {
     if let Some(cmd) = cli.command {
         match cmd {
             Command::Service { action } => {
-                if let Err(e) = handle_service(action) {
+                if let Err(e) = handle_service(&action) {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }
@@ -478,6 +478,7 @@ fn main() {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn find_systemctl() -> std::ffi::OsString {
     let usr_bin = std::path::Path::new("/usr/bin/systemctl");
     if usr_bin.exists() {
@@ -493,7 +494,7 @@ fn find_systemctl() -> std::ffi::OsString {
 
 #[cfg(feature = "notify")]
 #[allow(clippy::unnecessary_wraps)]
-fn handle_service(action: ServiceAction) -> ix::error::Result<()> {
+fn handle_service(action: &ServiceAction) -> ix::error::Result<()> {
     if let ServiceAction::Status { path, json } = &action {
         handle_service_status(path.as_deref(), *json);
         return Ok(());
@@ -508,7 +509,7 @@ fn handle_service(action: ServiceAction) -> ix::error::Result<()> {
 
         match action {
             ServiceAction::Install { path } => {
-                let watch_path = path.unwrap_or_else(|| {
+                let watch_path = path.clone().unwrap_or_else(|| {
                     std::env::current_dir().unwrap_or_else(|_| PathBuf::from(&home))
                 });
                 let watch_path_abs = watch_path.canonicalize().unwrap_or(watch_path);
