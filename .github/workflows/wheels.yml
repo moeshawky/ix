@@ -70,7 +70,7 @@ jobs:
         if: ${{ !matrix.container }}
         working-directory: ix-py
         run: |
-          pip install --no-index --find-links dist ix
+          pip install --no-index --find-links dist moeix
           pip install '.[dev]'
           python -m pytest tests/
 
