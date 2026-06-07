@@ -30,8 +30,10 @@ fn bench_search_with_context(c: &mut Criterion) {
     let reader = Reader::open(&index_path).unwrap();
     let mut executor = Executor::new(&reader);
     let plan = Planner::plan("hello", false);
-    let mut options = ix::executor::QueryOptions::default();
-    options.context_lines = 3;
+    let options = ix::executor::QueryOptions {
+        context_lines: 3,
+        ..Default::default()
+    };
 
     c.bench_function("search_with_context_lines", |b| {
         b.iter(|| {
