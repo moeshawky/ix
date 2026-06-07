@@ -299,10 +299,7 @@ mod tests {
         if sys_mem == 0 {
             return;
         }
-        assert!(
-            rss <= sys_mem,
-            "RSS {rss} should not exceed system memory"
-        );
+        assert!(rss <= sys_mem, "RSS {rss} should not exceed system memory");
     }
 
     #[test]

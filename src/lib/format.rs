@@ -537,7 +537,7 @@ mod tests {
 
     #[test]
     fn test_is_binary_cjk() {
-        let cjk: &[u8] = "你好世界これはテストです한국어".as_bytes();
+        let cjk: &[u8] = "\u{4f60}\u{597d}\u{4e16}\u{754c}\u{3053}\u{308c}\u{306f}\u{30c6}\u{30b9}\u{30c8}\u{3067}\u{3059}\u{d55c}\u{ad6d}\u{c5b4}".as_bytes();
         assert!(!is_binary(cjk), "CJK text should NOT be flagged as binary");
     }
 
@@ -545,7 +545,7 @@ mod tests {
     fn test_is_binary_mixed_utf8_ascii() {
         let mut data = Vec::new();
         data.extend_from_slice(b"def hello():\n    ");
-        data.extend_from_slice("print('🚀')".as_bytes());
+        data.extend_from_slice("print('\u{1f680}')".as_bytes());
         data.extend_from_slice(b"\n    return 42\n");
         assert!(
             !is_binary(&data),
@@ -599,7 +599,7 @@ mod tests {
         let mut emoji_line = Vec::new();
         emoji_line.extend_from_slice(b"# ");
         for _ in 0..16 {
-            emoji_line.extend_from_slice("🚨".as_bytes());
+            emoji_line.extend_from_slice("\u{1f6a8}".as_bytes());
         }
         emoji_line.extend_from_slice(b" WARNING");
         let mut data = Vec::new();
@@ -640,7 +640,7 @@ mod tests {
         assert!(is_valid_utf8_sequence(&[0xE4, 0xBD, 0xA0]));
         assert!(
             is_valid_utf8_sequence(&[0xF0, 0x9F, 0x9A, 0xA8]),
-            "🚨 should be valid 4-byte UTF-8"
+            "\u{1f6a8} should be valid 4-byte UTF-8"
         );
         assert!(
             !is_valid_utf8_sequence(&[0xC0, 0x80]),

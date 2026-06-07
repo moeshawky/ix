@@ -233,7 +233,7 @@ proptest! {
     ) {
         let mut data = Vec::new();
         data.extend_from_slice(text.as_bytes());
-        data.extend(std::iter::repeat(0u8).take(null_count));
+        data.extend(std::iter::repeat_n(0u8, null_count));
         assert!(
             ix::format::is_binary(&data),
             "Content with {null_count} NULLs in {} bytes must be binary",

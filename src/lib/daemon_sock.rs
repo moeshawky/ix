@@ -1168,8 +1168,7 @@ mod tests {
                 last_rebuild_at,
             }) => {
                 eprintln!(
-                    "[JSON] id={}, status={}, files={}, daemon_status={:?}, last_rebuild_at={:?}",
-                    id, status, files, daemon_status, last_rebuild_at
+                    "[JSON] id={id}, status={status}, files={files}, daemon_status={daemon_status:?}, last_rebuild_at={last_rebuild_at:?}"
                 );
                 assert_eq!(id, 123);
                 assert_eq!(status, "indexing (entropy: 42)");
@@ -1211,7 +1210,7 @@ mod tests {
         let back: SearchQuery = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.id, 42);
         assert_eq!(back.pattern, "findme");
-        assert_eq!(back.ignore_case, true);
+        assert!(back.ignore_case);
         assert_eq!(back.max_results, 10);
         assert_eq!(back.context_lines, 2);
         assert_eq!(back.file_types, vec!["rs".to_string()]);
@@ -1240,7 +1239,7 @@ mod tests {
         assert_eq!(q.context_lines, 3);
         assert!(
             q.search_path.is_none(),
-            "missing search_path in old client → None"
+            "missing search_path in old client \u{2192} None"
         );
     }
 }
