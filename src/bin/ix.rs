@@ -476,6 +476,7 @@ fn main() {
 }
 
 #[cfg(feature = "notify")]
+#[allow(clippy::unnecessary_wraps)]
 fn handle_service(action: ServiceAction) -> ix::error::Result<()> {
     if let ServiceAction::Status { path, json } = &action {
         handle_service_status(path.as_deref(), *json);
@@ -581,6 +582,7 @@ WantedBy=default.target
 }
 
 #[cfg(not(feature = "notify"))]
+#[allow(clippy::unnecessary_wraps)]
 fn handle_service(action: ServiceAction) -> ix::error::Result<()> {
     if let ServiceAction::Status { path, json } = &action {
         handle_service_status(path.as_deref(), *json);
