@@ -825,9 +825,14 @@ impl<'a> Executor<'a> {
             }
 
             if options.context_lines > 0 {
-                context_before.push_back(line.trim_end().to_string());
-                if context_before.len() > options.context_lines {
-                    context_before.pop_front();
+                if context_before.len() == options.context_lines {
+                    if let Some(mut old_line) = context_before.pop_front() {
+                        old_line.clear();
+                        old_line.push_str(line.trim_end());
+                        context_before.push_back(old_line);
+                    }
+                } else {
+                    context_before.push_back(line.trim_end().to_string());
                 }
             }
 

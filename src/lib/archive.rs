@@ -126,10 +126,7 @@ fn match_content_stream<R: Read>(
         pending_matches = still_pending;
 
         if let Some(m) = regex.find(&line) {
-            let context_before_vec: Vec<String> = context_before
-                .iter()
-                .map(|s: &String| s.trim_end().to_string())
-                .collect();
+            let context_before_vec: Vec<String> = context_before.iter().cloned().collect();
 
             let new_match = Match {
                 file_path: path.to_owned(),
@@ -161,9 +158,14 @@ fn match_content_stream<R: Read>(
         }
 
         if options.context_lines > 0 {
-            context_before.push_back(line.clone());
-            if context_before.len() > options.context_lines {
-                context_before.pop_front();
+            if context_before.len() == options.context_lines {
+                if let Some(mut old_line) = context_before.pop_front() {
+                    old_line.clear();
+                    old_line.push_str(line.trim_end());
+                    context_before.push_back(old_line);
+                }
+            } else {
+                context_before.push_back(line.trim_end().to_string());
             }
         }
 
