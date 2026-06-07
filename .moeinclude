@@ -1,0 +1,4 @@
+# ix source whitelist for moegraph scanner
+src/
+ix-py/src/
+ix-py/python/
