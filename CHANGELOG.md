@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.12.0] - 2026-06-07
+
+### Fixed
+- **Reader path resolution** — `Reader::get_file()` now resolves relative paths from the string pool against the index root, so file I/O works regardless of the caller's CWD. Previously, Python bindings returned `files_failed_verify: 1` when CWD differed from the index root.
+- **`ix.build()` on fresh directories** — `Index.build()` is now a `@staticmethod` that creates an index without requiring an existing `.ix/shard.ix`. The convenience `ix.build(path)` function works on first build.
+- **Stale cache after rebuild** — `Index.rebuild()` now clears posting, neg, and regex caches after rebuilding, preventing stale cached results from being returned.
+
+### Changed
+- **Python API: `Index.build()` → `Index.rebuild()`** — Instance method renamed to `rebuild()` to avoid collision with the new `@staticmethod build()`. Callers using `idx.build()` must update to `idx.rebuild()`.
+- **`Config` derives `PartialEq`** — Enables equality comparison in tests.
+- **Reuse `String` allocations in context_before** — `VecDeque<String>` in executor, archive, scanner, and streaming now reuses popped strings via `clear()` + `push_str()` instead of allocating new ones each iteration.
+
+### Fixed (clippy)
+- Non-ASCII literal escapes in format tests (`\u{}` syntax).
+- `repeat().take()` → `repeat_n()` in format and property tests.
+- `assert_eq!(x, true)` → `assert!(x)` in daemon_sock tests.
+- Doc comments on proptest macro invocations → line comments.
+- `cast_precision_loss` allows in format tests.
+
 ## [0.11.9] - 2026-06-06
 
 ### Added
