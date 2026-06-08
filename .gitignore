@@ -90,6 +90,11 @@ tests/docker_llmosafe_vendor/
 # Python artifacts
 __pycache__/
 *.pyc
+ix-py/dist/
+
+# Bench tooling / test scripts
+.bench-tools/
+test_*.sh
 
 # Coverage / temporary
 /lcov.info
