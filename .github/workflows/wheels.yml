@@ -47,15 +47,8 @@ jobs:
           - target: i686
             os: windows-latest
     runs-on: ${{ matrix.os }}
-    container: ${{ matrix.container }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust (Linux container)
-        if: matrix.container
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -64,7 +57,7 @@ jobs:
           args: --release --out dist
           before-script-linux: |
             yum install -y openssl-devel
-          manylinux: ${{ matrix.container && 'auto' || 'off' }}
+          manylinux: auto
 
       - name: Run pytest
         if: ${{ !matrix.container }}

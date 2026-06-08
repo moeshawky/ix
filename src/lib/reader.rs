@@ -44,6 +44,7 @@ pub struct Reader {
     /// Parsed shard header containing section offsets and sizes.
     pub header: Header,
     string_pool: StringPoolReader<'static>,
+    #[allow(dead_code)]
     inode: Option<u64>,
     cdx_blocks: Vec<CdxBlockEntry>,
     /// Root directory derived from the shard path (parent of `.ix/`).
