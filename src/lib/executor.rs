@@ -776,12 +776,12 @@ impl<'a> Executor<'a> {
         while buf_reader.read_line(&mut line)? > 0 {
             line_number += 1;
             let line_len = line.len() as u64;
-            let trimmed_line = line.trim_end().to_string();
+            let trimmed_line_str = line.trim_end();
 
             // Fill context_after for pending matches
             for m in &mut pending_matches {
                 if m.context_after.len() < options.context_lines {
-                    m.context_after.push(trimmed_line.clone());
+                    m.context_after.push(trimmed_line_str.to_string());
                 }
             }
 
@@ -802,7 +802,7 @@ impl<'a> Executor<'a> {
                     line_content: if options.count_only {
                         String::new()
                     } else {
-                        trimmed_line
+                        trimmed_line_str.to_string()
                     },
                     byte_offset: byte_offset + m.start() as u64,
                     context_before: context_before_vec,
@@ -828,11 +828,11 @@ impl<'a> Executor<'a> {
                 if context_before.len() == options.context_lines {
                     if let Some(mut old_line) = context_before.pop_front() {
                         old_line.clear();
-                        old_line.push_str(line.trim_end());
+                        old_line.push_str(trimmed_line_str);
                         context_before.push_back(old_line);
                     }
                 } else {
-                    context_before.push_back(line.trim_end().to_string());
+                    context_before.push_back(trimmed_line_str.to_string());
                 }
             }
 

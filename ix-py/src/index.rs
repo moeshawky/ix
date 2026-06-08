@@ -152,6 +152,7 @@ impl PyIndex {
     /// Raises `IxIndexError` / `IxCorruptionError` / `IxRegexError`.
     #[pyo3(signature = (pattern, *, regex = false, context_lines = 0, max_results = 0, type_filter = None, multiline = false, case_insensitive = false, word_boundary = false, count_only = false, files_only = false))]
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::fn_params_excessive_bools)]
     pub fn search(
         &self,
         py: Python<'_>,
@@ -444,7 +445,7 @@ impl PyIndex {
             .store(true, std::sync::atomic::Ordering::Release);
     }
 
-    fn __enter__<'py>(slf: PyRef<'py, Self>) -> PyRef<'py, Self> {
+    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
 
