@@ -151,6 +151,7 @@ impl PyIndex {
     /// # Errors
     /// Raises `IxIndexError` / `IxCorruptionError` / `IxRegexError`.
     #[pyo3(signature = (pattern, *, regex = false, context_lines = 0, max_results = 0, type_filter = None, multiline = false, case_insensitive = false, word_boundary = false, count_only = false, files_only = false))]
+    #[allow(clippy::fn_params_excessive_bools)]
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::fn_params_excessive_bools)]
     pub fn search(

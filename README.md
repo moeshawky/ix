@@ -232,7 +232,7 @@ like ripgrep are faster.
 
 ```toml
 [dependencies]
-moeix = "0.11"
+moeix = "0.12"
 ```
 
 ```rust

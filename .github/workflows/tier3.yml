@@ -31,11 +31,11 @@ jobs:
         run: cargo fmt --check --all
 
       - name: Lint (clippy)
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --exclude ix-py -- -D warnings
 
       - name: Tier 1 - Clippy lints
         run: |
-          cargo clippy --all-targets --all-features \
+          cargo clippy --workspace --all-targets --all-features --exclude ix-py -- \
             -D clippy::dbg_macro -D clippy::todo \
             -D clippy::wildcard_imports -D clippy::panic_in_result_fn \
             -D clippy::missing_const_for_fn -D clippy::large_enum_variant
@@ -44,15 +44,15 @@ jobs:
         run: cargo deny check licenses advisories bans
 
       - name: Build
-        run: cargo build --all-features --verbose
+        run: cargo build --workspace --all-features --exclude ix-py --verbose
 
       - name: Test
-        run: cargo test --all-features
+        run: cargo test --workspace --all-features --exclude ix-py
 
       - name: Coverage
         run: |
-          cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
-          cargo llvm-cov --all-features --workspace --summary-only
+          cargo llvm-cov --all-features --workspace --exclude ix-py --lcov --output-path lcov.info
+          cargo llvm-cov --all-features --workspace --exclude ix-py --summary-only
 
       - name: Outdated deps
         run: cargo outdated --exit-code 1
