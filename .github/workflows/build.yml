@@ -18,7 +18,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --workspace --all-features --exclude ix-py --verbose
     - name: Run tests
       run: cargo test --workspace --all-features --exclude ix-py --verbose
     - name: Run Clippy
