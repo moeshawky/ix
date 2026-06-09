@@ -16,6 +16,20 @@ pub struct Config {
     /// Glob patterns for paths to exclude from indexing.
     #[serde(default)]
     pub exclude_patterns: Vec<String>,
+    /// Debounce interval in milliseconds for file-watch events.
+    ///
+    /// Minimum 50 ms, maximum 10000 ms (clamped by [`crate::watcher::Watcher::with_debounce`]).
+    /// `None` uses the default (500 ms).
+    ///
+    /// # Merged-config precedence
+    ///
+    /// When [`discover_under`](Self::discover_under) merges multiple `.ixd.toml`
+    /// files, the **root-level** `debounce_ms` takes precedence over subdirectory
+    /// configs. Subdirectory `debounce_ms` values are ignored to avoid conflicting
+    /// timer strategies within a single daemon instance. If you need different
+    /// debounce intervals per watched subtree, run separate `ixd` instances.
+    #[serde(default)]
+    pub debounce_ms: Option<u64>,
 }
 
 impl Default for Config {
@@ -27,6 +41,7 @@ impl Default for Config {
                 "node_modules".to_string(),
                 "target".to_string(),
             ],
+            debounce_ms: None,
         }
     }
 }
@@ -112,6 +127,7 @@ mod tests {
                     "node_modules".to_string(),
                     "target".to_string(),
                 ],
+                debounce_ms: None,
             }
         );
     }

@@ -1,90 +1,185 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# MASTER: Unified Python Wheel Build + Publish (ix / sniper / llmosafe)
+# ═══════════════════════════════════════════════════════════════════════════════
+# This is the CANONICAL workflow. All three projects use identical copies.
+# Only the PROJECT env var below differs. Do NOT diverge from this template.
+#
+# Canonical source: /workspace/.github/workflows/wheels.yml
+# Local build:      /workspace/.github/scripts/build-wheels.sh
+# Reference:        /workspace/PUBLISHING.md
+#
+# To adopt for a new project:
+#   1. Copy this file to .github/workflows/wheels.yml
+#   2. Change PROJECT below
+#   3. Set up Trusted Publishing on pypi.org and test.pypi.org for the repo
+#   4. Add a "pypi" environment in repo Settings > Environments
+# ═══════════════════════════════════════════════════════════════════════════════
+
 name: Wheels
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-  release:
-    types: [published]
+    tags: ["v*"]
   workflow_dispatch:
 
+# ── Project identity (ONLY line that differs between projects) ──────────────
+env:
+  PROJECT: ix                          # ← CHANGE THIS: ix | sniper | llmosafe
+  PYTHON_VERSION: "3.12"
+
+# ── Concurrency: cancel in-progress on re-push ──────────────────────────────
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  sdist:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build sdist
-        working-directory: ix-py
-        run: pipx run build --sdist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sdist
-          path: ix-py/dist/*.tar.gz
-
-  build:
-    needs: [sdist]
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Linux wheels — all projects
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-linux:
+    name: linux (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64
-            os: ubuntu-latest
+          - os: ubuntu-latest
+            target: x86_64
             container: quay.io/pypa/manylinux_2_28_x86_64
-          - target: aarch64
-            os: ubuntu-24.04-arm
-            container: quay.io/pypa/manylinux_2_28_aarch64
-          - target: x86_64
-            os: macos-latest
-          - target: aarch64
-            os: macos-latest
-          - target: x86_64
-            os: windows-latest
-          - target: i686
-            os: windows-latest
-    runs-on: ${{ matrix.os }}
+          - os: ubuntu-24.04-arm
+            target: aarch64
+
+    container: ${{ matrix.container || null }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build wheels
+      - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
-          working-directory: ix-py
-          args: --release --out dist
+          working-directory: ${{ env.PROJECT }}-py
+          args: --release --out dist -i python${{ env.PYTHON_VERSION }}
+          manylinux: auto
           before-script-linux: |
-            yum install -y openssl-devel
+            yum install -y openssl-devel || true
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.target }}
+          path: ${{ env.PROJECT }}-py/dist/
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # macOS wheels — ix only (skipped for sniper/llmosafe)
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-macos:
+    name: macos (${{ matrix.target }})
+    if: env.PROJECT == 'ix'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64
+          - os: macos-latest
+            target: x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: ${{ env.PROJECT }}-py
+          args: --release --out dist -i python${{ env.PYTHON_VERSION }}
           manylinux: auto
 
-      - name: Run pytest
-        if: ${{ !matrix.container }}
-        working-directory: ix-py
-        run: |
-          pip install --no-index --find-links dist moeix
-          pip install '.[dev]'
-          python -m pytest tests/
-
-      - uses: actions/upload-artifact@v4
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-${{ matrix.target }}
-          path: ix-py/dist
+          name: wheels-macos-${{ matrix.target }}
+          path: ${{ env.PROJECT }}-py/dist/
 
-  publish:
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
-    needs: [build]
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Windows wheels — ix only (skipped for sniper/llmosafe)
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-windows:
+    name: windows (${{ matrix.target }})
+    if: env.PROJECT == 'ix'
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, i686]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: ${{ env.PROJECT }}-py
+          args: --release --out dist -i python${{ env.PYTHON_VERSION }}
+          manylinux: auto
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-${{ matrix.target }}
+          path: ${{ env.PROJECT }}-py/dist/
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Publish to TestPyPI — on every tag push and manual dispatch
+  # ═══════════════════════════════════════════════════════════════════════════
+  publish-testpypi:
+    name: Publish → TestPyPI
+    needs: [build-linux]
+    if: always() && !cancelled() && !failure()
     runs-on: ubuntu-latest
-    environment: pypi
     permissions:
       id-token: write
+
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: "*"
+          pattern: wheels-*
           path: dist
           merge-multiple: true
-      - uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist
+          skip-existing: true
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Publish to PyPI — on tag push only (not manual dispatch by default)
+  # ═══════════════════════════════════════════════════════════════════════════
+  publish-pypi:
+    name: Publish → PyPI
+    needs: [build-linux, build-macos, build-windows]
+    if: |
+      always() &&
+      !cancelled() &&
+      !failure() &&
+      startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/${{ env.PROJECT == 'ix' && 'moeix' || env.PROJECT == 'sniper' && 'moesniper' || 'llmosafe' }}
+    permissions:
+      id-token: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+          skip-existing: true

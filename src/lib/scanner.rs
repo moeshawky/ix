@@ -36,8 +36,10 @@ impl Scanner {
     ///
     /// # Errors
     ///
-    /// Returns an error if the regex is invalid or if file I/O fails during
-    /// the walk or content reading.
+    /// Returns an error if:
+    /// - The scanner root path does not exist
+    /// - The regex is invalid
+    /// - File I/O fails during the walk or content reading
     #[allow(clippy::too_many_lines)]
     pub fn scan(
         &self,
@@ -46,6 +48,16 @@ impl Scanner {
         ignore_case: bool,
         options: &QueryOptions,
     ) -> Result<Vec<Match>> {
+        // Early-exit: surface a clear error when the root directory does not
+        // exist, rather than silently returning an empty result set from
+        // walk-iterator errors.
+        if !self.root.exists() {
+            return Err(crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("scanner root does not exist: {}", self.root.display()),
+            )));
+        }
+
         let raw = if is_regex {
             pattern.to_string()
         } else {

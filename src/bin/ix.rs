@@ -851,8 +851,12 @@ fn do_build(
 
 #[allow(clippy::cast_precision_loss)]
 fn do_stats(path: &Path, json: bool) -> ix::error::Result<()> {
-    let (index_path, index_root, _beacon) =
-        find_index(path).ok_or_else(|| ix::error::Error::Config("no index found".into()))?;
+    let (index_path, index_root, _beacon) = find_index(path).ok_or_else(|| {
+        ix::error::Error::Config(format!(
+            "no .ix/shard.ix found by walking up from {}",
+            path.display()
+        ))
+    })?;
 
     if !index_path.exists() {
         if json {

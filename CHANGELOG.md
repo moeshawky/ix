@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-06-10
+
+### Fixed
+- **Bloom filter div-by-zero panic** — `insert()`, `contains()`, and `slice_contains()` now guard against zero-size bloom filters, preventing a panic when a corrupted index passes an empty bits slice through the mmap reader guard.
+- **Daemon error handling** — `builder.update()` failure branch now captures the changed file count before the move and emits structured warnings via `tracing`. Corrupted `beacon.json` now logs a warning before falling back instead of silently ignoring the error.
+- **`VerificationResult` enum** — `verify_candidate()` now returns a dedicated enum (`Matches`, `Cached`, `Failed`) instead of conflating I/O errors and cache hits behind `Option<Vec<Match>>`. Callers can distinguish "no matches found" from "file could not be verified."
+- **CLI exits 0 for non-existent directory** — `Scanner::scan()` now checks that the root path exists before walking, returning `Err` instead of silently producing zero results.
+- **Ambiguous "no index found" error** — `find_index()` error messages now include the searched path, distinguishing "directory doesn't exist" from "directory exists but has no `.ix/` index."
+- **Upgrade llmosafe to 0.7.4** — System metrics parsing no longer silently substitutes `0` on `/proc` parse failures, producing more accurate pressure readings.
+
+### Changed
+- **`ixd` daemon responsiveness** — `recv_timeout` reduced from 500ms to 100ms with an idle-tick counter gating dormant compaction at 5s. Redundant `ResourceGuard::pressure()` call eliminated by passing the pre-read value to both `evaluate_safety()` and `cache_policy.directive_for_pressure()`. Combined ~300ms average per-batch overhead reduction.
+- **Configurable watcher debounce** — New `debounce_ms` field in `.ixd.toml` (default 500ms, range 50–10000ms) allows power users to trade batch efficiency for single-file change latency.
+
 ## [0.12.1] - 2026-06-07
 
 ### Fixed

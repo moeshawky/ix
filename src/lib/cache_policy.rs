@@ -104,13 +104,27 @@ impl AdaptiveCachePolicy {
     /// | Red    | 91–100   | 1.0               | false               | false            |
     #[must_use]
     pub fn directive(&self) -> CacheDirective {
-        let pressure = self.guard.pressure();
-        let (zone, evict_fraction, allow_new_entries, allow_mmap_pin) = match pressure {
-            0..=40 => (PressureZone::Green, 0.0_f64, true, true),
-            41..=70 => (PressureZone::Yellow, 0.1_f64, true, true),
-            71..=90 => (PressureZone::Orange, 0.5_f64, false, false),
-            _ => (PressureZone::Red, 1.0_f64, false, false),
-        };
+        self.directive_for_pressure(self.guard.pressure())
+    }
+
+    /// Returns a [`CacheDirective`] using a pre-computed pressure value.
+    ///
+    /// This is the non-blocking variant — use it when pressure has already been
+    /// read by the caller (e.g. daemon's `handle_changes` deduplicates the
+    /// `guard.pressure()` call across `evaluate_safety` and cache policy).
+    ///
+    /// # Zone mapping
+    ///
+    /// | Zone   | Pressure | `evict_fraction` | `allow_new_entries` | `allow_mmap_pin` |
+    /// |--------|----------|-------------------|---------------------|------------------|
+    /// | Green  | 0–40     | 0.0               | true                | true             |
+    /// | Yellow | 41–70    | 0.1               | true                | true             |
+    /// | Orange | 71–90    | 0.5               | false               | false            |
+    /// | Red    | 91–100   | 1.0               | false               | false            |
+    #[must_use]
+    pub fn directive_for_pressure(&self, pressure: u8) -> CacheDirective {
+        let zone = PressureZone::from_pressure(pressure);
+        let (evict_fraction, allow_new_entries, allow_mmap_pin) = zone.fields();
         CacheDirective {
             zone,
             pressure,
@@ -158,6 +172,24 @@ impl PressureZone {
             41..=70 => Self::Yellow,
             71..=90 => Self::Orange,
             _ => Self::Red,
+        }
+    }
+
+    /// Returns the cache directive fields for this zone.
+    ///
+    /// | Zone   | `evict_fraction` | `allow_new_entries` | `allow_mmap_pin` |
+    /// |--------|-------------------|---------------------|------------------|
+    /// | Green  | 0.0               | true                | true             |
+    /// | Yellow | 0.1               | true                | true             |
+    /// | Orange | 0.5               | false               | false            |
+    /// | Red    | 1.0               | false               | false            |
+    #[must_use]
+    pub const fn fields(&self) -> (f64, bool, bool) {
+        match self {
+            Self::Green => (0.0_f64, true, true),
+            Self::Yellow => (0.1_f64, true, true),
+            Self::Orange => (0.5_f64, false, false),
+            Self::Red => (1.0_f64, false, false),
         }
     }
 }
@@ -222,12 +254,7 @@ mod tests {
             ("red", 95, &red),
         ] {
             let zone = PressureZone::from_pressure(pressure);
-            let (evict_fraction, allow_new_entries, allow_mmap_pin) = match zone {
-                PressureZone::Green => (0.0_f64, true, true),
-                PressureZone::Yellow => (0.1_f64, true, true),
-                PressureZone::Orange => (0.5_f64, false, false),
-                PressureZone::Red => (1.0_f64, false, false),
-            };
+            let (evict_fraction, allow_new_entries, allow_mmap_pin) = zone.fields();
             assert_eq!(
                 zone, expected.zone,
                 "{label}: zone mismatch for pressure {pressure}"
@@ -373,5 +400,47 @@ mod tests {
         let directive_red = policy_red.directive();
         assert_eq!(directive_red.zone, PressureZone::Red);
         assert!((directive_red.evict_fraction - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn directive_for_pressure_all_zones() {
+        let guard = ResourceGuard::for_testing(1024 * 1024, 0, 25);
+        let policy = AdaptiveCachePolicy::new_with_guard(guard, 1024 * 1024);
+
+        let cases = [
+            (0u8, PressureZone::Green, 0.0_f64, true, true),
+            (40, PressureZone::Green, 0.0, true, true),
+            (41, PressureZone::Yellow, 0.1, true, true),
+            (70, PressureZone::Yellow, 0.1, true, true),
+            (71, PressureZone::Orange, 0.5, false, false),
+            (90, PressureZone::Orange, 0.5, false, false),
+            (91, PressureZone::Red, 1.0, false, false),
+            (100, PressureZone::Red, 1.0, false, false),
+        ];
+
+        for (pressure, expected_zone, expected_evict, expected_admit, expected_pin) in cases {
+            let directive = policy.directive_for_pressure(pressure);
+            assert_eq!(
+                directive.pressure, pressure,
+                "pressure {pressure}: should be passed through"
+            );
+            assert_eq!(
+                directive.zone, expected_zone,
+                "pressure {pressure}: expected zone {expected_zone:?}, got {:?}",
+                directive.zone
+            );
+            assert!(
+                (directive.evict_fraction - expected_evict).abs() < f64::EPSILON,
+                "pressure {pressure}: evict_fraction mismatch"
+            );
+            assert_eq!(
+                directive.allow_new_entries, expected_admit,
+                "pressure {pressure}: allow_new_entries mismatch"
+            );
+            assert_eq!(
+                directive.allow_mmap_pin, expected_pin,
+                "pressure {pressure}: allow_mmap_pin mismatch"
+            );
+        }
     }
 }

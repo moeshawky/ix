@@ -20,6 +20,7 @@ pub struct Watcher {
     root: PathBuf,
     watch_roots: Vec<PathBuf>,
     exclude_patterns: Vec<String>,
+    debounce_ms: u64,
     inner: Option<RecommendedWatcher>,
     join_handle: Option<thread::JoinHandle<()>>,
 }
@@ -41,9 +42,19 @@ impl Watcher {
             root: root.to_owned(),
             watch_roots: watch_roots.to_vec(),
             exclude_patterns: exclude_patterns.to_vec(),
+            debounce_ms: 500,
             inner: None,
             join_handle: None,
         }
+    }
+
+    /// Set the debounce interval in milliseconds.
+    ///
+    /// Minimum 50 ms. Maximum 10000 ms (10 s). Values outside this range are clamped.
+    #[must_use]
+    pub fn with_debounce(mut self, ms: u64) -> Self {
+        self.debounce_ms = ms.clamp(50, 10_000);
+        self
     }
 
     /// Start watching the file system for changes.
@@ -165,6 +176,7 @@ impl Watcher {
 
         let watch_roots = self.watch_roots.clone();
         let ix_dir = self.root.join(".ix");
+        let debounce_dur = Duration::from_millis(self.debounce_ms);
         let handle = thread::spawn(move || {
             let mut changed_paths = HashSet::new();
             loop {
@@ -173,9 +185,9 @@ impl Watcher {
                     Ok(Ok(event)) => {
                         Self::collect_paths(&mut changed_paths, event, &watch_roots, &ix_dir);
 
-                        // Debounce loop: keep collecting for 500ms after the last event
+                        // Debounce loop: keep collecting for debounce_ms after the last event
                         loop {
-                            match event_rx.recv_timeout(Duration::from_millis(500)) {
+                            match event_rx.recv_timeout(debounce_dur) {
                                 Ok(Ok(event)) => {
                                     Self::collect_paths(
                                         &mut changed_paths,

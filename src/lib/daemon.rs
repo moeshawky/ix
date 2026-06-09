@@ -179,24 +179,26 @@ fn run_single_root(
     };
 
     // Discover and apply `.ixd.toml` configuration
-    let (watch_roots, exclude_patterns) = if let Ok(config) = Config::discover_under(&root) {
-        if !config.exclude_patterns.is_empty() || !config.watch_roots.is_empty() {
-            eprintln!(
-                "ixd [{name}]: loaded config — {} exclude patterns, {} watch roots",
-                config.exclude_patterns.len(),
-                config.watch_roots.len()
-            );
-        }
-        let wr = config.watch_roots.clone();
-        let ep = config.exclude_patterns.clone();
-        builder = builder.with_exclude_patterns(config.exclude_patterns);
-        if !config.watch_roots.is_empty() {
-            builder = builder.with_watch_roots(config.watch_roots);
-        }
-        (wr, ep)
-    } else {
-        (Vec::new(), Vec::new())
-    };
+    let (watch_roots, exclude_patterns, debounce_ms) =
+        if let Ok(config) = Config::discover_under(&root) {
+            if !config.exclude_patterns.is_empty() || !config.watch_roots.is_empty() {
+                eprintln!(
+                    "ixd [{name}]: loaded config — {} exclude patterns, {} watch roots",
+                    config.exclude_patterns.len(),
+                    config.watch_roots.len()
+                );
+            }
+            let wr = config.watch_roots.clone();
+            let ep = config.exclude_patterns.clone();
+            let db = config.debounce_ms;
+            builder = builder.with_exclude_patterns(config.exclude_patterns);
+            if !config.watch_roots.is_empty() {
+                builder = builder.with_watch_roots(config.watch_roots);
+            }
+            (wr, ep, db)
+        } else {
+            (Vec::new(), Vec::new(), None)
+        };
 
     // Cache policy for memory-pressure-driven cache management
     let ceiling_bytes = (ResourceGuard::system_memory_bytes().saturating_mul(3)) / 5;
@@ -221,6 +223,9 @@ fn run_single_root(
     }
 
     let mut watcher = Watcher::new(&root, &watch_roots, &exclude_patterns);
+    if let Some(ms) = debounce_ms {
+        watcher = watcher.with_debounce(ms);
+    }
     let rx = watcher.start()?;
 
     let ix_dir = root.join(".ix");
@@ -391,6 +396,12 @@ fn run_main_loop(
     daemon_sock: Option<&DaemonServer>,
     log_prefix: &str,
 ) {
+    let mut idle_ticks: u64 = 0;
+    // Dormant compaction triggers after 50 idle ticks × 100 ms timeout = 5 s
+    // of inactivity. This was previously ≤500 ms with blocking `recv()`, but
+    // the 5 s window reduces CPU wakeups while still compacting promptly for
+    // a background daemon.
+
     loop {
         if SHUTDOWN.load(Ordering::SeqCst) {
             running.store(false, Ordering::SeqCst);
@@ -400,8 +411,9 @@ fn run_main_loop(
             break;
         }
 
-        match rx.recv_timeout(Duration::from_millis(500)) {
+        match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(changed_files) => {
+                idle_ticks = 0;
                 let mut ctx = DaemonCtx {
                     builder,
                     ix_dir,
@@ -418,7 +430,8 @@ fn run_main_loop(
                 handle_changes(&mut ctx, &changed_files, rx);
             }
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                if idle.state() == crate::idle::DaemonState::Dormant {
+                idle_ticks = idle_ticks.saturating_add(1);
+                if idle_ticks >= 50 && idle.state() == crate::idle::DaemonState::Dormant {
                     let delta_file = ix_dir.join("shard.ix.delta");
                     if delta_file.exists() && delta_file.metadata().map_or(0, |m| m.len()) > 0 {
                         beacon.status = "compacting".to_string();
@@ -456,7 +469,13 @@ fn handle_changes(
     changed_files: &[PathBuf],
     rx: &crossbeam_channel::Receiver<Vec<PathBuf>>,
 ) {
-    let (entropy, safety_decision) = evaluate_safety(ctx.guard, ctx.log_prefix);
+    let pressure = ctx.guard.pressure();
+    // NOTE: `pressure()` and `check_blocking()` inside `evaluate_safety` are
+    // not atomically synced — memory conditions can change between the two
+    // calls. This is a pre-existing architecture concern (GAP-08), not a
+    // regression. A future `ResourceGuard::check_with_pressure(p)` API would
+    // close this gap.
+    let (entropy, safety_decision) = evaluate_safety(ctx.guard, pressure, ctx.log_prefix);
 
     match &safety_decision {
         SafetyDecision::Halt(err, cooldown) => {
@@ -555,7 +574,7 @@ fn handle_changes(
         tracing::debug!("ixd [{prefix}]: index updated - caches invalidated");
     }
 
-    let directive = ctx.cache_policy.directive();
+    let directive = ctx.cache_policy.directive_for_pressure(pressure);
     if directive.zone != crate::cache_policy::PressureZone::Green {
         tracing::debug!(
             "ixd [{}]: cache directive -- zone={:?}, pressure={}, evict={:.2}, admit={}",
@@ -614,15 +633,16 @@ fn handle_changes(
     ctx.idle.record_change();
 }
 
-fn evaluate_safety(guard: &ResourceGuard, log_prefix: &str) -> (u16, SafetyDecision) {
+fn evaluate_safety(guard: &ResourceGuard, pressure: u8, log_prefix: &str) -> (u16, SafetyDecision) {
     match guard.check_blocking() {
         Ok(synapse) => {
             let raw_entropy = synapse.raw_entropy();
             let surprise = synapse.raw_surprise();
             let has_bias = synapse.has_bias();
-            let pressure = PressureLevel::from(guard.pressure());
+            let pressure_level = PressureLevel::from(pressure);
             let policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
-            let decision = policy.decide_with_pressure(raw_entropy, surprise, has_bias, pressure);
+            let decision =
+                policy.decide_with_pressure(raw_entropy, surprise, has_bias, pressure_level);
             (raw_entropy, decision)
         }
         Err(e) => {
