@@ -138,6 +138,15 @@ pub struct FileChange {
 }
 
 /// Search results returned from daemon to client.
+///
+/// The `error` field is populated only when the daemon encounters an error
+/// while executing the query (e.g., invalid regex pattern). Clients MUST
+/// check this field and propagate the error instead of treating an empty
+/// result as a successful zero-match search.
+///
+/// The field uses `#[serde(default)]` + `#[serde(skip_serializing_if)]`
+/// for backward compatibility: new daemon ↔ old client (old client ignores
+/// unknown field), old daemon ↔ new client (error deserializes as `None`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResults {
     /// Query ID (matches the id from the request).
@@ -146,6 +155,11 @@ pub struct SearchResults {
     pub matches: Vec<crate::executor::Match>,
     /// Query execution statistics.
     pub stats: crate::executor::QueryStats,
+    /// Error message from the daemon if the query could not be executed.
+    /// When present, clients should treat this as a query failure, not
+    /// a successful search with zero matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Messages sent from the server to connected clients.
@@ -659,10 +673,12 @@ fn client_read_loop(
                             Ok(results) => ServerMessage::SearchResults(results),
                             Err(e) => {
                                 tracing::warn!("ixd: search failed: {e}");
+                                let err_msg = e.to_string();
                                 ServerMessage::SearchResults(SearchResults {
                                     id: query.id,
                                     matches: vec![],
                                     stats: crate::executor::QueryStats::default(),
+                                    error: Some(err_msg),
                                 })
                             }
                         }
@@ -774,7 +790,9 @@ impl DaemonClient {
     ///
     /// # Errors
     ///
-    /// Returns an error on I/O failure, timeout, or if the response is not a `SearchResults`.
+    /// Returns an error on I/O failure, timeout, if the response is not a
+    /// `SearchResults`, or if the daemon reported a query execution error
+    /// (e.g., invalid regex pattern) via the `SearchResults::error` field.
     pub fn search(&mut self, query: SearchQuery) -> Result<SearchResults> {
         use std::io::Write;
 
@@ -793,7 +811,17 @@ impl DaemonClient {
         self.stream.read_line(&mut response_line)?;
 
         match serde_json::from_str::<ServerMessage>(response_line.trim_end()) {
-            Ok(ServerMessage::SearchResults(results)) => Ok(results),
+            Ok(ServerMessage::SearchResults(results)) => {
+                // If the daemon encountered an error while executing the
+                // query (e.g., invalid regex), propagate it to the caller
+                // instead of treating it as a successful zero-match search.
+                if let Some(ref error) = results.error {
+                    return Err(DaemonSockError::Io(std::io::Error::other(
+                        format!("daemon search error: {error}"),
+                    )));
+                }
+                Ok(results)
+            }
             Ok(other) => Err(DaemonSockError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("expected SearchResults, got {other:?}"),
@@ -893,6 +921,7 @@ pub fn execute_search(
         id: query.id,
         matches: filtered_matches,
         stats,
+        error: None,
     })
 }
 
