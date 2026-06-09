@@ -34,7 +34,15 @@ impl BloomFilter {
     }
 
     /// Insert a trigram into the bloom filter.
+    ///
+    /// If the filter has zero size (no bits allocated), this is a no-op.
+    /// Inserting into an empty filter has no effect since no bits can be set.
     pub fn insert(&mut self, trigram: Trigram) {
+        // Guard: size=0 produces num_bits=0 which causes a division-by-zero
+        // panic in the modulo operation below. An empty filter stores nothing.
+        if self.size == 0 {
+            return;
+        }
         let tri_bytes = trigram.to_le_bytes();
         let h1 = Self::hash(&tri_bytes, 0);
         let h2 = Self::hash(&tri_bytes, 1);
@@ -55,8 +63,16 @@ impl BloomFilter {
     ///
     /// Returns `true` if the trigram might be present (could be a false positive).
     /// Returns `false` only if the trigram is definitely not present.
+    ///
+    /// If the filter has zero size (no bits allocated), returns `true`
+    /// (conservative: an empty filter cannot disprove membership).
     #[must_use]
     pub fn contains(&self, trigram: Trigram) -> bool {
+        // Guard: size=0 produces num_bits=0 which causes a division-by-zero
+        // panic in the modulo operation below. Conservative: return true.
+        if self.size == 0 {
+            return true;
+        }
         let tri_bytes = trigram.to_le_bytes();
         let h1 = Self::hash(&tri_bytes, 0);
         let h2 = Self::hash(&tri_bytes, 1);
@@ -118,8 +134,20 @@ impl BloomFilter {
     }
 
     /// Check if a slice (from mmap) contains a trigram.
+    ///
+    /// Returns `true` if the trigram may be present (conservative).
+    /// Returns `false` only if the trigram is definitely not present.
+    ///
+    /// If `bits` is an empty slice (zero-size bloom filter), returns `true`
+    /// (conservative: an empty filter cannot disprove membership). This
+    /// prevents a division-by-zero panic in the bit-position modulo operation.
     #[must_use]
     pub fn slice_contains(bits: &[u8], num_hashes: u8, trigram: Trigram) -> bool {
+        // Guard: empty bits → num_bits=0 → modulo-by-zero panic.
+        // Conservative: return true (assume trigram may be present).
+        if bits.is_empty() {
+            return true;
+        }
         let tri_bytes = trigram.to_le_bytes();
         let mut h1_hasher = Xxh64::new(0);
         h1_hasher.write(&tri_bytes);

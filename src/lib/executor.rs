@@ -105,6 +105,40 @@ impl QueryStatsAccum {
     }
 }
 
+/// Result of verifying a candidate file against a regex pattern.
+///
+/// Encodes three distinct outcomes so callers can distinguish
+/// successful matches, negative-cache skips, and I/O failures.
+#[derive(Debug)]
+pub enum VerificationResult {
+    /// One or more regex matches were found in the file.
+    Matches(Vec<Match>),
+    /// File was a known negative (cache hit) — skipped without I/O.
+    Cached,
+    /// File could not be verified due to an I/O error; the file
+    /// may or may not contain matches.
+    Failed(crate::error::Error),
+}
+
+impl VerificationResult {
+    /// Project into `Option<Vec<Match>>` for use with `Iterator::filter_map`.
+    ///
+    /// `Matches` becomes `Some`, `Cached` becomes `None` (file skipped
+    /// cheaply), and `Failed` logs a warning, increments the
+    /// `files_failed_verify` counter in `accum`, and returns `None`.
+    fn into_option(self, accum: &QueryStatsAccum, file_info: &FileInfo) -> Option<Vec<Match>> {
+        match self {
+            Self::Matches(m) => Some(m),
+            Self::Cached => None,
+            Self::Failed(e) => {
+                tracing::warn!("ix: cannot verify file {}: {e}", file_info.path.display());
+                accum.files_failed_verify.fetch_add(1, Ordering::Relaxed);
+                None
+            }
+        }
+    }
+}
+
 /// Tunable knobs that control query execution behaviour.
 #[derive(Debug, Default, Clone)]
 #[allow(clippy::struct_excessive_bools)]
@@ -423,8 +457,9 @@ impl<'a> Executor<'a> {
                     .bytes_verified
                     .fetch_add(file_info.size_bytes, Ordering::Relaxed);
 
-                let file_matches =
-                    self.verify_candidate(&file_info, regex, options, neg_fp, &accum)?;
+                let file_matches = self
+                    .verify_candidate(&file_info, regex, options, neg_fp, &accum)
+                    .into_option(&accum, &file_info)?;
                 accum
                     .matches_found
                     .fetch_add(file_matches.len() as u32, Ordering::Relaxed);
@@ -544,8 +579,9 @@ impl<'a> Executor<'a> {
                     .bytes_verified
                     .fetch_add(file_info.size_bytes, Ordering::Relaxed);
 
-                let file_matches =
-                    self.verify_candidate(&file_info, regex, options, neg_fp, &accum)?;
+                let file_matches = self
+                    .verify_candidate(&file_info, regex, options, neg_fp, &accum)
+                    .into_option(&accum, &file_info)?;
                 accum
                     .matches_found
                     .fetch_add(file_matches.len() as u32, Ordering::Relaxed);
@@ -647,8 +683,9 @@ impl<'a> Executor<'a> {
                     .bytes_verified
                     .fetch_add(file_info.size_bytes, Ordering::Relaxed);
 
-                let file_matches =
-                    self.verify_candidate(&file_info, regex, options, neg_fp, &accum)?;
+                let file_matches = self
+                    .verify_candidate(&file_info, regex, options, neg_fp, &accum)
+                    .into_option(&accum, &file_info)?;
                 accum
                     .matches_found
                     .fetch_add(file_matches.len() as u32, Ordering::Relaxed);
@@ -708,8 +745,9 @@ impl<'a> Executor<'a> {
                     .bytes_verified
                     .fetch_add(file_info.size_bytes, Ordering::Relaxed);
 
-                let file_matches =
-                    self.verify_candidate(&file_info, regex, options, neg_fp, &accum)?;
+                let file_matches = self
+                    .verify_candidate(&file_info, regex, options, neg_fp, &accum)
+                    .into_option(&accum, &file_info)?;
                 accum
                     .matches_found
                     .fetch_add(file_matches.len() as u32, Ordering::Relaxed);
@@ -846,9 +884,13 @@ impl<'a> Executor<'a> {
 
     /// Verify a candidate file, consulting the negative-result cache first.
     ///
-    /// If `(query_fingerprint, content_hash)` is a known negative, returns
-    /// `None` immediately (skipping file I/O). If verification yields zero
-    /// matches, records the entry as a negative for future queries.
+    /// Returns [`VerificationResult::Cached`] when `(query_fingerprint,
+    /// content_hash)` is a known negative (skipping file I/O).
+    /// Returns [`VerificationResult::Matches`] with the matches found
+    /// (recording zero-match results as negatives for future queries).
+    /// Returns [`VerificationResult::Failed`] when the file cannot be
+    /// read — the caller should log the error and increment the
+    /// failure counter via [`VerificationResult::into_option`].
     fn verify_candidate(
         &self,
         file_info: &FileInfo,
@@ -856,13 +898,13 @@ impl<'a> Executor<'a> {
         options: &QueryOptions,
         neg_fp: u64,
         stats: &QueryStatsAccum,
-    ) -> Option<Vec<Match>> {
+    ) -> VerificationResult {
         if self
             .neg_cache
             .is_known_negative(neg_fp, file_info.content_hash)
         {
             stats.neg_cache_hits.fetch_add(1, Ordering::Relaxed);
-            return None;
+            return VerificationResult::Cached;
         }
         stats.neg_cache_misses.fetch_add(1, Ordering::Relaxed);
 
@@ -872,13 +914,9 @@ impl<'a> Executor<'a> {
                     self.neg_cache
                         .record_negative(neg_fp, file_info.content_hash);
                 }
-                Some(matches)
+                VerificationResult::Matches(matches)
             }
-            Err(e) => {
-                tracing::warn!("ix: cannot verify file {}: {e}", file_info.path.display());
-                stats.files_failed_verify.fetch_add(1, Ordering::Relaxed);
-                None
-            }
+            Err(e) => VerificationResult::Failed(e),
         }
     }
 

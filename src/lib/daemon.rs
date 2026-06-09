@@ -291,6 +291,12 @@ fn check_concurrent_instance(
         return Ok(());
     }
     let Ok(existing) = Beacon::read_from(ix_dir) else {
+        tracing::warn!(
+            "ixd: beacon file at {} is corrupted or unreadable \u{2014} \
+             proceeding as if no conflicting instance exists;\
+             consider removing the beacon file if this persists",
+            beacon_path.display()
+        );
         return Ok(());
     };
     let pid = nix::unistd::Pid::from_raw(existing.pid);
@@ -533,8 +539,16 @@ fn handle_changes(
     );
 
     let prefix = ctx.log_prefix;
+    let changed_count = changed_files.len();
     if let Err(e) = ctx.builder.update(changed_files) {
-        eprintln!("ixd [{prefix}]: update failed: {e} — retrying on next change");
+        eprintln!(
+            "ixd [{prefix}]: update failed for {changed_count} files: {e} — retrying on next change"
+        );
+        tracing::warn!(
+            "ixd [{}]: dropped {} changed files due to update error: {e}",
+            prefix,
+            changed_count,
+        );
     } else {
         ctx.posting_cache.invalidate_all();
         ctx.neg_cache.clear();
