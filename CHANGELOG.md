@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-06-10
+
+### Fixed
+- **Daemon socket error swallowing** — When the daemon encountered a query execution error (e.g., invalid regex pattern), it previously returned a successful `SearchResults` with zero matches, causing `ix --regex "[invalid" /path` to exit 0 silently when a daemon was running. The wire protocol now carries an `error` field so clients can distinguish query failure from zero results and fall back to local search for proper error propagation.
+
 ## [0.12.2] - 2026-06-10
 
 ### Fixed
