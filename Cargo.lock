@@ -957,7 +957,7 @@ dependencies = [
 
 [[package]]
 name = "moeix"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "bzip2",
  "chrono",
