@@ -50,6 +50,7 @@ pub struct Builder {
     exclude_patterns: Vec<String>,
     watch_roots: Vec<PathBuf>,
     committed: bool,
+    debug_build: bool,
 }
 
 /// Accumulated metrics collected during a build run.
@@ -223,9 +224,14 @@ impl Builder {
             resource_guard: None,
             dead_ends: Vec::new(),
             max_file_size: 100 * 1024 * 1024,
+            // Builder starts with no exclude_patterns — callers set them via
+            // with_exclude_patterns(). The daemon (daemon.rs:195) bridges
+            // Config's defaults here; standalone CLI builds get an empty set.
+            // See also: src/lib/config.rs:39, src/lib/watcher.rs:40
             exclude_patterns: Vec::new(),
             watch_roots: Vec::new(),
             committed: false,
+            debug_build: false,
         })
     }
 
@@ -442,6 +448,7 @@ impl Builder {
 
         let start = Instant::now();
         let root = self.root.clone();
+        self.debug_build = std::env::var("IX_DEBUG_BUILD").is_ok();
 
         // LLMOSafe Formal Law: Sensitive filesystem traversal (Root)
         if root.to_string_lossy() == "/" {
@@ -776,7 +783,9 @@ impl Builder {
             Self::get_writer(&mut self.strings_writer, "strings_writer")?.stream_position()?,
         )
         .map_err(|e| Error::Io(std::io::Error::other(e)))?;
-        let path_len = u16::try_from(path_bytes.len()).unwrap_or(0);
+        let path_len = u16::try_from(path_bytes.len()).map_err(|_| {
+            Error::Config(format!("path exceeds maximum length: {}", path_bytes.len()))
+        })?;
 
         self.strings_writer
             .as_mut()
@@ -879,7 +888,7 @@ impl Builder {
         self.stats.files_scanned += 1;
         self.stats.bytes_scanned += size;
 
-        if std::env::var("IX_DEBUG_BUILD").is_ok() {
+        if self.debug_build {
             eprintln!(
                 "IX-INDEXED: file_id={file_id} unique_trigrams={trigram_count} size={size}: {path_str}"
             );
@@ -888,7 +897,7 @@ impl Builder {
         // Flush every 500k entries (~8MB peak RAM) to prevent unbounded HashMap growth.
         // This was the RAM DDOS root cause in v0.1.1 — threshold was 5M (far too high).
         if self.postings_count >= 500_000 {
-            if std::env::var("IX_DEBUG_BUILD").is_ok() {
+            if self.debug_build {
                 eprintln!(
                     "IX-FLUSH: postings_count={} after file_id={file_id}",
                     self.postings_count
@@ -953,9 +962,12 @@ impl Builder {
         }
 
         let path_bytes = path.to_string_lossy().as_bytes().to_vec();
+        let path_len_u16 = u16::try_from(path_bytes.len()).map_err(|_| {
+            Error::Config(format!("path exceeds maximum length: {}", path_bytes.len()))
+        })?;
         delta.write_all(&[DELTA_FILE_ENTRY])?;
         delta.write_all(&file_id.to_le_bytes())?;
-        delta.write_all(&(path_bytes.len() as u16).to_le_bytes())?;
+        delta.write_all(&path_len_u16.to_le_bytes())?;
         delta.write_all(&path_bytes)?;
         delta.write_all(&mtime.to_le_bytes())?;
         delta.write_all(&size.to_le_bytes())?;

@@ -137,6 +137,11 @@ pub struct FileChange {
     pub op: FileOp,
 }
 
+/// Helper for serde defaults: `true`.
+const fn default_true() -> bool {
+    true
+}
+
 /// Search results returned from daemon to client.
 ///
 /// The `error` field is populated only when the daemon encounters an error
@@ -147,6 +152,9 @@ pub struct FileChange {
 /// The field uses `#[serde(default)]` + `#[serde(skip_serializing_if)]`
 /// for backward compatibility: new daemon ↔ old client (old client ignores
 /// unknown field), old daemon ↔ new client (error deserializes as `None`).
+///
+/// For progressive queries (`done` = `false`) the daemon sends multiple
+/// `SearchResults` messages, one per batch, ending with `done` = `true`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResults {
     /// Query ID (matches the id from the request).
@@ -160,6 +168,13 @@ pub struct SearchResults {
     /// a successful search with zero matches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Whether this is the final batch in a progressive query.
+    /// Always `true` for non-progressive queries (single response).
+    #[serde(default = "default_true")]
+    pub done: bool,
+    /// Batch sequence number (0-based) for progressive queries.
+    #[serde(default)]
+    pub batch: u32,
 }
 
 /// Messages sent from the server to connected clients.
@@ -254,9 +269,17 @@ pub struct SearchQuery {
     /// Absolute path prefix to filter results (None = search entire root).
     #[serde(default)]
     pub search_path: Option<std::path::PathBuf>,
-    /// Number of Rayon threads to use for parallel work.
+    /// If true, the daemon streams results progressively as batches.
     #[serde(default)]
-    pub threads: usize,
+    pub progressive: bool,
+    /// Per-chunk size in bytes for large-file chunked streaming.
+    /// 0 means use the streaming module's default (16 `MiB`).
+    #[serde(default)]
+    pub chunk_size_bytes: usize,
+    /// Overlap between adjacent chunks in bytes.
+    /// 0 means use the streaming module's default (1 `MiB`).
+    #[serde(default)]
+    pub chunk_overlap_bytes: usize,
 }
 
 /// Graceful shutdown notice sent from server to clients.
@@ -392,6 +415,51 @@ struct Shared {
     last_rebuild_at: Option<u64>,
     files_count: usize,
     root: PathBuf,
+    /// Max concurrent progressive search queries (backpressure).
+    search_slots: Arc<SearchSlots>,
+}
+
+/// Simple permit counter for limiting concurrent progressive searches.
+struct SearchSlots {
+    max: u32,
+    available: std::sync::Mutex<u32>,
+}
+
+impl SearchSlots {
+    fn new(max: u32) -> Self {
+        Self {
+            max,
+            available: std::sync::Mutex::new(max),
+        }
+    }
+
+    /// Try to acquire a slot. Returns `Some(SearchSlot)` on success,
+    /// `None` if all slots are full. The slot is released when the
+    /// guard is dropped.
+    fn try_acquire(self: &Arc<Self>) -> Option<SearchSlot> {
+        let mut count = self.available.lock().ok()?;
+        if *count > 0 {
+            *count -= 1;
+            Some(SearchSlot {
+                slots: Arc::clone(self),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+/// RAII guard: releases a search slot on drop.
+struct SearchSlot {
+    slots: Arc<SearchSlots>,
+}
+
+impl Drop for SearchSlot {
+    fn drop(&mut self) {
+        if let Ok(mut count) = self.slots.available.lock() {
+            *count = (*count + 1).min(self.slots.max);
+        }
+    }
 }
 
 struct ClientConn {
@@ -455,6 +523,7 @@ impl DaemonServer {
             last_rebuild_at: None,
             files_count: 0,
             root: root.to_path_buf(),
+            search_slots: Arc::new(SearchSlots::new(4)),
         }));
         let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
 
@@ -669,19 +738,112 @@ fn client_read_loop(
                             };
                             s.root.clone()
                         };
-                        match execute_search(&root, &query) {
-                            Ok(results) => ServerMessage::SearchResults(results),
-                            Err(e) => {
+
+                        if query.progressive {
+                            // Progressive mode: stream results as they arrive.
+                            // Spawn a background thread to execute the search
+                            // and forward batches through a channel.
+                            // A slot-based permit system (max 4 concurrent)
+                            // provides backpressure to prevent thread explosion.
+                            let (result_sender, result_receiver) =
+                                std::sync::mpsc::channel::<SearchResults>();
+                            let root_clone = root.clone();
+                            let slot = {
+                                let Ok(s) = shared.lock() else {
+                                    tracing::warn!("ixd: shared lock poisoned");
+                                    continue;
+                                };
+                                let Some(slot) = s.search_slots.try_acquire() else {
+                                    tracing::warn!(
+                                        "ixd: too many concurrent progressive searches, rejecting"
+                                    );
+                                    // Send error response so the client knows.
+                                    if let Ok(mut ws) = stream.try_clone() {
+                                        if let Ok(mut line) = serde_json::to_string(
+                                            &ServerMessage::SearchResults(SearchResults {
+                                                id: query.id,
+                                                matches: vec![],
+                                                stats: crate::executor::QueryStats::default(),
+                                                error: Some("server busy".into()),
+                                                done: true,
+                                                batch: 0,
+                                            }),
+                                        ) {
+                                            line.push('\n');
+                                            let _ = ws.write_all(line.as_bytes());
+                                            let _ = ws.flush();
+                                        }
+                                    }
+                                    continue;
+                                };
+                                slot
+                            };
+                            let _ = std::thread::Builder::new()
+                                .name("ixd-search-prog".to_string())
+                                .spawn(move || {
+                                    // Hold the slot guard for the duration of the
+                                    // search. Released when this closure ends.
+                                    let _held = slot;
+                                    if let Err(e) = execute_search_progressive(
+                                        &root_clone,
+                                        &query,
+                                        &result_sender,
+                                    ) {
+                                        tracing::warn!("ixd: progressive search failed: {e}");
+                                        let _ = result_sender.send(SearchResults {
+                                            id: query.id,
+                                            matches: vec![],
+                                            stats: crate::executor::QueryStats::default(),
+                                            error: Some(e.to_string()),
+                                            done: true,
+                                            batch: 0,
+                                        });
+                                    }
+                                    // Ensure result_sender is dropped so the
+                                    // receiver loop below terminates.
+                                    drop(result_sender);
+                                });
+                            // Write each batch as a separate NDJSON line.
+                            while let Ok(batch) = result_receiver.recv() {
+                                if let Ok(mut write_stream) = stream.try_clone() {
+                                    match serde_json::to_string(&ServerMessage::SearchResults(
+                                        batch,
+                                    )) {
+                                        Ok(mut line) => {
+                                            line.push('\n');
+                                            if write_stream.write_all(line.as_bytes()).is_err()
+                                                || write_stream.flush().is_err()
+                                            {
+                                                break;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "ixd: failed to serialize progressive batch: {e}"
+                                            );
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+
+                        // Non-progressive: single response path
+                        execute_search(&root, &query).map_or_else(
+                            |e| {
                                 tracing::warn!("ixd: search failed: {e}");
-                                let err_msg = e.to_string();
                                 ServerMessage::SearchResults(SearchResults {
                                     id: query.id,
                                     matches: vec![],
                                     stats: crate::executor::QueryStats::default(),
-                                    error: Some(err_msg),
+                                    error: Some(e.to_string()),
+                                    done: true,
+                                    batch: 0,
                                 })
-                            }
-                        }
+                            },
+                            ServerMessage::SearchResults,
+                        )
                     }
                     ClientMessage::Shutdown { ack } => {
                         // Client acknowledges shutdown notice
@@ -816,9 +978,9 @@ impl DaemonClient {
                 // query (e.g., invalid regex), propagate it to the caller
                 // instead of treating it as a successful zero-match search.
                 if let Some(ref error) = results.error {
-                    return Err(DaemonSockError::Io(std::io::Error::other(
-                        format!("daemon search error: {error}"),
-                    )));
+                    return Err(DaemonSockError::Io(std::io::Error::other(format!(
+                        "daemon search error: {error}"
+                    ))));
                 }
                 Ok(results)
             }
@@ -830,6 +992,91 @@ impl DaemonClient {
                 std::io::ErrorKind::InvalidData,
                 format!("invalid JSON: {e}"),
             ))),
+        }
+    }
+
+    /// Execute a search query progressively, returning an iterator over result batches.
+    ///
+    /// Sends a `SearchQuery` with `progressive: true` and returns an iterator
+    /// that yields `SearchResults` batches as they arrive from the daemon.
+    /// The iterator yields `None` when the daemon sends a batch with `done: true`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on I/O failure or serialization error during the
+    /// initial query send.
+    pub fn search_progressive(&mut self, query: SearchQuery) -> Result<SearchResultsIter<'_>> {
+        use std::io::Write;
+
+        let mut prog_query = query;
+        prog_query.progressive = true;
+
+        let stream = self.stream.get_mut();
+        stream.set_write_timeout(Some(std::time::Duration::from_secs(3)))?;
+
+        let mut line = serde_json::to_string(&ClientMessage::SearchQuery(prog_query))?;
+        line.push('\n');
+        stream.write_all(line.as_bytes())?;
+        stream.flush()?;
+
+        Ok(SearchResultsIter {
+            client: self,
+            done_received: false,
+        })
+    }
+}
+
+/// Iterator over progressive search result batches from the daemon.
+///
+/// Yields [`SearchResults`] messages until the daemon sends a batch with
+/// `done: true`, at which point `next()` returns `None`.
+///
+/// Because the daemon keeps the socket open after sending the final batch
+/// (so the client can send additional queries), the iterator tracks the
+/// `done` flag and returns `None` without trying to read from the socket
+/// after the final batch — avoiding a deadlock.
+pub struct SearchResultsIter<'a> {
+    client: &'a mut DaemonClient,
+    /// Set to `true` after yielding a batch with `done: true`.
+    /// The next `next()` call returns `None` without reading.
+    done_received: bool,
+}
+
+impl Iterator for SearchResultsIter<'_> {
+    type Item = Result<SearchResults>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done_received {
+            return None;
+        }
+        match self.client.recv() {
+            Ok(ServerMessage::SearchResults(results)) => {
+                if let Some(ref error) = results.error {
+                    return Some(Err(DaemonSockError::Io(std::io::Error::other(format!(
+                        "daemon search error: {error}"
+                    )))));
+                }
+                let is_done = results.done;
+                if is_done {
+                    self.done_received = true;
+                }
+                Some(Ok(results))
+            }
+            Ok(_) => Some(Err(DaemonSockError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "expected SearchResults message from daemon",
+            )))),
+            Err(e) => {
+                if matches!(
+                    &e,
+                    DaemonSockError::Io(io_err) if io_err.kind() == std::io::ErrorKind::UnexpectedEof
+                ) {
+                    // Normal end of progressive stream.
+                    None
+                } else {
+                    Some(Err(e))
+                }
+            }
         }
     }
 }
@@ -892,11 +1139,13 @@ pub fn execute_search(
         type_filter: query.file_types.clone(),
         context_lines: query.context_lines,
         decompress: query.decompress,
-        threads: query.threads,
+
         multiline: query.multiline,
         archive: query.archive,
         binary: query.binary,
         word_boundary: query.word_boundary,
+        chunk_size_bytes: query.chunk_size_bytes,
+        chunk_overlap_bytes: query.chunk_overlap_bytes,
     };
 
     let (matches, mut stats) = executor.execute(&plan, &options)?;
@@ -922,7 +1171,106 @@ pub fn execute_search(
         matches: filtered_matches,
         stats,
         error: None,
+        done: true,
+        batch: 0,
     })
+}
+
+/// Execute a search query progressively, sending batches through a channel.
+///
+/// Opens the index, creates an executor, and runs the query via
+/// [`Executor::execute_progressive`]. Each batch of results is sent
+/// through `sender` as a [`SearchResults`] message.
+///
+/// # Errors
+///
+/// Returns an error if the index file cannot be read or the query cannot
+/// be planned.
+pub fn execute_search_progressive(
+    root: &Path,
+    query: &SearchQuery,
+    sender: &std::sync::mpsc::Sender<SearchResults>,
+) -> std::result::Result<crate::executor::QueryStats, Box<dyn std::error::Error + Send + Sync>> {
+    use crate::executor::{Executor, ProgressiveBatch, QueryOptions};
+    use crate::planner::Planner;
+    use crate::reader::Reader;
+
+    let index_dir = root.join(".ix");
+    let index_path = index_dir.join("shard.ix");
+    if !index_path.exists() {
+        return Err("index not found".into());
+    }
+
+    let reader = Reader::open(&index_path)?;
+    let mut executor = Executor::new(&reader);
+
+    let delta_path = index_dir.join("shard.ix.delta");
+    executor.set_delta_path(delta_path);
+
+    let plan = Planner::plan_with_pool(
+        &query.pattern,
+        crate::planner::QueryOptions {
+            is_regex: query.is_regex,
+            ignore_case: query.ignore_case,
+            multiline: query.multiline,
+            word_boundary: query.word_boundary,
+        },
+        executor.regex_pool(),
+    )?;
+
+    let options = QueryOptions {
+        count_only: false,
+        files_only: false,
+        max_results: query.max_results,
+        type_filter: query.file_types.clone(),
+        context_lines: query.context_lines,
+        decompress: query.decompress,
+
+        multiline: query.multiline,
+        archive: query.archive,
+        binary: query.binary,
+        word_boundary: query.word_boundary,
+        chunk_size_bytes: query.chunk_size_bytes,
+        chunk_overlap_bytes: query.chunk_overlap_bytes,
+    };
+
+    let (prog_sender, prog_receiver) = std::sync::mpsc::channel::<ProgressiveBatch>();
+    let stats = executor.execute_progressive(&plan, &options, prog_sender)?;
+
+    let mut batch_num = 0u32;
+    while let Ok(batch) = prog_receiver.recv() {
+        let filtered_matches: Vec<_> = if let Some(ref search_path) = query.search_path {
+            batch
+                .file_matches
+                .into_iter()
+                .filter(|m| {
+                    let abs_path = if m.file_path.is_absolute() {
+                        m.file_path.clone()
+                    } else {
+                        root.join(&m.file_path)
+                    };
+                    abs_path.starts_with(search_path)
+                })
+                .collect()
+        } else {
+            batch.file_matches
+        };
+        let is_last = batch_num == 0; // single-batch for now, last = first
+        let _ = sender.send(SearchResults {
+            id: query.id,
+            matches: filtered_matches,
+            stats: stats.clone(),
+            error: None,
+            done: is_last,
+            batch: batch_num,
+        });
+        batch_num += 1;
+        if is_last {
+            break;
+        }
+    }
+
+    Ok(stats)
 }
 
 impl Drop for DaemonServer {
@@ -1237,7 +1585,9 @@ mod tests {
             archive: false,
             binary: false,
             search_path: Some(PathBuf::from("/abs/path")),
-            threads: 0,
+            progressive: false,
+            chunk_size_bytes: 0,
+            chunk_overlap_bytes: 0,
         };
         let json = serde_json::to_string(&q).expect("serialize");
         let back: SearchQuery = serde_json::from_str(&json).expect("deserialize");

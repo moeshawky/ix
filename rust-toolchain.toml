@@ -1,0 +1,11 @@
+# rust-toolchain.toml — ix project toolchain pin
+#
+# ALIGNMENT: MSRV 1.85 (Cargo.toml + clippy.toml). Stable channel for
+# production builds. Components required by CI gates (fmt, clippy, src
+# for doctests). Targets cover native build + aarch64 cross-compilation
+# (see .cargo/config.toml linker config).
+
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy", "rust-src"]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]

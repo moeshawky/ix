@@ -36,8 +36,8 @@ pub enum Error {
     PostingCorrupted,
 
     /// CDX compressed block is corrupted (decompression or decode failure).
-    #[error("cdx block corrupted")]
-    CdxBlockCorrupted,
+    #[error("cdx block corrupted: {0}")]
+    CdxBlockCorrupted(String),
 
     /// Section offset exceeds the index file bounds.
     /// Section offset exceeds the index file bounds.

@@ -19,19 +19,24 @@ use std::time::UNIX_EPOCH;
 use std::os::unix::fs::MetadataExt;
 
 /// Lightweight snapshot of shard-level metadata (no mmap needed).
+///
+/// Public for external monitoring tools via [`Reader::metadata`].
 #[derive(Debug, Clone, Copy)]
 pub struct ShardMetadata {
     /// Microsecond-precision Unix timestamp from the shard header.
+    #[allow(dead_code)]
     pub shard_timestamp: u64,
     /// Total number of files indexed in this shard.
+    #[allow(dead_code)]
     pub file_count: u32,
     /// Total number of unique trigrams in this shard.
+    #[allow(dead_code)]
     pub trigram_count: u32,
 }
 
 /// One entry in the CDX block index: first trigram key + absolute block offset.
 #[derive(Debug, Clone, Copy)]
-pub struct CdxBlockEntry {
+pub(crate) struct CdxBlockEntry {
     /// First trigram key in this block.
     pub first_key: u32,
     /// Absolute byte offset of the compressed block.
@@ -267,12 +272,17 @@ impl Reader {
         Ok(last_modified)
     }
 
-    /// Binary search the trigram table. Returns `None` if the trigram
-    /// is unknown.
+    /// Binary search the trigram table. Returns `Ok(None)` if the trigram
+    /// is unknown or an error if the index data is corrupted.
     ///
     /// When CDX compression is active, performs a two-level search:
     /// first on the block index, then within the decompressed block.
-    pub fn get_trigram(&self, trigram: Trigram) -> Option<TrigramInfo> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::CdxBlockCorrupted` if the CDX block cannot be
+    /// decompressed or contains malformed varint data.
+    pub fn get_trigram(&self, trigram: Trigram) -> Result<Option<TrigramInfo>> {
         if self.header.has_cdx() && !self.cdx_blocks.is_empty() {
             return self.get_trigram_cdx(trigram);
         }
@@ -289,51 +299,66 @@ impl Reader {
             let mid = low + (high - low) / 2;
             let entry_off = table_start + mid * entry_size;
 
-            let key_bytes = self.mmap.get(entry_off..entry_off + 4)?;
-            let key = u32::from_le_bytes(key_bytes.try_into().ok()?);
+            let Some(key_bytes) = self.mmap.get(entry_off..entry_off + 4) else {
+                return Ok(None);
+            };
+            let Some(key_val) = key_bytes.try_into().ok() else {
+                return Ok(None);
+            };
+            let key = u32::from_le_bytes(key_val);
 
             match key.cmp(&trigram) {
                 std::cmp::Ordering::Equal => {
-                    let entry = self.mmap.get(entry_off..entry_off + entry_size)?;
+                    let Some(entry) = self.mmap.get(entry_off..entry_off + entry_size) else {
+                        return Ok(None);
+                    };
 
                     let mut off_bytes = [0u8; 8];
                     off_bytes[..6].copy_from_slice(&entry[4..10]);
                     let posting_offset = u64::from_le_bytes(off_bytes);
 
-                    let posting_length = entry
+                    let Some(posting_length) = entry
                         .get(10..14)
                         .and_then(|s| s.try_into().ok())
-                        .map(u32::from_le_bytes)?;
+                        .map(u32::from_le_bytes)
+                    else {
+                        return Ok(None);
+                    };
 
-                    let doc_frequency = entry
+                    let Some(doc_frequency) = entry
                         .get(14..18)
                         .and_then(|s| s.try_into().ok())
-                        .map(u32::from_le_bytes)?;
+                        .map(u32::from_le_bytes)
+                    else {
+                        return Ok(None);
+                    };
 
-                    return Some(TrigramInfo {
+                    return Ok(Some(TrigramInfo {
                         posting_offset,
                         posting_length,
                         doc_frequency,
-                    });
+                    }));
                 }
                 std::cmp::Ordering::Less => low = mid + 1,
                 std::cmp::Ordering::Greater => high = mid,
             }
         }
 
-        None
+        Ok(None)
     }
 
-    fn get_trigram_cdx(&self, trigram: Trigram) -> Option<TrigramInfo> {
+    fn get_trigram_cdx(&self, trigram: Trigram) -> Result<Option<TrigramInfo>> {
         let idx = self
             .cdx_blocks
             .partition_point(|entry| entry.first_key <= trigram);
         if idx == 0 {
-            return None;
+            return Ok(None);
         }
         let block_idx = idx - 1;
 
-        let block_entry = self.cdx_blocks.get(block_idx)?;
+        let Some(block_entry) = self.cdx_blocks.get(block_idx) else {
+            return Ok(None);
+        };
 
         let block_end = self.cdx_blocks.get(block_idx + 1).map_or_else(
             || self.header.trigram_table_offset + self.header.trigram_table_size,
@@ -342,13 +367,16 @@ impl Reader {
 
         let block_start = block_entry.block_offset as usize;
         let block_end = block_end as usize;
-        let block_data = self.mmap.get(block_start..block_end)?;
+        let Some(block_data) = self.mmap.get(block_start..block_end) else {
+            return Ok(None);
+        };
 
         let decompressed = match zstd::decode_all(block_data) {
             Ok(d) => d,
             Err(e) => {
-                tracing::warn!("ix: CDX block decompression failed: {e}");
-                return None;
+                return Err(Error::CdxBlockCorrupted(format!(
+                    "zstd decompression failed: {e}"
+                )));
             }
         };
 
@@ -356,8 +384,9 @@ impl Reader {
         let num_entries = match crate::varint::decode(&decompressed, &mut pos) {
             Ok(v) => usize::try_from(v).unwrap_or(0),
             Err(e) => {
-                tracing::warn!("ix: CDX num_entries varint decode failed: {e}");
-                return None;
+                return Err(Error::CdxBlockCorrupted(format!(
+                    "num_entries varint decode failed: {e}"
+                )));
             }
         };
 
@@ -366,8 +395,9 @@ impl Reader {
             let key_delta = match crate::varint::decode(&decompressed, &mut pos) {
                 Ok(v) => u32::try_from(v).unwrap_or(0),
                 Err(e) => {
-                    tracing::warn!("ix: CDX key_delta varint decode failed: {e}");
-                    return None;
+                    return Err(Error::CdxBlockCorrupted(format!(
+                        "key_delta varint decode failed: {e}"
+                    )));
                 }
             };
             let key = last_key + key_delta;
@@ -376,38 +406,41 @@ impl Reader {
             let posting_offset = match crate::varint::decode(&decompressed, &mut pos) {
                 Ok(v) => v,
                 Err(e) => {
-                    tracing::warn!("ix: CDX posting_offset varint decode failed: {e}");
-                    return None;
+                    return Err(Error::CdxBlockCorrupted(format!(
+                        "posting_offset varint decode failed: {e}"
+                    )));
                 }
             };
             let posting_length = match crate::varint::decode(&decompressed, &mut pos) {
                 Ok(v) => u32::try_from(v).unwrap_or(0),
                 Err(e) => {
-                    tracing::warn!("ix: CDX posting_length varint decode failed: {e}");
-                    return None;
+                    return Err(Error::CdxBlockCorrupted(format!(
+                        "posting_length varint decode failed: {e}"
+                    )));
                 }
             };
             let doc_frequency = match crate::varint::decode(&decompressed, &mut pos) {
                 Ok(v) => u32::try_from(v).unwrap_or(0),
                 Err(e) => {
-                    tracing::warn!("ix: CDX doc_frequency varint decode failed: {e}");
-                    return None;
+                    return Err(Error::CdxBlockCorrupted(format!(
+                        "doc_frequency varint decode failed: {e}"
+                    )));
                 }
             };
 
             if key == trigram {
-                return Some(TrigramInfo {
+                return Ok(Some(TrigramInfo {
                     posting_offset,
                     posting_length,
                     doc_frequency,
-                });
+                }));
             }
             if key > trigram {
                 break;
             }
         }
 
-        None
+        Ok(None)
     }
 
     /// Decode the posting list for a given trigram info.
@@ -570,6 +603,8 @@ impl Reader {
 }
 
 /// Metadata for a single file stored in the delta index.
+///
+/// Public because it appears in the public [`DeltaReader::id_to_fileinfo`] field.
 #[derive(Debug, Clone)]
 pub struct DeltaFileInfo {
     /// Absolute path to the file on disk.
@@ -581,6 +616,7 @@ pub struct DeltaFileInfo {
     /// XXH64 content hash computed at index time.
     pub hash: u64,
     /// Raw bloom filter bytes (260 bytes).
+    #[allow(dead_code)]
     pub bloom_bytes: Vec<u8>,
 }
 

@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    import pytest
 
 import ix
 
@@ -148,3 +144,13 @@ def test_build_no_notify_stub() -> None:
             assert "files_scanned" in result
         except NotImplementedError:
             pass  # ok if notify feature absent
+
+
+def test_context_manager_protocol(sample_project: Path) -> None:
+    """Index supports the context manager protocol (__enter__/__exit__)."""
+    with ix.Index(str(sample_project)) as idx:
+        result = idx.search("hello")
+        assert hasattr(result, "matches")
+        assert len(result.matches) > 0
+    # After __exit__, the index should be closed (no assertion needed —
+    # just verifying __exit__ doesn't panic).

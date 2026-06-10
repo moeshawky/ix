@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 /// Hit/miss counters for a [`RegexPool`].
+///
+/// Public for external monitoring via [`RegexPool::stats`].
 #[derive(Debug, Default, Clone)]
 pub struct PoolStats {
     /// Number of pool hits (pattern already compiled).

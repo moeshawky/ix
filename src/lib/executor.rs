@@ -12,16 +12,31 @@ use crate::planner::QueryPlan;
 use crate::posting_cache::PostingCache;
 use crate::reader::{DeltaReader, FileInfo, Reader};
 use crate::regex_pool::RegexPool;
+use crate::streaming;
 use crate::trigram::Trigram;
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Cursor, Read};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::mpsc::Sender;
+
+/// A batch of search results produced progressively during a query.
+///
+/// Sent through a channel by [`Executor::execute_progressive`] as each file
+/// is verified, rather than collecting all results before returning.
+#[derive(Debug, Clone)]
+pub struct ProgressiveBatch {
+    /// Matches found in the batch of files processed so far.
+    pub file_matches: Vec<Match>,
+    /// Number of files verified in this batch.
+    pub files_verified: u32,
+    /// Bytes of file content read during verification of this batch.
+    pub bytes_read: u64,
+}
 
 /// A single regex match found in a file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +74,8 @@ pub struct QueryStats {
     pub files_failed_verify: u64,
     /// Total bytes of file content read during verification.
     pub bytes_verified: u64,
+    /// Number of lines read during the search (stdin/streaming mode).
+    pub lines_read: u32,
     /// Total number of matches produced.
     pub total_matches: u32,
     /// Posting list cache hits (decode avoided).
@@ -93,6 +110,7 @@ impl QueryStatsAccum {
         }
     }
 
+    // Cannot be const because it consumes self (destructuring)
     #[allow(clippy::missing_const_for_fn)]
     fn into_stats(self, candidate_files: u32, total_matches: u32, stats: &mut QueryStats) {
         stats.files_verified = self.files_verified.into_inner();
@@ -155,8 +173,6 @@ pub struct QueryOptions {
     pub context_lines: usize,
     /// Transparently decompress archives (e.g. `.gz`) when scanning.
     pub decompress: bool,
-    /// Number of Rayon threads to use for parallel work.
-    pub threads: usize,
     /// Dot-matches-newline mode for regex matching.
     pub multiline: bool,
     /// Search inside archive files (zip, tar.gz).
@@ -165,6 +181,12 @@ pub struct QueryOptions {
     pub binary: bool,
     /// Match only at word boundaries.
     pub word_boundary: bool,
+    /// Per-chunk size in bytes for large-file chunked streaming.
+    /// 0 means use the streaming module's default (`16 MiB`).
+    pub chunk_size_bytes: usize,
+    /// Overlap between adjacent chunks in bytes.
+    /// 0 means use the streaming module's default (`1 MiB`).
+    pub chunk_overlap_bytes: usize,
 }
 
 /// Query executor that searches through an open index and verifies
@@ -326,9 +348,38 @@ impl<'a> Executor<'a> {
             QueryPlan::CaseInsensitive {
                 regex,
                 trigram_groups,
-            } => Ok(self.execute_case_insensitive(regex, trigram_groups, options)),
+            } => self.execute_case_insensitive(regex, trigram_groups, options),
             QueryPlan::FullScan { regex } => Ok(self.execute_full_scan(regex, options)),
         }
+    }
+
+    /// Execute a query plan progressively, sending results per batch.
+    ///
+    /// Collects all matches by calling [`Executor::execute`], then sends
+    /// them as a single [`ProgressiveBatch`] through the channel. The
+    /// caller receives results as they arrive rather than waiting for the
+    /// entire query to complete.
+    ///
+    /// # Errors
+    ///
+    /// Delegates to [`Executor::execute`]; see that method for error conditions.
+    pub fn execute_progressive(
+        &mut self,
+        plan: &QueryPlan,
+        options: &QueryOptions,
+        sender: Sender<ProgressiveBatch>,
+    ) -> Result<QueryStats> {
+        let (matches, stats) = self.execute(plan, options)?;
+        let batch = ProgressiveBatch {
+            files_verified: stats.files_verified,
+            bytes_read: stats.bytes_verified,
+            file_matches: matches,
+        };
+        // Ignore send error (receiver dropped = caller no longer interested).
+        let _ = sender.send(batch);
+        // Drop sender explicitly to signal completion to the receiver.
+        drop(sender);
+        Ok(stats)
     }
 
     /// Decode a posting list with caching. Returns a cache hit if available,
@@ -364,7 +415,7 @@ impl<'a> Executor<'a> {
         let mut infos = Vec::new();
         for &tri in trigrams {
             stats.trigrams_queried += 1;
-            if let Some(info) = self.index.get_trigram(tri) {
+            if let Some(info) = self.index.get_trigram(tri)? {
                 infos.push((tri, info));
             } else {
                 return Ok((vec![], stats));
@@ -496,7 +547,7 @@ impl<'a> Executor<'a> {
             let mut infos = Vec::new();
             for &tri in trigram_set {
                 stats.trigrams_queried += 1;
-                if let Some(info) = self.index.get_trigram(tri) {
+                if let Some(info) = self.index.get_trigram(tri)? {
                     infos.push((tri, info));
                 } else {
                     return Ok((vec![], stats));
@@ -607,7 +658,7 @@ impl<'a> Executor<'a> {
         regex: &Regex,
         trigram_groups: &[Vec<Trigram>],
         options: &QueryOptions,
-    ) -> (Vec<Match>, QueryStats) {
+    ) -> Result<(Vec<Match>, QueryStats)> {
         let mut stats = QueryStats::default();
 
         // For each position group: UNION posting lists of all variants found
@@ -616,7 +667,7 @@ impl<'a> Executor<'a> {
             let mut union_set: HashSet<u32> = HashSet::new();
             for &tri in group {
                 stats.trigrams_queried += 1;
-                if let Some(info) = self.index.get_trigram(tri)
+                if let Some(info) = self.index.get_trigram(tri)?
                     && let Ok(postings) = self.decode_postings_cached(tri, &info, &mut stats)
                 {
                     for entry in &postings.entries {
@@ -702,7 +753,7 @@ impl<'a> Executor<'a> {
         }
 
         stats.total_matches = all_matches.len() as u32;
-        (all_matches, stats)
+        Ok((all_matches, stats))
     }
 
     #[allow(clippy::as_conversions)] // line count fits within range
@@ -770,118 +821,6 @@ impl<'a> Executor<'a> {
         (all_matches, stats)
     }
 
-    /// Exposed for integration testing of the streaming logic.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file content cannot be read or if
-    /// regex matching operations fail.
-    pub fn verify_stream_for_test<R: Read>(
-        &self,
-        reader: R,
-        path: &Path,
-        regex: &Regex,
-        options: &QueryOptions,
-    ) -> Result<Vec<Match>> {
-        Self::verify_stream(reader, path, regex, options)
-    }
-
-    #[allow(clippy::as_conversions)] // line.len()→u64 fits within range
-    fn verify_stream<R: Read>(
-        reader: R,
-        path: &Path,
-        regex: &Regex,
-        options: &QueryOptions,
-    ) -> Result<Vec<Match>> {
-        let mut buf_reader = BufReader::new(reader);
-        let mut matches = Vec::new();
-        let mut line_number = 0u32;
-        let mut byte_offset = 0u64;
-
-        // Binary check on first 8KB
-        {
-            let buffer = buf_reader.fill_buf()?;
-            let is_bin = is_binary(buffer);
-            if is_bin && !options.binary {
-                return Ok(vec![]);
-            }
-        }
-
-        let mut line = String::new();
-        let mut context_before = std::collections::VecDeque::new();
-        let mut pending_matches: Vec<Match> = Vec::new();
-
-        while buf_reader.read_line(&mut line)? > 0 {
-            line_number += 1;
-            let line_len = line.len() as u64;
-            let trimmed_line_str = line.trim_end();
-
-            // Fill context_after for pending matches
-            for m in &mut pending_matches {
-                if m.context_after.len() < options.context_lines {
-                    m.context_after.push(trimmed_line_str.to_string());
-                }
-            }
-
-            // Move completed matches to final list
-            let (completed, still_pending): (Vec<_>, Vec<_>) = pending_matches
-                .into_iter()
-                .partition(|m| m.context_after.len() >= options.context_lines);
-            matches.extend(completed);
-            pending_matches = still_pending;
-
-            if let Some(m) = regex.find(&line) {
-                let context_before_vec: Vec<String> = context_before.drain(..).collect();
-
-                let new_match = Match {
-                    file_path: path.to_path_buf(),
-                    line_number,
-                    col: (m.start() + 1) as u32,
-                    line_content: if options.count_only {
-                        String::new()
-                    } else {
-                        trimmed_line_str.to_string()
-                    },
-                    byte_offset: byte_offset + m.start() as u64,
-                    context_before: context_before_vec,
-                    context_after: vec![],
-                    is_binary: false,
-                };
-
-                if options.context_lines > 0 {
-                    pending_matches.push(new_match);
-                } else {
-                    matches.push(new_match);
-                }
-
-                if options.max_results > 0
-                    && (matches.len() + pending_matches.len()) >= options.max_results
-                    && (pending_matches.is_empty() || matches.len() >= options.max_results)
-                {
-                    break;
-                }
-            }
-
-            if options.context_lines > 0 {
-                if context_before.len() == options.context_lines {
-                    if let Some(mut old_line) = context_before.pop_front() {
-                        old_line.clear();
-                        old_line.push_str(trimmed_line_str);
-                        context_before.push_back(old_line);
-                    }
-                } else {
-                    context_before.push_back(trimmed_line_str.to_string());
-                }
-            }
-
-            byte_offset += line_len;
-            line.clear();
-        }
-
-        matches.extend(pending_matches);
-        Ok(matches)
-    }
-
     /// Verify a candidate file, consulting the negative-result cache first.
     ///
     /// Returns [`VerificationResult::Cached`] when `(query_fingerprint,
@@ -921,13 +860,6 @@ impl<'a> Executor<'a> {
     }
 
     fn verify_file(info: &FileInfo, regex: &Regex, options: &QueryOptions) -> Result<Vec<Match>> {
-        let file = File::open(&info.path)?;
-        // SAFETY: The file is opened read-only and held for the duration
-        // of this function. The mmap is used only within `verify_stream`
-        // which treats it as an immutable byte slice. No concurrent
-        // modification to the underlying file is expected during reading.
-        let mmap = unsafe { memmap2::Mmap::map(&file)? };
-
         let owned_opts;
         let effective_options: &QueryOptions = if options.files_only && options.max_results == 0 {
             owned_opts = QueryOptions {
@@ -939,17 +871,56 @@ impl<'a> Executor<'a> {
             options
         };
 
-        if options.decompress
-            && let Some(reader) = maybe_decompress(&info.path, &mmap)?
-        {
-            return Self::verify_stream(reader, info.path.as_ref(), regex, effective_options);
+        let mut file = File::open(&info.path)?;
+
+        // Decompression path: needs full mmap for maybe_decompress.
+        // Binary check runs AFTER decompression so compressed files
+        // (which always look binary) are not falsely rejected.
+        if options.decompress {
+            // SAFETY: The file is opened read-only and held for the
+            // duration of this function. The mmap is used only within
+            // streaming module calls which treat it as an immutable
+            // byte slice. No concurrent modification to the underlying
+            // file is expected during reading.
+            let mmap = unsafe { memmap2::Mmap::map(&file)? };
+            if let Some(reader) = maybe_decompress(&info.path, &mmap)? {
+                let mut stats = crate::streaming::StreamStats::default();
+                let result = streaming::stream_file(
+                    reader,
+                    info.path.as_ref(),
+                    regex,
+                    effective_options,
+                    true,
+                    &mut stats,
+                );
+                return result;
+            }
+            // Not compressed — mmap already exists, do binary check
+            // then stream from the same mmap.
+            if !effective_options.binary && is_binary(&mmap[..8192.min(mmap.len())]) {
+                return Ok(vec![]);
+            }
+            return streaming::stream_file_chunked(
+                &mmap[..],
+                info.path.as_ref(),
+                regex,
+                effective_options,
+            );
         }
 
-        Self::verify_stream(
-            Cursor::new(&mmap[..]),
-            info.path.as_ref(),
-            regex,
-            effective_options,
-        )
+        // Non-decompress path: check binary with a small read before
+        // mmap to avoid wasting address space on large binary files.
+        if !effective_options.binary {
+            use std::io::Read;
+            let mut header = [0u8; 8192];
+            let n = (&mut file).take(8192).read(&mut header)?;
+            if is_binary(&header[..n]) {
+                return Ok(vec![]);
+            }
+        }
+
+        // SAFETY: See the SAFETY comment above; same invariants apply.
+        let mmap = unsafe { memmap2::Mmap::map(&file)? };
+        streaming::stream_file_chunked(&mmap[..], info.path.as_ref(), regex, effective_options)
     }
 }

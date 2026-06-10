@@ -101,6 +101,8 @@ pub mod decompress;
 pub mod error;
 /// Query executor — runs a search plan against the index.
 pub mod executor;
+
+pub use executor::ProgressiveBatch;
 /// Index file format definitions and magic bytes.
 pub mod format;
 /// Idle timeout tracker for the daemon process.
@@ -141,7 +143,7 @@ pub use crate::builder::Builder;
 #[cfg(all(feature = "notify", unix))]
 #[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub use crate::daemon_sock::{
-    ClientMessage, DaemonClient, DaemonServer, FileChange, FileOp, ServerMessage,
+    ClientMessage, DaemonClient, DaemonServer, FileChange, FileOp, SearchResultsIter, ServerMessage,
 };
 #[cfg(feature = "notify")]
 #[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
@@ -160,8 +162,13 @@ pub use crate::watcher::Watcher;
 /// # Errors
 ///
 /// Delegates to [`daemon::run`]; see that function for error conditions.
+///
+/// This is a deprecated public API convenience preserved for backward compatibility
+/// with external consumers that predate the `ix::daemon::run` path. Not called
+/// internally by any binary or library code.
 #[cfg(all(feature = "notify", unix))]
 #[deprecated(since = "0.7.0", note = "use ix::daemon::run instead")]
+#[allow(dead_code)]
 pub fn run_daemon(path: &std::path::Path) -> crate::error::Result<()> {
     crate::daemon::run(path)
 }

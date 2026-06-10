@@ -43,17 +43,6 @@ pub fn decode(data: &[u8], pos: &mut usize) -> Result<u64> {
     }
 }
 
-/// Return the encoded byte length of a varint without allocating.
-#[inline]
-#[must_use]
-pub fn encoded_len(value: u64) -> usize {
-    if value == 0 {
-        return 1;
-    }
-    let bits = usize::try_from(64 - value.leading_zeros()).unwrap_or(0);
-    bits.div_ceil(7)
-}
-
 #[cfg(test)]
 #[allow(clippy::as_conversions, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
@@ -79,15 +68,6 @@ mod tests {
             let mut pos = 0;
             assert_eq!(decode(&buf, &mut pos).unwrap(), v);
         }
-    }
-
-    #[test]
-    fn encoded_lengths() {
-        assert_eq!(encoded_len(0), 1);
-        assert_eq!(encoded_len(127), 1);
-        assert_eq!(encoded_len(128), 2);
-        assert_eq!(encoded_len(16383), 2);
-        assert_eq!(encoded_len(16384), 3);
     }
 
     #[test]

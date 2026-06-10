@@ -346,3 +346,165 @@ impl Scanner {
         Self::scan_stream(Cursor::new(&mmap[..]), path, regex, options)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::executor::QueryOptions;
+    use std::fs;
+    use tempfile::tempdir;
+
+    /// Helper: create a temp dir, write named files, return the tempdir handle.
+    fn setup_temp_dir(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempdir().unwrap();
+        for (name, content) in files {
+            fs::write(dir.path().join(name), content).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn scanner_new_creates_with_valid_root() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "needle in haystack").unwrap();
+
+        let scanner = Scanner::new(dir.path());
+        let matches = scanner
+            .scan("needle", false, false, &QueryOptions::default())
+            .unwrap();
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].file_path.ends_with("a.txt"));
+        assert_eq!(matches[0].line_number, 1);
+    }
+
+    #[test]
+    fn scanner_scan_finds_matches_across_files() {
+        let dir = setup_temp_dir(&[
+            (
+                "one.txt",
+                "line 1: needle here\nline 2: nothing\nline 3: needle again",
+            ),
+            ("two.txt", "no pattern here\njust filler"),
+            ("three.txt", "solo needle line"),
+        ]);
+
+        let scanner = Scanner::new(dir.path());
+        let matches = scanner
+            .scan("needle", false, false, &QueryOptions::default())
+            .unwrap();
+
+        // two files should match (one.txt, three.txt); two.txt has no needle
+        assert_eq!(matches.len(), 3);
+        let matched_files: std::collections::BTreeSet<&str> = matches
+            .iter()
+            .map(|m| m.file_path.file_name().unwrap().to_str().unwrap())
+            .collect();
+        assert_eq!(
+            matched_files,
+            ["one.txt", "three.txt"]
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+    }
+
+    #[test]
+    fn scanner_scan_respects_type_filter() {
+        let dir = setup_temp_dir(&[
+            ("code.rs", "// TODO: implement scanner\nfn main() {}"),
+            ("notes.md", "# Notes\n\nTODO: write docs\n\nDone."),
+            ("readme.txt", "TODO: update readme"),
+        ]);
+
+        let scanner = Scanner::new(dir.path());
+
+        // Filter to only .rs files
+        let mut opts = QueryOptions::default();
+        opts.type_filter = vec!["rs".to_string()];
+        let matches = scanner.scan("TODO", false, false, &opts).unwrap();
+        let matched_files: std::collections::BTreeSet<&str> = matches
+            .iter()
+            .map(|m| m.file_path.file_name().unwrap().to_str().unwrap())
+            .collect();
+        assert_eq!(
+            matched_files,
+            ["code.rs"]
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        assert_eq!(matches.len(), 1);
+
+        // Filter to only .md files
+        let mut opts = QueryOptions::default();
+        opts.type_filter = vec!["md".to_string()];
+        let matches = scanner.scan("TODO", false, false, &opts).unwrap();
+        let matched_files: std::collections::BTreeSet<&str> = matches
+            .iter()
+            .map(|m| m.file_path.file_name().unwrap().to_str().unwrap())
+            .collect();
+        assert_eq!(
+            matched_files,
+            ["notes.md"]
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn scanner_scan_returns_empty_when_no_matches() {
+        let dir = setup_temp_dir(&[
+            ("a.txt", "hello world\nthis is content"),
+            ("b.txt", "more stuff here\nnothing interesting"),
+        ]);
+
+        let scanner = Scanner::new(dir.path());
+        let matches = scanner
+            .scan("nonexistent", false, false, &QueryOptions::default())
+            .unwrap();
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn scanner_scan_respects_max_results() {
+        let dir = tempdir().unwrap();
+        let content = (1..=10)
+            .map(|i| format!("needle match {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(dir.path().join("many.txt"), &content).unwrap();
+
+        let scanner = Scanner::new(dir.path());
+        let mut opts = QueryOptions::default();
+        opts.max_results = 3;
+        let matches = scanner.scan("needle", false, false, &opts).unwrap();
+
+        assert_eq!(matches.len(), 3);
+        for m in &matches {
+            assert!(m.file_path.ends_with("many.txt"));
+            assert!(m.line_content.contains("needle"));
+        }
+    }
+
+    #[test]
+    fn scanner_scan_nonexistent_root_returns_error() {
+        let root = std::path::PathBuf::from("/tmp/ix_nonexistent_root_test_xyz");
+        // Ensure the path doesn't exist
+        if root.exists() {
+            let _ = std::fs::remove_dir_all(&root);
+        }
+
+        let scanner = Scanner::new(&root);
+        let result = scanner.scan("anything", false, false, &QueryOptions::default());
+
+        assert!(result.is_err());
+        match result {
+            Err(crate::error::Error::Io(e)) => {
+                assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+            }
+            other => panic!("expected Io(NotFound) error, got {other:?}"),
+        }
+    }
+}

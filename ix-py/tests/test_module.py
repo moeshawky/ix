@@ -33,3 +33,17 @@ def test_module_all_public() -> None:
     """All promised functions are in __all__."""
     for name in ("search", "build", "stats", "service_status"):
         assert name in ix.__all__
+
+
+def test_module_build_creates_index(tmp_path: Path) -> None:
+    """ix.build() creates a .ix directory with shard.ix in a fresh directory."""
+    (tmp_path / "hello.txt").write_text("hello world\n")
+    result = ix.build(str(tmp_path))
+    assert isinstance(result, dict)
+
+    index_path = tmp_path / ".ix" / "shard.ix"
+    assert index_path.exists(), "ix.build() must create .ix/shard.ix"
+
+    # Verify the index is functional by searching it
+    search_result = ix.search("hello", str(tmp_path))
+    assert len(search_result.matches) > 0, "Index created by ix.build() should be searchable"

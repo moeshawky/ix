@@ -50,7 +50,8 @@ impl BloomFilter {
 
         for i in 0..self.num_hashes {
             let bit_pos = (h1.wrapping_add(u64::from(i).wrapping_mul(h2)))
-                % u64::try_from(num_bits).unwrap_or(0);
+                % u64::try_from(num_bits)
+                    .unwrap_or_else(|_| unreachable!("num_bits > 0 guaranteed by size check"));
             let byte_idx = usize::try_from(bit_pos / 8).unwrap_or(0);
             let bit_idx = u8::try_from(bit_pos % 8).unwrap_or(0);
             if let Some(byte) = self.bits.get_mut(byte_idx) {
@@ -80,7 +81,8 @@ impl BloomFilter {
 
         for i in 0..self.num_hashes {
             let bit_pos = (h1.wrapping_add(u64::from(i).wrapping_mul(h2)))
-                % u64::try_from(num_bits).unwrap_or(0);
+                % u64::try_from(num_bits)
+                    .unwrap_or_else(|_| unreachable!("num_bits > 0 guaranteed by size check"));
             let byte_idx = usize::try_from(bit_pos / 8).unwrap_or(0);
             let bit_idx = u8::try_from(bit_pos % 8).unwrap_or(0);
             if self
@@ -112,27 +114,6 @@ impl BloomFilter {
         Ok(())
     }
 
-    /// Load from a slice (borrowed).
-    #[must_use]
-    pub fn from_slice(data: &[u8]) -> Option<(&[u8], usize)> {
-        if data.len() < 4 {
-            return None;
-        }
-        let size = data
-            .get(0..2)?
-            .try_into()
-            .ok()
-            .map_or(0, u16::from_le_bytes);
-        let size = usize::from(size);
-        let num_hashes = *data.get(2)?;
-        let total_size = 4 + size;
-        if data.len() < total_size {
-            return None;
-        }
-        data.get(4..total_size)
-            .map(|bits| (bits, usize::from(num_hashes)))
-    }
-
     /// Check if a slice (from mmap) contains a trigram.
     ///
     /// Returns `true` if the trigram may be present (conservative).
@@ -161,7 +142,8 @@ impl BloomFilter {
 
         for i in 0..num_hashes {
             let bit_pos = (h1.wrapping_add(u64::from(i).wrapping_mul(h2)))
-                % u64::try_from(num_bits).unwrap_or(0);
+                % u64::try_from(num_bits)
+                    .unwrap_or_else(|_| unreachable!("num_bits > 0 guaranteed by size check"));
             let byte_idx = usize::try_from(bit_pos / 8).unwrap_or(0);
             let bit_idx = u8::try_from(bit_pos % 8).unwrap_or(0);
             if bits.get(byte_idx).is_none_or(|&b| b & (1 << bit_idx) == 0) {

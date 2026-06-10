@@ -8,6 +8,8 @@ use std::sync::RwLock;
 use xxhash_rust::xxh64::xxh64;
 
 /// Hit/miss/eviction counters for a [`NegCache`].
+///
+/// Public for external monitoring via [`NegCache::stats`].
 #[derive(Debug, Default, Clone)]
 pub struct NegCacheStats {
     /// Number of negative cache hits (file skipped).

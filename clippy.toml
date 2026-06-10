@@ -10,6 +10,11 @@
 # ── Rust toolchain baseline ──────────────────────────────────────────
 msrv = "1.85"
 
+# ── API stability ────────────────────────────────────────────────────
+# Prevent clippy from suggesting changes that would break the public API.
+# Critical for library consumers — ix is both a binary and a lib crate.
+avoid-breaking-exported-api = true
+
 # ── Test exceptions ──────────────────────────────────────────────────
 # Tests are allowed to use convenience patterns that are banned in
 # production code. The project's lib.rs already has #[cfg_attr(test, allow(missing_docs))].
@@ -28,7 +33,7 @@ cognitive-complexity-threshold = 30
 too-many-arguments-threshold = 8
 
 # Type complexity: nested generics beyond this point suggest a type alias.
-type-complexity-threshold = 400
+type-complexity-threshold = 250
 
 # ── Banned methods (production code) ─────────────────────────────────
 # unwrap/expect/panic are banned in library. Tests exempt via flags above.

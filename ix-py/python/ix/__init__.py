@@ -16,6 +16,7 @@ import sys as _sys
 
 try:
     from ._ix import (  # type: ignore[import-untyped]
+        Index,
         IxArchiveError,
         IxConfigError,
         IxCorruptionError,
@@ -24,7 +25,6 @@ try:
         IxIoError,
         IxRegexError,
         IxWatcherError,
-        Index,
         Match,
         Pipeline,
         SearchResult,
@@ -41,21 +41,21 @@ except ImportError as exc:
 
 __all__ = [
     "Index",
+    "IxArchiveError",
+    "IxConfigError",
+    "IxCorruptionError",
+    "IxError",
+    "IxIndexError",
+    "IxIoError",
+    "IxRegexError",
+    "IxWatcherError",
     "Match",
     "Pipeline",
     "SearchResult",
-    "IxError",
-    "IxIndexError",
-    "IxCorruptionError",
-    "IxIoError",
-    "IxRegexError",
-    "IxConfigError",
-    "IxWatcherError",
-    "IxArchiveError",
-    "search",
     "build",
-    "stats",
+    "search",
     "service_status",
+    "stats",
 ]
 
 

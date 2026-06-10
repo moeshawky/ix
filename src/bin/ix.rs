@@ -17,7 +17,6 @@ use ix::reader::Reader;
 use ix::scanner::Scanner;
 use regex::Regex;
 use regex_syntax::hir::HirKind;
-use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 #[derive(Parser)]
 #[command(
@@ -156,9 +155,21 @@ struct Cli {
     #[arg(long)]
     force: bool,
 
+    /// Read pattern from stdin (pipe mode). Conflicts with --build.
+    #[arg(long, conflicts_with = "build")]
+    stdin: bool,
+
     /// Run as background daemon (ixd mode).
     #[arg(long, hide = true)]
     daemon: bool,
+
+    /// Chunk size in bytes for streaming large files (0 = default `16 MiB`).
+    #[arg(long, default_value = "0")]
+    chunk_size: usize,
+
+    /// Overlap between chunks in bytes (0 = default `1 MiB`).
+    #[arg(long, default_value = "0")]
+    chunk_overlap: usize,
 
     /// Run a subcommand: service management or index statistics.
     #[command(subcommand)]
@@ -236,8 +247,9 @@ struct SearchParams<'a> {
     context: usize,
     max_results: usize,
     file_types: &'a [String],
-    threads: usize,
     max_file_size: u64,
+    chunk_size: usize,
+    chunk_overlap: usize,
 }
 
 /// Execute search locally using mmap (fallback when IPC is unavailable).
@@ -248,8 +260,6 @@ fn execute_local_search(
     options: &QueryOptions,
     search_path_abs: &Path,
 ) -> Result<(Vec<ix::executor::Match>, ix::executor::QueryStats), ix::error::Error> {
-    use ix::executor::Executor;
-    use ix::planner::Planner;
     use ix::reader::Reader;
 
     let reader = Reader::open(index_path)?;
@@ -257,7 +267,9 @@ fn execute_local_search(
 
     std::env::set_current_dir(index_root)?;
 
-    let plan = Planner::plan_with_options(
+    let delta_path = index_path.parent().map(|p| p.join("shard.ix.delta"));
+    let (m, s) = ix::api::execute(
+        &reader,
         params.pattern,
         ix::planner::QueryOptions {
             is_regex: params.flags.is_regex,
@@ -265,31 +277,9 @@ fn execute_local_search(
             multiline: params.flags.multiline,
             word_boundary: params.flags.word_boundary,
         },
+        options,
+        delta_path.as_deref(),
     )?;
-    let mut executor = Executor::new(&reader);
-
-    if let Some(delta_path) = index_path.parent().map(|p| p.join("shard.ix.delta")) {
-        executor.set_delta_path(delta_path);
-    }
-
-    let rss = llmosafe::ResourceGuard::current_rss_bytes();
-    let sys_mem = llmosafe::ResourceGuard::system_memory_bytes();
-    if sys_mem > 0 {
-        let rss_pct = rss.saturating_mul(100).saturating_div(sys_mem);
-        if rss_pct < 60 {
-            executor.posting_cache().set_admit(true);
-            executor.neg_cache().set_admit(true);
-        } else {
-            let policy = ix::cache_policy::AdaptiveCachePolicy::new(0.6);
-            let directive = policy.directive();
-            executor
-                .posting_cache()
-                .set_admit(directive.allow_new_entries);
-            executor.neg_cache().set_admit(directive.allow_new_entries);
-        }
-    }
-
-    let (m, s) = executor.execute(&plan, options)?;
 
     let filtered_matches: Vec<_> = m
         .into_iter()
@@ -312,7 +302,7 @@ fn execute_local_search(
 /// Try to execute search via IPC to the daemon.
 /// Returns `Some((matches, stats))` on success, `None` if daemon is unavailable
 /// or the IPC call fails (triggers local fallback).
-#[cfg(unix)]
+#[cfg(all(feature = "notify", unix))]
 fn try_ipc_search(
     params: &SearchParams,
     index_root: &Path,
@@ -336,7 +326,9 @@ fn try_ipc_search(
         archive: params.flags.archive,
         binary: params.flags.binary,
         search_path: Some(search_path_abs.to_path_buf()),
-        threads: params.threads,
+        progressive: false,
+        chunk_size_bytes: params.chunk_size,
+        chunk_overlap_bytes: params.chunk_overlap,
     };
 
     let results = client.search(query).ok()?;
@@ -410,6 +402,26 @@ fn main() {
         }
     }
 
+    #[cfg(not(feature = "archive"))]
+    {
+        if cli.archive {
+            eprintln!(
+                "ix: error: --archive requires installing with `cargo install moeix --features archive`"
+            );
+            std::process::exit(1);
+        }
+    }
+
+    #[cfg(not(feature = "decompress"))]
+    {
+        if cli.decompress {
+            eprintln!(
+                "ix: error: --decompress requires installing with `cargo install moeix --features decompress`"
+            );
+            std::process::exit(1);
+        }
+    }
+
     // Determine path and handle build action
     let search_path = if let Some(ref build_path) = cli.build {
         // Build mode: path comes from --build flag, or CWD if not specified
@@ -438,8 +450,11 @@ fn main() {
         std::process::exit(1);
     };
 
-    if search_path.to_str() == Some("(stdin)") {
-        if let Err(e) = do_stdin_search(pattern, &cli) {
+    // Stdin mode: --stdin flag or "-" path
+    let is_stdin = cli.stdin || cli.path.iter().any(|p| p == std::path::Path::new("-"));
+
+    if is_stdin {
+        if let Err(e) = do_stdin_stream_search(pattern, &cli) {
             eprintln!("Error searching stdin: {e}");
             std::process::exit(1);
         }
@@ -468,8 +483,9 @@ fn main() {
         context: cli.context,
         max_results: cli.max_results,
         file_types: &cli.file_types,
-        threads: cli.threads,
         max_file_size: cli.max_file_size,
+        chunk_size: cli.chunk_size,
+        chunk_overlap: cli.chunk_overlap,
     };
 
     if let Err(e) = do_search(&params) {
@@ -478,7 +494,7 @@ fn main() {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "notify", target_os = "linux"))]
 fn find_systemctl() -> std::ffi::OsString {
     let usr_bin = std::path::Path::new("/usr/bin/systemctl");
     if usr_bin.exists() {
@@ -492,7 +508,7 @@ fn find_systemctl() -> std::ffi::OsString {
     std::ffi::OsString::from("systemctl")
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(feature = "notify", not(target_os = "linux")))]
 fn find_systemctl() -> std::ffi::OsString {
     std::ffi::OsString::from("systemctl")
 }
@@ -718,106 +734,107 @@ fn format_uptime(secs: u64) -> String {
     }
 }
 
-fn do_stdin_search(pattern: &str, cli: &Cli) -> ix::error::Result<()> {
-    let mut buffer = String::new();
-    io::stdin().read_to_string(&mut buffer)?;
-
-    let regex_pat = if cli.regex {
-        if cli.ignore_case {
-            format!("(?i){pattern}")
+/// Build a regex from CLI flags (regex mode, case sensitivity, word boundary, multiline).
+fn build_regex(
+    pattern: &str,
+    is_regex: bool,
+    ignore_case: bool,
+    word: bool,
+    multiline: bool,
+) -> ix::error::Result<Regex> {
+    let flags = if multiline { "(?s)" } else { "" };
+    let regex_pat = if is_regex {
+        if ignore_case {
+            format!("{flags}(?i){pattern}")
         } else {
-            pattern.to_string()
+            format!("{flags}{pattern}")
         }
-    } else if cli.word {
+    } else if word {
         // Word-boundary: wrap literal in \b word boundaries
         let escaped = regex::escape(pattern);
-        if cli.ignore_case {
-            format!("(?i)\\b{escaped}\\b")
+        if ignore_case {
+            format!("{flags}(?i)\\b{escaped}\\b")
         } else {
-            format!("\\b{escaped}\\b")
+            format!("{flags}\\b{escaped}\\b")
         }
     } else {
         let escaped = regex::escape(pattern);
-        if cli.ignore_case {
-            format!("(?i){escaped}")
+        if ignore_case {
+            format!("{flags}(?i){escaped}")
         } else {
-            escaped
+            format!("{flags}{escaped}")
         }
     };
-    let re = Regex::new(&regex_pat)?;
+    Ok(Regex::new(&regex_pat)?)
+}
 
-    let lines: Vec<&str> = buffer.lines().collect();
-    let mut matches = Vec::new();
+/// Search stdin using the streaming module.
+///
+/// Reads from `io::stdin().lock()` and pipes it through
+/// [`ix::streaming::stream_file`], which handles binary detection, context
+/// lines, and multiline mode consistently with file-based searches.
+///
+/// # Errors
+///
+/// Returns an error if reading from stdin fails.
+fn do_stdin_stream_search(pattern: &str, cli: &Cli) -> ix::error::Result<()> {
+    let re = build_regex(pattern, cli.regex, cli.ignore_case, cli.word, cli.multiline)?;
 
-    for (i, line) in lines.iter().enumerate() {
-        if let Some(m) = re.find(line) {
-            let context_before = if cli.context > 0 {
-                let start = i.saturating_sub(cli.context);
-                lines[start..i]
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect()
-            } else {
-                vec![]
-            };
+    let options = ix::executor::QueryOptions {
+        count_only: cli.count,
+        files_only: cli.files_only,
+        max_results: cli.max_results,
+        context_lines: cli.context,
+        multiline: cli.multiline,
+        binary: cli.binary,
+        chunk_size_bytes: cli.chunk_size,
+        chunk_overlap_bytes: cli.chunk_overlap,
+        ..Default::default()
+    };
 
-            let context_after = if cli.context > 0 {
-                let end = (i + 1 + cli.context).min(lines.len());
-                lines[i + 1..end]
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect()
-            } else {
-                vec![]
-            };
-
-            matches.push(Match {
-                file_path: PathBuf::from("(stdin)"),
-                line_number: (i + 1) as u32,
-                col: (m.start() + 1) as u32,
-                line_content: if cli.count {
-                    String::new()
-                } else {
-                    line.to_string()
-                },
-                byte_offset: 0,
-                context_before,
-                context_after,
-                is_binary: false,
-            });
-
-            if cli.max_results > 0 && matches.len() >= cli.max_results {
-                break;
-            }
-        }
+    // Warn about flags that have no effect in stdin mode.
+    if cli.archive {
+        eprintln!("ix: warning: --archive has no effect in stdin mode");
+    }
+    if cli.decompress {
+        eprintln!("ix: warning: --decompress has no effect in stdin mode");
+    }
+    if !cli.file_types.is_empty() {
+        eprintln!("ix: warning: --type has no effect in stdin mode");
+    }
+    if cli.no_index {
+        eprintln!("ix: warning: --no-index has no effect in stdin mode");
     }
 
-    if cli.count {
-        if cli.json {
-            println!("{{\"count\": {}}}", matches.len());
-        } else {
-            println!("{}", matches.len());
-        }
-    } else if cli.files_only {
-        if !matches.is_empty() {
-            if cli.json {
-                println!("{{\"files\": [\"(stdin)\"]}}");
-            } else {
-                println!("(stdin)");
-            }
-        }
-    } else {
-        let mut printed_lines = std::collections::HashSet::new();
-        for m in &matches {
-            print_match(m, cli.json, cli.context, &mut printed_lines);
-        }
+    let start_time = std::time::Instant::now();
+    let mut stream_stats = ix::streaming::StreamStats::default();
+    let matches = ix::streaming::stream_file(
+        std::io::stdin(),
+        std::path::Path::new("-"),
+        &re,
+        &options,
+        false,
+        &mut stream_stats,
+    )?;
 
-        if cli.max_results > 0 && matches.len() >= cli.max_results {
-            eprintln!(
-                "ix: output capped at {} results (use -n 0 for all)",
-                cli.max_results
-            );
-        }
+    // Populate QueryStats from the StreamStats that stream_file filled in.
+    // Without this, --stats in stdin mode would show zeros for all counters
+    // except total_matches (which was set from matches.len()).
+    let stats = ix::executor::QueryStats {
+        files_verified: 1, // stdin is one input stream
+        bytes_verified: stream_stats.bytes_read,
+        lines_read: stream_stats.lines_read,
+        total_matches: stream_stats.matches_found,
+        ..Default::default()
+    };
+
+    print_results(&matches, &stats, &options, cli.json, start_time, cli.stats);
+
+    if cli.max_results > 0 && matches.len() >= cli.max_results {
+        eprintln!(
+            "ix: output capped at {} results (use -n 0 for all)",
+            cli.max_results
+        );
     }
 
     Ok(())
@@ -1151,27 +1168,39 @@ fn do_search(params: &SearchParams) -> ix::error::Result<()> {
         type_filter: extensions,
         context_lines: params.context,
         decompress: params.flags.decompress,
-        threads: params.threads,
         multiline: params.flags.multiline,
         archive: params.flags.archive,
         binary: params.flags.binary,
         word_boundary: params.flags.word_boundary,
+        chunk_size_bytes: params.chunk_size,
+        chunk_overlap_bytes: params.chunk_overlap,
     };
 
     #[allow(unused_variables)]
     let (matches, stats) = if let Some((path, index_root, beacon_opt)) = &index_info {
-        // Check if daemon is live and try IPC search first (Unix only)
+        // Check if daemon is live and try IPC search first (notify+Unix only)
         #[cfg(unix)]
         {
             let daemon_managed = beacon_opt.as_ref().is_some_and(ix::format::Beacon::is_live);
 
             if daemon_managed {
-                // Try IPC search with silent fallback
-                match try_ipc_search(params, index_root, &search_path_abs) {
-                    Some((m, s)) => (m, s),
-                    None => {
-                        execute_local_search(params, path, index_root, &options, &search_path_abs)?
+                #[cfg(feature = "notify")]
+                {
+                    // Try IPC search with silent fallback
+                    match try_ipc_search(params, index_root, &search_path_abs) {
+                        Some((m, s)) => (m, s),
+                        None => execute_local_search(
+                            params,
+                            path,
+                            index_root,
+                            &options,
+                            &search_path_abs,
+                        )?,
                     }
+                }
+                #[cfg(not(feature = "notify"))]
+                {
+                    execute_local_search(params, path, index_root, &options, &search_path_abs)?
                 }
             } else {
                 execute_local_search(params, path, index_root, &options, &search_path_abs)?
@@ -1383,6 +1412,9 @@ fn print_stats(stats: &QueryStats, elapsed: std::time::Duration) {
         eprintln!("files_failed_verify: {}", stats.files_failed_verify);
     }
     eprintln!("bytes_verified: {}", stats.bytes_verified);
+    if stats.lines_read > 0 {
+        eprintln!("lines_read: {}", stats.lines_read);
+    }
     eprintln!("total_matches: {}", stats.total_matches);
     if stats.posting_cache_hits > 0 || stats.posting_cache_misses > 0 {
         eprintln!(

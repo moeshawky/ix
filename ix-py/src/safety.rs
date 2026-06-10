@@ -56,12 +56,14 @@ impl PyPipeline {
     /// * `oov_ratio` — out-of-vocabulary ratio (0–255)
     /// * `stages_executed` — bitmask of stages that ran
     /// * `step_count` — reasoning step count after invocation
-    /// * `classifier_score` — raw logit before sigmoid
     #[allow(clippy::as_conversions)]
     fn process(&mut self, text: &str) -> PyResult<PyObject> {
         let code =
             llmosafe::c_abi::llmosafe_sift_and_process(self.handle, text.as_ptr(), text.len());
         let id = self.handle as u32;
+        // SAFETY: The GIL is guaranteed held because this method is called
+        // from a #[pymethods] context, where pyo3 ensures the GIL is acquired
+        // before invoking any bound method.
         let py = unsafe { Python::assume_gil_acquired() };
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("decision", code)?;

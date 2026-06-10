@@ -248,6 +248,81 @@ fn test_c4_build_sequence_independent_results() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// C3: CDX block boundary — exactly 1024 distinct trigrams
+//
+// CDX compression uses 1024-entry blocks. An index with exactly 1024 distinct
+// trigrams exercises the boundary between a full block and the sentinel entry.
+// A search for a trigram at the very end of the block must correctly traverse
+// the block index → decompress → linear scan path without losing the last entry.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+#[test]
+fn test_c3_cdx_block_boundary_exactly_1024_trigrams() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Generate 1024 distinct trigrams by creating files with unique 3-byte
+    // sequences. Each file contributes a unique trigram via its content.
+    // We use patterns like "aXX" where XX varies to keep content small.
+    // With 1024 distinct first-trigrams, the CDX table will have exactly
+    // 1024 entries — one full block with no overflow.
+    let mut content = String::new();
+    let mut expected_trigrams: Vec<String> = Vec::new();
+
+    for i in 0..1024u32 {
+        // Create unique 3-byte sequences using printable ASCII
+        let b0 = b'a';
+        let b1 = ((i >> 6) & 0x3F) as u8 + b'A';
+        let b2 = (i & 0x3F) as u8 + b'A';
+        let trigram_str = format!("{}{}{}", b0 as char, b1 as char, b2 as char);
+        expected_trigrams.push(trigram_str.clone());
+        // Write each trigram as a separate line so it's a distinct token
+        content.push_str(&format!("{} ", trigram_str));
+    }
+    fs::write(root.join("boundary_1024.txt"), &content).unwrap();
+
+    let mut builder = Builder::new(root).unwrap();
+    builder.build().unwrap();
+
+    let index_path = root.join(".ix/shard.ix");
+    let reader = Reader::open(&index_path).unwrap();
+    let mut executor = Executor::new(&reader);
+
+    // Search for the LAST trigram in the 1024-entry set — this exercises
+    // the sentinel/block-boundary lookup path in the CDX reader.
+    let last_trigram = expected_trigrams.last().unwrap();
+    let plan = Planner::plan(last_trigram, false).unwrap();
+    let (matches, stats) = executor.execute(&plan, &QueryOptions::default()).unwrap();
+
+    assert!(
+        !matches.is_empty(),
+        "C3: Last trigram '{}' in 1024-entry CDX block must be found",
+        last_trigram
+    );
+    assert!(
+        stats.trigrams_queried > 0,
+        "C3: CDX lookup must be exercised for 1024-entry boundary"
+    );
+    assert_eq!(
+        stats.files_failed_verify, 0,
+        "C3: No files should fail verification at CDX block boundary"
+    );
+
+    // Also verify the FIRST trigram to confirm the block index covers the
+    // full range [0, 1024).
+    let first_trigram = expected_trigrams.first().unwrap();
+    let plan_first = Planner::plan(first_trigram, false).unwrap();
+    let (matches_first, _) = executor
+        .execute(&plan_first, &QueryOptions::default())
+        .unwrap();
+    assert!(
+        !matches_first.is_empty(),
+        "C3: First trigram '{}' in 1024-entry CDX block must be found",
+        first_trigram
+    );
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // C1: Contract Mismatch — Empty index integrity
 //
 // The empty index (no files scanned) must still be a valid format that

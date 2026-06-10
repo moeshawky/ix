@@ -36,6 +36,10 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             watch_roots: Vec::new(),
+            // Default exclude patterns for the `.ixd.toml` daemon config.
+            // The daemon (daemon.rs) reads these and bridges them to both
+            // Builder (via with_exclude_patterns) and Watcher (via Watcher::new).
+            // See also: src/lib/builder.rs:226, src/lib/watcher.rs:40
             exclude_patterns: vec![
                 ".git".to_string(),
                 "node_modules".to_string(),

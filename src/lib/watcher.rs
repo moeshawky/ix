@@ -41,6 +41,11 @@ impl Watcher {
         Self {
             root: root.to_owned(),
             watch_roots: watch_roots.to_vec(),
+            // Watcher receives exclude_patterns from its caller — the daemon
+            // (daemon.rs:226) passes Config's patterns here. Hardcoded
+            // patterns in the fallback walk below are Watcher-specific and
+            // not driven by Config.
+            // See also: src/lib/config.rs:39, src/lib/builder.rs:226
             exclude_patterns: exclude_patterns.to_vec(),
             debounce_ms: 500,
             inner: None,

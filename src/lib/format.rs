@@ -44,10 +44,9 @@ pub mod flags {
     pub const HAS_CONTENT_HASHES: u64 = 1 << 1;
     /// Posting-list data is ZSTD-compressed.
     /// Always set by the current builder (postings are compressed in
-    /// CDX blocks). Verified via [`super::Header::has_compressed_postings`].
+    /// CDX blocks).
     pub const POSTING_LISTS_COMPRESSED: u64 = 1 << 2;
     /// Each posting-list chunk carries an `XXHash64` checksum.
-    /// Verified via [`super::Header::has_checksum`].
     pub const POSTING_LISTS_CHECKSUMMED: u64 = 1 << 3;
     /// Trigram table uses CDX (Concentrated Delta X) compression.
     /// Always-on since v1.3. Verified via [`super::Header::has_cdx`].
@@ -261,20 +260,6 @@ impl Header {
         self.flags & flags::HAS_BLOOM_FILTERS != 0
     }
 
-    /// Returns `true` when the posting-list data is ZSTD-compressed
-    /// ([`flags::POSTING_LISTS_COMPRESSED`]).
-    #[must_use]
-    pub const fn has_compressed_postings(&self) -> bool {
-        self.flags & flags::POSTING_LISTS_COMPRESSED != 0
-    }
-
-    /// Returns `true` when posting-list chunks carry an `XXHash64` checksum
-    /// ([`flags::POSTING_LISTS_CHECKSUMMED`]).
-    #[must_use]
-    pub const fn has_checksum(&self) -> bool {
-        self.flags & flags::POSTING_LISTS_CHECKSUMMED != 0
-    }
-
     /// Returns `true` when the trigram table uses CDX compression.
     #[must_use]
     pub const fn has_cdx(&self) -> bool {
@@ -483,7 +468,7 @@ fn is_valid_utf8_sequence(seq: &[u8]) -> bool {
             } else if seq[0] == 0xED {
                 seq[1] <= 0x9F
             } else {
-                seq[0] >= 0xE1 && seq[0] <= 0xEC || seq[0] >= 0xEE
+                seq[0] >= 0xE1 && seq[0] <= 0xEF || seq[0] >= 0xEE
             }
         }
         4 => {

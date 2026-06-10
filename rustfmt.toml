@@ -1,0 +1,11 @@
+# rustfmt.toml — ix project formatting policy
+#
+# ALIGNMENT: Cargo.toml edition = "2024". Format rules enforced by
+# CI gate: cargo fmt --check --all.
+# max_width = 100 chosen for readability on narrow terminals + diff views.
+
+edition = "2024"
+max_width = 100
+tab_spaces = 4
+use_field_init_shorthand = true
+use_try_shorthand = true

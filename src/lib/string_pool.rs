@@ -85,7 +85,11 @@ impl StringPool {
 
         for (i, p) in self.prefixes.iter().enumerate() {
             w.write_all(&u16::try_from(i).unwrap_or(0).to_le_bytes())?;
-            w.write_all(&u16::try_from(p.len()).unwrap_or(0).to_le_bytes())?;
+            w.write_all(
+                &u16::try_from(p.len())
+                    .map_err(|e| std::io::Error::other(format!("prefix too long: {e}")))?
+                    .to_le_bytes(),
+            )?;
             w.write_all(p.as_bytes())?;
         }
 
@@ -110,12 +114,15 @@ impl StringPool {
             }
 
             let suffix = path_str.get(best_prefix_len..).unwrap_or("");
+            let suffix_len = u16::try_from(suffix.len())
+                .map_err(|e| std::io::Error::other(format!("suffix too long: {e}")))?;
             w.write_all(&best_prefix_id.to_le_bytes())?;
-            w.write_all(&(suffix.len() as u16).to_le_bytes())?;
+            w.write_all(&suffix_len.to_le_bytes())?;
             w.write_all(suffix.as_bytes())?;
 
-            self.path_info
-                .insert(path_str.clone(), (offset, path_str.len() as u16));
+            let total_len = u16::try_from(path_str.len())
+                .map_err(|e| std::io::Error::other(format!("path too long: {e}")))?;
+            self.path_info.insert(path_str.clone(), (offset, total_len));
         }
 
         Ok(())

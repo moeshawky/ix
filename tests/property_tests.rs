@@ -26,13 +26,16 @@ proptest! {
     }
 }
 
-// Property: Trigram extraction from an indexed file must produce the same
-// set of unique trigrams as direct extraction.
+// Property: Trigram extraction is idempotent — calling extract_with_offsets
+// twice on the same input must yield identical (trigram, offset) pairs.
+// Previously this only verified offsets were in bounds, which tested
+// correctness but not idempotency.
 proptest! {
     #[test]
     fn prop_extraction_idempotent(s in "[a-zA-Z0-9 \t\n]{3,200}") {
         let mut extractor = ix::trigram::Extractor::new();
         let first = extractor.extract_with_offsets(s.as_bytes()).to_vec();
+        let second = extractor.extract_with_offsets(s.as_bytes()).to_vec();
 
         // Verify that every extracted offset is within bounds
         for &(tri, offset) in &first {
@@ -42,6 +45,20 @@ proptest! {
                 "Offset {offset} out of bounds for trigram {tri:#08x}"
             );
         }
+
+        // True idempotency: two extractions on the same input must produce
+        // identical results (same trigrams, same offsets, same order).
+        assert_eq!(
+            first.len(),
+            second.len(),
+            "Idempotency violated: first extraction produced {} trigrams, second produced {}",
+            first.len(),
+            second.len()
+        );
+        assert_eq!(
+            first, second,
+            "Idempotency violated: extraction results differ between calls"
+        );
     }
 }
 

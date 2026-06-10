@@ -4,11 +4,19 @@ use std::io::Write;
 use tempfile::TempDir;
 
 fn run_ix(args: &[&str]) -> (String, String) {
+    let (_code, stdout, stderr) = run_ix_with_status(args);
+    (stdout, stderr)
+}
+
+/// Run `ix` and return (exit_code, stdout, stderr).
+/// Used by tests that need to assert on exit status (e.g., invalid input must fail).
+fn run_ix_with_status(args: &[&str]) -> (i32, String, String) {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_ix"))
         .args(args)
         .output()
         .expect("Failed to run ix");
     (
+        output.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&output.stdout).to_string(),
         String::from_utf8_lossy(&output.stderr).to_string(),
     )
@@ -54,6 +62,10 @@ fn test_json_escaping_windows_path() {
         serde_json::from_str(line).unwrap_or_else(|e| panic!("Invalid JSON: {}\nRaw: {}", e, line));
 }
 
+/// Verify that every invalid regex pattern fails gracefully (non-zero exit,
+/// no panic, meaningful error in stderr). Previously this test only checked
+/// for absence of panics — we now also assert the process *did* fail and
+/// that stderr carries an actionable error message.
 #[test]
 fn test_invalid_regex_no_panic() {
     let dir = TempDir::new().unwrap();
@@ -64,16 +76,29 @@ fn test_invalid_regex_no_panic() {
 
     let bad_patterns = ["[", "(", "*", "+", "?", "{1,2}", "(?"];
     for pattern in bad_patterns {
-        let (_stdout, stderr) = run_ix(&["--regex", pattern, dir.path().to_str().unwrap()]);
+        let (code, _stdout, stderr) =
+            run_ix_with_status(&["--regex", pattern, dir.path().to_str().unwrap()]);
         assert!(
             !stderr.contains("panicked"),
             "Pattern '{}' caused panic: {}",
             pattern,
             stderr
         );
+        assert_ne!(
+            code, 0,
+            "Pattern '{}' should produce a non-zero exit code, but got 0.\nstderr: {}",
+            pattern, stderr
+        );
+        assert!(
+            !stderr.trim().is_empty(),
+            "Pattern '{}' should produce an error message on stderr, but stderr is empty",
+            pattern
+        );
     }
 }
 
+/// Verify that an empty search pattern is handled gracefully: no panic,
+/// process exits with non-zero status, and stderr carries an error message.
 #[test]
 fn test_empty_pattern_no_panic() {
     let dir = TempDir::new().unwrap();
@@ -81,13 +106,22 @@ fn test_empty_pattern_no_panic() {
     fs::write(&file_path, "test").unwrap();
 
     run_ix(&["--build", dir.path().to_str().unwrap()]);
-    let (_stdout, stderr) = run_ix(&["", dir.path().to_str().unwrap()]);
+    let (code, _stdout, stderr) = run_ix_with_status(&["", dir.path().to_str().unwrap()]);
 
     assert!(
         !stderr.contains("panicked"),
         "Empty pattern caused panic: {}",
         stderr
     );
+    // An empty literal should either succeed (matching nothing) or fail with a
+    // clear error. Either way, it must NOT panic. If the process exits non-zero,
+    // we additionally verify a meaningful error was printed.
+    if code != 0 {
+        assert!(
+            !stderr.trim().is_empty(),
+            "Non-zero exit for empty pattern but stderr is empty"
+        );
+    }
 }
 
 #[test]

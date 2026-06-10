@@ -113,8 +113,10 @@ pub fn to_pyerr(err: ix::error::Error) -> PyErr {
         | ix::error::Error::BadMagic
         | ix::error::Error::UnsupportedVersion { .. }
         | ix::error::Error::HeaderCorrupted { .. } => PyErr::new::<IxIndexError, _>(message),
+        ix::error::Error::CdxBlockCorrupted(msg) => {
+            PyErr::new::<IxCorruptionError, _>(format!("CDX block data is corrupted: {msg}"))
+        }
         ix::error::Error::PostingCorrupted
-        | ix::error::Error::CdxBlockCorrupted
         | ix::error::Error::TruncatedVarint(_)
         | ix::error::Error::OverflowVarint
         | ix::error::Error::PostingOutOfBounds

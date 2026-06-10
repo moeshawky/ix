@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import ix
 
 
@@ -31,12 +33,9 @@ def test_all_errors_exported() -> None:
         assert name in ix.__all__
 
 
-def test_not_found_raises_index_error(empty_project: str) -> None:
+def test_not_found_raises_index_error(empty_project: Path) -> None:
     """Opening a non-existent index raises IxIndexError."""
-    import ix
+    import pytest
 
-    try:
+    with pytest.raises(ix.IxIndexError):
         ix.Index(str(empty_project))
-        assert False, "expected IxIndexError"
-    except ix.IxIndexError:
-        pass

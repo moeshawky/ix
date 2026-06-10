@@ -2,8 +2,13 @@ use ix::builder::Builder;
 use std::fs;
 use tempfile::tempdir;
 
+/// Verify that rebuilding an index after file changes produces a valid,
+/// updated index (size differs from the original). The previous name
+/// "test_build_preserves_existing_index_on_failure" was misleading —
+/// no failure is induced here. This test verifies that a rebuild after
+/// content mutation produces a different (larger) index.
 #[test]
-fn test_build_preserves_existing_index_on_failure() {
+fn test_rebuild_after_content_change_updates_index() {
     let dir = tempdir().unwrap();
     let root = dir.path();
 
@@ -83,7 +88,13 @@ fn test_backup_index_on_rebuild() {
 
 /// G-EDGE + G-ERR: Test that check_stale has a grace period
 /// This test verifies that immediately modifying a file after build doesn't
-/// trigger a stale warning (grace period of 5 seconds)
+/// trigger a stale warning (grace period of 5 seconds).
+///
+/// Strengthened: the search must succeed AND the executor must not crash
+/// when the file has been modified within the grace period. We don't assert
+/// specific content matches because the executor verifies candidates against
+/// the on-disk file, which now contains different content — the point is
+/// that the reader *opens and executes* without panicking or erroring.
 #[test]
 fn test_concurrent_file_modification_grace_period() {
     let dir = tempdir().unwrap();
@@ -116,8 +127,17 @@ fn test_concurrent_file_modification_grace_period() {
         "Should be able to query even with recent modification"
     );
 
-    // Note: The actual search may return empty because:
-    // 1. Trigrams are extracted from content, not filenames
-    // 2. We need to verify the build actually indexed the file
-    // This test focuses on the stale check behavior, not search correctness
+    // Verify the executor completed without panicking.
+    // Matches may be empty because the executor verifies candidates against
+    // the on-disk file (which now contains "modified content"), but the
+    // critical thing is that the search *ran* — proving the grace period
+    // didn't block the read.
+    let (matches, _stats) = result.unwrap();
+    // Either we get old-content matches or zero matches (file mismatch).
+    // Both prove the grace period allowed the reader to proceed.
+    assert!(
+        matches.is_empty() || matches.iter().any(|m| m.line_content.contains("hello")),
+        "Unexpected content: {:?}",
+        matches.iter().map(|m| &m.line_content).collect::<Vec<_>>()
+    );
 }

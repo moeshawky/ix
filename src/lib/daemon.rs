@@ -71,6 +71,7 @@ struct DaemonCtx<'a> {
 ///
 /// Returns an error if the root cannot be canonicalised, the index cannot be
 /// built, the file watcher fails, or a concurrent daemon instance is detected.
+// Daemon main loop requires all states in one function for shared borrows
 #[allow(clippy::too_many_lines)]
 pub fn run(root: &Path) -> crate::error::Result<()> {
     run_many(&[root.to_path_buf()])
@@ -381,6 +382,7 @@ fn wait_for_memory(guard: &ResourceGuard, log_prefix: &str) {
     }
 }
 
+// All parameters are independently sourced config values
 #[allow(clippy::too_many_arguments)]
 fn run_main_loop(
     builder: &mut Builder,
@@ -483,17 +485,36 @@ fn handle_changes(
             eprintln!(
                 "ixd [{prefix}]: critical safety decision (Halt: {err:?}) — pausing operations",
             );
-            ctx.beacon.status = "safety halt".to_string();
+            let halt_status = DaemonStatus::SafetyHalt;
+            ctx.beacon.status = halt_status.to_string();
             if let Err(e) = ctx.beacon.write_to(ctx.ix_dir) {
                 eprintln!("ixd [{prefix}]: beacon write error: {e}");
             }
+            if let Some(sock) = ctx.daemon_sock {
+                sock.set_status(&halt_status, ctx.builder.files_len());
+            }
+            broadcast_status(
+                ctx,
+                &beacon_status_msg(&halt_status, ctx.builder.files_len()),
+            );
             std::thread::sleep(Duration::from_millis(u64::from(*cooldown)));
             return;
         }
         SafetyDecision::Exit(err) => {
             let prefix = ctx.log_prefix;
             eprintln!("ixd [{prefix}]: SAFETY EXIT (unrecoverable: {err:?}) — terminating");
-            ctx.beacon.status = "safety exit".to_string();
+            let exit_status = DaemonStatus::SafetyExit;
+            ctx.beacon.status = exit_status.to_string();
+            if let Err(e) = ctx.beacon.write_to(ctx.ix_dir) {
+                eprintln!("ixd [{prefix}]: beacon write error: {e}");
+            }
+            if let Some(sock) = ctx.daemon_sock {
+                sock.set_status(&exit_status, ctx.builder.files_len());
+            }
+            broadcast_status(
+                ctx,
+                &beacon_status_msg(&exit_status, ctx.builder.files_len()),
+            );
             ctx.running.store(false, Ordering::SeqCst);
             return;
         }
@@ -506,16 +527,20 @@ fn handle_changes(
             eprintln!(
                 "ixd [{prefix}]: safety escalation (entropy: {esc_entropy}, reason: {reason:?}) — throttling",
             );
-            let deferred_status = DaemonStatus::Deferred {
+            let escalated_status = DaemonStatus::Escalated {
                 entropy: *esc_entropy,
             };
-            ctx.beacon.status = deferred_status.to_string();
+            ctx.beacon.status = escalated_status.to_string();
             if let Err(e) = ctx.beacon.write_to(ctx.ix_dir) {
                 eprintln!("ixd [{prefix}]: beacon write error: {e}");
             }
             if let Some(sock) = ctx.daemon_sock {
-                sock.set_status(&deferred_status, ctx.builder.files_len());
+                sock.set_status(&escalated_status, ctx.builder.files_len());
             }
+            broadcast_status(
+                ctx,
+                &beacon_status_msg(&escalated_status, ctx.builder.files_len()),
+            );
             std::thread::sleep(Duration::from_millis(u64::from(*cooldown_ms)));
             return;
         }
@@ -526,10 +551,20 @@ fn handle_changes(
                     "ixd [{prefix}]: safety warning (severity {}): {reason}",
                     safety_decision.severity()
                 );
-                ctx.beacon.status = format!("warned: {reason}");
+                let warned_status = DaemonStatus::Warned {
+                    reason: reason.to_string(),
+                };
+                ctx.beacon.status = warned_status.to_string();
                 if let Err(e) = ctx.beacon.write_to(ctx.ix_dir) {
                     eprintln!("ixd [{prefix}]: beacon write error: {e}");
                 }
+                if let Some(sock) = ctx.daemon_sock {
+                    sock.set_status(&warned_status, ctx.builder.files_len());
+                }
+                broadcast_status(
+                    ctx,
+                    &beacon_status_msg(&warned_status, ctx.builder.files_len()),
+                );
                 std::thread::sleep(Duration::from_millis(WARN_COOLDOWN_MS));
             }
         }
@@ -598,13 +633,31 @@ fn handle_changes(
 
     broadcast_file_changes(ctx, changed_files);
 
-    let idle_status = DaemonStatus::Idle;
-    ctx.beacon.status = idle_status.to_string();
+    // Wire DaemonStatus safety variants based on memory pressure zone.
+    // Green: normal idle. Yellow/Orange: Warned with pressure reason.
+    // Red: SafetyHalt — daemon survives but is cache-flushed.
+    let post_index_status = match directive.zone {
+        crate::cache_policy::PressureZone::Green => DaemonStatus::Idle,
+        crate::cache_policy::PressureZone::Yellow => DaemonStatus::Warned {
+            reason: format!("memory pressure: {}%", directive.pressure),
+        },
+        crate::cache_policy::PressureZone::Orange => DaemonStatus::Warned {
+            reason: format!("critical memory pressure: {}%", directive.pressure),
+        },
+        crate::cache_policy::PressureZone::Red => DaemonStatus::SafetyHalt,
+    };
+    ctx.beacon.status = post_index_status.to_string();
     if let Err(e) = ctx.beacon.write_to(ctx.ix_dir) {
         eprintln!("ixd [{}]: beacon write error: {e}", ctx.log_prefix);
     }
     if let Some(sock) = ctx.daemon_sock {
-        sock.set_status(&idle_status, ctx.builder.files_len());
+        sock.set_status(&post_index_status, ctx.builder.files_len());
+    }
+    if post_index_status != DaemonStatus::Idle {
+        broadcast_status(
+            ctx,
+            &beacon_status_msg(&post_index_status, ctx.builder.files_len()),
+        );
     }
 
     let delta_file = ctx.ix_dir.join("shard.ix.delta");
