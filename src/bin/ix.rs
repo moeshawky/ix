@@ -12,6 +12,7 @@
 
 use clap::Parser;
 use ix::builder::Builder;
+use ix::config::Config;
 use ix::executor::{Match, QueryOptions, QueryStats};
 use ix::reader::Reader;
 use ix::scanner::Scanner;
@@ -928,6 +929,17 @@ fn do_build(
     let mut builder = Builder::new(path)?;
     builder.set_decompress(decompress);
     builder.set_max_file_size(max_file_size_mb * 1024 * 1024);
+
+    // Load .ixd.toml config if present to apply exclude_patterns.
+    // Only apply when a config file actually exists to avoid changing
+    // default CLI behavior (the daemon uses its own defaults).
+    if path.join(".ixd.toml").exists()
+        && let Ok(config) = Config::discover_under(path)
+        && !config.exclude_patterns.is_empty()
+    {
+        builder = builder.with_exclude_patterns(config.exclude_patterns);
+    }
+
     let out = builder.build()?;
     println!("Index built at {}", out.display());
     Ok(())
