@@ -26,7 +26,7 @@ use std::sync::mpsc::Sender;
 
 /// A batch of search results produced progressively during a query.
 ///
-/// Sent through a channel by [`Executor::execute_progressive`] as each file
+/// Sent through a channel by `Executor::execute_progressive` as each file
 /// is verified, rather than collecting all results before returning.
 #[derive(Debug, Clone)]
 pub struct ProgressiveBatch {

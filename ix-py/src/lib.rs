@@ -1,6 +1,6 @@
 //! Python bindings for ix — sub-millisecond code search via sparse trigram indexing.
 //!
-//! Exposes [`Index`] for opening and querying ix shard files, along with
+//! Exposes `PyIndex` (the Python `Index` class) for opening and querying ix shard files, along with
 //! error types that map directly to Python exception classes. Module-level
 //! convenience functions provide single-call search, build, stats, and
 //! service status without managing an `Index` handle.
@@ -8,7 +8,7 @@
 //! # Error Mapping
 //!
 //! Each [`ix::error::Error`] variant maps to a specific Python exception
-//! subclass of [`IxError`], preserving the full type hierarchy for precise
+//! subclass of `IxError`, preserving the full type hierarchy for precise
 //! exception handling from Python.
 //!
 //! # Feature Flags

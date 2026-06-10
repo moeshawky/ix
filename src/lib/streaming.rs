@@ -329,17 +329,17 @@ fn search_window(
 /// Stream search over mmap data with automatic chunking for large files.
 ///
 /// When the mmap is larger than `chunk_size_bytes` (or
-/// [`DEFAULT_CHUNK_SIZE`] when that field is 0), the data is split into
+/// `DEFAULT_CHUNK_SIZE` when that field is 0), the data is split into
 /// overlapping chunks to keep per-chunk memory and pattern-matching cost
 /// bounded. A single `seen_offsets` set across all chunks deduplicates
 /// matches that appear in the overlap region.
 ///
 /// Chunk overlap is controlled by `chunk_overlap_bytes` (or
-/// [`DEFAULT_CHUNK_OVERLAP`] when 0).
+/// `DEFAULT_CHUNK_OVERLAP` when 0).
 ///
 /// # Errors
 ///
-/// Returns an I/O error if reading fails (delegated from [`search_window`]).
+/// Returns an I/O error if reading fails (delegated from `search_window`).
 pub fn stream_file_chunked(
     mmap_data: &[u8],
     path: &Path,

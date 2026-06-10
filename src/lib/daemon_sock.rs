@@ -1205,7 +1205,7 @@ pub fn execute_search(
 /// Execute a search query progressively, sending batches through a channel.
 ///
 /// Opens the index, creates an executor, and runs the query via
-/// [`Executor::execute_progressive`]. Each batch of results is sent
+/// `Executor::execute_progressive`. Each batch of results is sent
 /// through `sender` as a [`SearchResults`] message.
 ///
 /// NOTE: Progressive search currently operates in single-batch mode.
