@@ -110,3 +110,4 @@ tests/property_tests.proptest-regressions/
 tests/property_tests.proptest-regressions
 ix_test.ipynb
 .pi/
+RELEASE-ANNOUNCEMENT.md
