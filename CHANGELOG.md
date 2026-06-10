@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-06-10
+
+### Added
+- `CwdGuard` struct in CLI binary for exception-safe CWD mutation with Drop guard
+- `BeaconStatusJson` and `SimpleStatusJson` serde structs replacing hand-built JSON formatting
+- `QueryStats.total_available` field signaling `max_results` truncation to callers
+
+### Changed
+- CWD mutation in `execute_local_search` made exception-safe via `CwdGuard` Drop
+- CLI `do_build()` now loads `.ixd.toml` config for `exclude_patterns`
+- `config.rs` doc updated to note both CLI and daemon load `.ixd.toml`
+- `.ixd.toml.md` docs expanded with CLI usage section
+- `DAEMON-RUNBOOK.md` deprecated `ix --daemon` reference removed; last-verified date refreshed
+- `README.md` clarified that `.ixd.toml` applies to both `ixd` and `ix --build`
+
+### Fixed
+- Error-path opacity hardened: additional `tracing::warn!` calls in reader, format, and executor for previously silent failure paths
+- `usize` to `u32` FFI safety in Python bindings via `try_from` with `PyOverflowError` fallback
+- 6 rustdoc warnings resolved (private item links, unresolved references) for clean docs.rs build
+
+### Removed
+- `run_daemon` function (deprecated since v0.7.0, zero consumers)
+- Duplicated error doc line in `error.rs`
+
 ## [0.12.3] - 2026-06-10
 
 ### Added
