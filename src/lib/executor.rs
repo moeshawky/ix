@@ -78,6 +78,10 @@ pub struct QueryStats {
     pub lines_read: u32,
     /// Total number of matches produced.
     pub total_matches: u32,
+    /// Total matches available before `max_results` truncation.
+    /// Set to the same value as `total_matches` when no truncation occurred.
+    #[serde(default)]
+    pub total_available: u32,
     /// Posting list cache hits (decode avoided).
     pub posting_cache_hits: u64,
     /// Posting list cache misses (decode required).
@@ -376,7 +380,9 @@ impl<'a> Executor<'a> {
             file_matches: matches,
         };
         // Ignore send error (receiver dropped = caller no longer interested).
-        let _ = sender.send(batch);
+        if let Err(e) = sender.send(batch) {
+            tracing::debug!("progressive receiver closed: {e}");
+        }
         // Drop sender explicitly to signal completion to the receiver.
         drop(sender);
         Ok(stats)
@@ -521,12 +527,14 @@ impl<'a> Executor<'a> {
 
         accum.into_stats(stats.candidate_files, all_matches.len() as u32, &mut stats);
 
+        let total_before_truncation = all_matches.len() as u32;
         if options.max_results > 0 && !options.files_only && all_matches.len() > options.max_results
         {
             all_matches.truncate(options.max_results);
         }
 
         stats.total_matches = all_matches.len() as u32;
+        stats.total_available = total_before_truncation;
 
         Ok((all_matches, stats))
     }
@@ -643,12 +651,14 @@ impl<'a> Executor<'a> {
 
         accum.into_stats(stats.candidate_files, all_matches.len() as u32, &mut stats);
 
+        let total_before_truncation = all_matches.len() as u32;
         if options.max_results > 0 && !options.files_only && all_matches.len() > options.max_results
         {
             all_matches.truncate(options.max_results);
         }
 
         stats.total_matches = all_matches.len() as u32;
+        stats.total_available = total_before_truncation;
         Ok((all_matches, stats))
     }
 
@@ -747,12 +757,14 @@ impl<'a> Executor<'a> {
 
         accum.into_stats(stats.candidate_files, all_matches.len() as u32, &mut stats);
 
+        let total_before_truncation = all_matches.len() as u32;
         if options.max_results > 0 && !options.files_only && all_matches.len() > options.max_results
         {
             all_matches.truncate(options.max_results);
         }
 
         stats.total_matches = all_matches.len() as u32;
+        stats.total_available = total_before_truncation;
         Ok((all_matches, stats))
     }
 
@@ -807,6 +819,7 @@ impl<'a> Executor<'a> {
             .flatten()
             .collect();
 
+        let total_before_truncation = all_matches.len() as u32;
         if options.max_results > 0 && !options.files_only && all_matches.len() > options.max_results
         {
             all_matches.truncate(options.max_results);
@@ -815,6 +828,7 @@ impl<'a> Executor<'a> {
         let mut stats = QueryStats {
             candidate_files: stats_candidate_files,
             total_matches: all_matches.len() as u32,
+            total_available: total_before_truncation,
             ..Default::default()
         };
         accum.into_stats(stats_candidate_files, all_matches.len() as u32, &mut stats);

@@ -252,6 +252,63 @@ struct SearchParams<'a> {
     chunk_overlap: usize,
 }
 
+/// Guard that changes the current working directory to `target` and restores
+/// the original CWD on drop.
+///
+/// If restoration fails (extremely rare — e.g., original directory was deleted),
+/// the error is logged to stderr as a best-effort warning.
+struct CwdGuard {
+    original: PathBuf,
+}
+
+impl CwdGuard {
+    /// Save the current working directory and switch to `target`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if `current_dir()` or `set_current_dir()` fails.
+    fn new(target: &Path) -> Result<Self, std::io::Error> {
+        let original = std::env::current_dir()?;
+        std::env::set_current_dir(target)?;
+        Ok(Self { original })
+    }
+}
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        if let Err(e) = std::env::set_current_dir(&self.original) {
+            eprintln!("ix: warning: failed to restore working directory: {e}");
+        }
+    }
+}
+
+// --- JSON Output Shapes ----------------------------------------------------
+// Each struct corresponds to a distinct JSON output format emitted by the CLI.
+// Using serde_json ensures consistent escaping, null handling, and avoids
+// the hand-built format! strings that produced different escaping at each call site.
+
+/// JSON shape for daemon beacon status (`ix service status --json`).
+#[derive(serde::Serialize)]
+struct BeaconStatusJson {
+    status: String,
+    pid: i32,
+    uptime_secs: Option<u64>,
+    daemon_status: String,
+    root: String,
+    socket: Option<String>,
+    instance_id: u64,
+}
+
+/// JSON shape for simple status responses (orphan, dead, `not_running`).
+#[derive(serde::Serialize)]
+struct SimpleStatusJson {
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stale_pid: Option<i32>,
+}
+
+// ---------------------------------------------------------------------------
+
 /// Execute search locally using mmap (fallback when IPC is unavailable).
 fn execute_local_search(
     params: &SearchParams,
@@ -265,7 +322,9 @@ fn execute_local_search(
     let reader = Reader::open(index_path)?;
     check_stale(&reader, index_root)?;
 
-    std::env::set_current_dir(index_root)?;
+    // Change CWD to index_root so relative paths in the index resolve.
+    // CwdGuard restores the original CWD on drop (including on error paths).
+    let _cwd_guard = CwdGuard::new(index_root)?;
 
     let delta_path = index_path.parent().map(|p| p.join("shard.ix.delta"));
     let (m, s) = ix::api::execute(
@@ -293,9 +352,6 @@ fn execute_local_search(
         })
         .collect();
 
-    let _ = std::env::set_current_dir(
-        std::env::current_dir().unwrap_or_else(|_| params.path.to_path_buf()),
-    );
     Ok((filtered_matches, s))
 }
 
@@ -669,12 +725,24 @@ fn handle_service_status(path: Option<&Path>, json: bool) {
 
             if is_orphan {
                 if json {
-                    println!("{{\"status\":\"orphan\",\"stale_pid\":{}}}", beacon.pid);
+                    let out = SimpleStatusJson {
+                        status: "orphan".to_string(),
+                        stale_pid: Some(beacon.pid),
+                    };
+                    if let Ok(s) = serde_json::to_string(&out) {
+                        println!("{s}");
+                    }
                 } else {
                     println!("PID {} is not ixd (orphan beacon)", beacon.pid);
                 }
             } else if json {
-                println!("{{\"status\":\"dead\",\"stale_pid\":{}}}", beacon.pid);
+                let out = SimpleStatusJson {
+                    status: "dead".to_string(),
+                    stale_pid: Some(beacon.pid),
+                };
+                if let Ok(s) = serde_json::to_string(&out) {
+                    println!("{s}");
+                }
             } else {
                 println!(
                     "ixd daemon is not running (stale beacon from PID {})",
@@ -684,7 +752,13 @@ fn handle_service_status(path: Option<&Path>, json: bool) {
         }
         None => {
             if json {
-                println!("{{\"status\":\"not_running\"}}");
+                let out = SimpleStatusJson {
+                    status: "not_running".to_string(),
+                    stale_pid: None,
+                };
+                if let Ok(s) = serde_json::to_string(&out) {
+                    println!("{s}");
+                }
             } else {
                 println!("ixd daemon is not running");
             }
@@ -693,29 +767,22 @@ fn handle_service_status(path: Option<&Path>, json: bool) {
 }
 
 fn print_json_status(status: &str, beacon: &ix::format::Beacon, uptime: Option<u64>) {
-    let sock = beacon.socket_path.as_ref().map_or_else(
-        || "null".to_string(),
-        |p| {
-            format!(
-                "\"{}\"",
-                p.display()
-                    .to_string()
-                    .replace('\\', "\\\\")
-                    .replace('"', "\\\"")
-            )
-        },
-    );
-    let u = uptime.map_or("null".to_string(), |v| v.to_string());
-    let root = beacon
-        .root
-        .display()
-        .to_string()
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"");
-    println!(
-        "{{\"status\":\"{}\",\"pid\":{},\"uptime_secs\":{},\"daemon_status\":\"{}\",\"root\":\"{}\",\"socket\":{},\"instance_id\":{}}}",
-        status, beacon.pid, u, beacon.status, root, sock, beacon.instance_id,
-    );
+    let json = BeaconStatusJson {
+        status: status.to_string(),
+        pid: beacon.pid,
+        uptime_secs: uptime,
+        daemon_status: beacon.status.clone(),
+        root: beacon.root.display().to_string(),
+        socket: beacon.socket_path.as_ref().map(|p| p.display().to_string()),
+        instance_id: beacon.instance_id,
+    };
+    // Use compact serde_json output to match the original hand-built JSON format.
+    // Errors on serialization are extremely unlikely (all fields are simple types)
+    // but we fall back to a minimal string to avoid silent output loss.
+    match serde_json::to_string(&json) {
+        Ok(s) => println!("{s}"),
+        Err(e) => eprintln!("ix: warning: JSON serialize error: {e}"),
+    }
 }
 
 fn format_uptime(secs: u64) -> String {

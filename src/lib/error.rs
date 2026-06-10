@@ -40,7 +40,6 @@ pub enum Error {
     CdxBlockCorrupted(String),
 
     /// Section offset exceeds the index file bounds.
-    /// Section offset exceeds the index file bounds.
     #[error("section offset out of bounds: {section} at {offset}+{size} > {file_len}")]
     SectionOutOfBounds {
         /// Name of the section being accessed.

@@ -35,7 +35,7 @@
 //! # Module Build Order
 //!
 //! `format` → `varint` → `trigram` → `bloom` → `posting` →
-//! `string_pool` → `builder` → `reader` → `planner` → `executor`
+//! `string_pool` → `builder` → `reader` → `planner` → `executor` → `scanner`
 //!
 //! Cache layer: `posting_cache` · `neg_cache` · `regex_pool` (used by `executor`)
 //!
@@ -154,21 +154,3 @@ pub use crate::idle::IdleTracker;
 #[cfg(feature = "notify")]
 #[cfg_attr(docsrs, doc(cfg(feature = "notify")))]
 pub use crate::watcher::Watcher;
-
-/// Run the daemon watching the given directory for changes and rebuilding the index.
-///
-/// This function is deprecated. Use [`crate::daemon::run`] instead.
-///
-/// # Errors
-///
-/// Delegates to [`daemon::run`]; see that function for error conditions.
-///
-/// This is a deprecated public API convenience preserved for backward compatibility
-/// with external consumers that predate the `ix::daemon::run` path. Not called
-/// internally by any binary or library code.
-#[cfg(all(feature = "notify", unix))]
-#[deprecated(since = "0.7.0", note = "use ix::daemon::run instead")]
-#[allow(dead_code)]
-pub fn run_daemon(path: &std::path::Path) -> crate::error::Result<()> {
-    crate::daemon::run(path)
-}

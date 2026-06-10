@@ -303,6 +303,7 @@ impl Reader {
                 return Ok(None);
             };
             let Some(key_val) = key_bytes.try_into().ok() else {
+                tracing::warn!("corrupt trigram table entry: invalid key bytes");
                 return Ok(None);
             };
             let key = u32::from_le_bytes(key_val);
@@ -322,6 +323,7 @@ impl Reader {
                         .and_then(|s| s.try_into().ok())
                         .map(u32::from_le_bytes)
                     else {
+                        tracing::warn!("corrupt trigram table entry: invalid posting_length");
                         return Ok(None);
                     };
 
@@ -330,6 +332,7 @@ impl Reader {
                         .and_then(|s| s.try_into().ok())
                         .map(u32::from_le_bytes)
                     else {
+                        tracing::warn!("corrupt trigram table entry: invalid doc_frequency");
                         return Ok(None);
                     };
 
@@ -382,7 +385,10 @@ impl Reader {
 
         let mut pos = 0;
         let num_entries = match crate::varint::decode(&decompressed, &mut pos) {
-            Ok(v) => usize::try_from(v).unwrap_or(0),
+            Ok(v) => usize::try_from(v).unwrap_or_else(|_| {
+                tracing::warn!("corrupt posting list entry: num_entries overflow");
+                0
+            }),
             Err(e) => {
                 return Err(Error::CdxBlockCorrupted(format!(
                     "num_entries varint decode failed: {e}"
@@ -393,7 +399,10 @@ impl Reader {
         let mut last_key = 0u32;
         for _ in 0..num_entries {
             let key_delta = match crate::varint::decode(&decompressed, &mut pos) {
-                Ok(v) => u32::try_from(v).unwrap_or(0),
+                Ok(v) => u32::try_from(v).unwrap_or_else(|_| {
+                    tracing::warn!("corrupt posting list entry: key_delta overflow");
+                    0
+                }),
                 Err(e) => {
                     return Err(Error::CdxBlockCorrupted(format!(
                         "key_delta varint decode failed: {e}"
@@ -412,7 +421,10 @@ impl Reader {
                 }
             };
             let posting_length = match crate::varint::decode(&decompressed, &mut pos) {
-                Ok(v) => u32::try_from(v).unwrap_or(0),
+                Ok(v) => u32::try_from(v).unwrap_or_else(|_| {
+                    tracing::warn!("corrupt posting list entry: posting_length overflow");
+                    0
+                }),
                 Err(e) => {
                     return Err(Error::CdxBlockCorrupted(format!(
                         "posting_length varint decode failed: {e}"
@@ -420,7 +432,10 @@ impl Reader {
                 }
             };
             let doc_frequency = match crate::varint::decode(&decompressed, &mut pos) {
-                Ok(v) => u32::try_from(v).unwrap_or(0),
+                Ok(v) => u32::try_from(v).unwrap_or_else(|_| {
+                    tracing::warn!("corrupt posting list entry: doc_frequency overflow");
+                    0
+                }),
                 Err(e) => {
                     return Err(Error::CdxBlockCorrupted(format!(
                         "doc_frequency varint decode failed: {e}"

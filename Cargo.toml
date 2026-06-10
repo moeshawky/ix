@@ -72,6 +72,10 @@ ctrlc = "3.4"
 nix = { version = "0.29", features = ["process", "signal"] }
 libc = "0.2"
 tracing = "0.1"
+# NOTE: tracing-subscriber is declared but not initialized by the library.
+# The daemon binary (ixd) should call tracing_subscriber::fmt::try_init()
+# at startup to enable structured logging. Without this, all tracing::warn!
+# and tracing::debug! calls silently discard output.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rayon = "1"
 chrono = "0.4"

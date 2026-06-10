@@ -147,17 +147,35 @@ impl Header {
         let r = |off: usize| -> u64 {
             data.get(off..off + 8)
                 .and_then(|s| s.try_into().ok())
-                .map_or(0, u64::from_le_bytes)
+                .map_or_else(
+                    || {
+                        tracing::warn!("corrupted header: field at offset 0x{off:02X} unreadable");
+                        0
+                    },
+                    u64::from_le_bytes,
+                )
         };
         let r16 = |off: usize| -> u16 {
             data.get(off..off + 2)
                 .and_then(|s| s.try_into().ok())
-                .map_or(0, u16::from_le_bytes)
+                .map_or_else(
+                    || {
+                        tracing::warn!("corrupted header: field at offset 0x{off:02X} unreadable");
+                        0
+                    },
+                    u16::from_le_bytes,
+                )
         };
         let r32 = |off: usize| -> u32 {
             data.get(off..off + 4)
                 .and_then(|s| s.try_into().ok())
-                .map_or(0, u32::from_le_bytes)
+                .map_or_else(
+                    || {
+                        tracing::warn!("corrupted header: field at offset 0x{off:02X} unreadable");
+                        0
+                    },
+                    u32::from_le_bytes,
+                )
         };
 
         let major = r16(0x04);

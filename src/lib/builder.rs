@@ -327,7 +327,9 @@ impl Builder {
         for pattern in &patterns {
             let path = self.ix_dir.join(pattern);
             if path.exists() {
-                let _ = fs::remove_file(&path);
+                if let Err(e) = fs::remove_file(&path) {
+                    tracing::warn!("failed to clean temp file {}: {e}", path.display());
+                }
             }
         }
 
@@ -335,7 +337,9 @@ impl Builder {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 if name.starts_with("shard.ix.run.") || name.starts_with("shard.ix.merged.") {
-                    let _ = fs::remove_file(entry.path());
+                    if let Err(e) = fs::remove_file(entry.path()) {
+                        tracing::warn!("failed to clean temp run {}: {e}", entry.path().display());
+                    }
                 }
             }
         }
@@ -366,12 +370,22 @@ impl Builder {
 
         for (tri, entries) in sorted {
             f.write_all(&tri.to_le_bytes())?;
-            f.write_all(&u32::try_from(entries.len()).unwrap_or(0).to_le_bytes())?;
+            f.write_all(
+                &u32::try_from(entries.len())
+                    .unwrap_or_else(|_| {
+                        tracing::warn!("trigram entry count overflow: {}", entries.len());
+                        0
+                    })
+                    .to_le_bytes(),
+            )?;
             for entry in entries {
                 f.write_all(&entry.file_id.to_le_bytes())?;
                 f.write_all(
                     &u32::try_from(entry.offsets.len())
-                        .unwrap_or(0)
+                        .unwrap_or_else(|_| {
+                            tracing::warn!("trigram entry count overflow: {}", entry.offsets.len());
+                            0
+                        })
                         .to_le_bytes(),
                 )?;
                 for off in entry.offsets {
@@ -548,8 +562,12 @@ impl Builder {
         }
 
         let output_path = self.serialize()?;
-        let _ = std::fs::remove_file(self.ix_dir.join("shard.ix.delta"));
-        let _ = std::fs::remove_file(self.ix_dir.join("shard.ix.delta.tmp"));
+        if let Err(e) = std::fs::remove_file(self.ix_dir.join("shard.ix.delta")) {
+            tracing::warn!("failed to clean delta file: {e}");
+        }
+        if let Err(e) = std::fs::remove_file(self.ix_dir.join("shard.ix.delta.tmp")) {
+            tracing::warn!("failed to clean delta tmp file: {e}");
+        }
         tracing::info!("Build completed in {:?}: {:?}", start.elapsed(), self.stats);
         Ok(output_path)
     }
@@ -1200,7 +1218,9 @@ impl Builder {
         let old_index_exists = final_path.exists();
         if old_index_exists {
             // Remove old backup if exists
-            let _ = fs::remove_file(&backup_path);
+            if let Err(e) = fs::remove_file(&backup_path) {
+                tracing::warn!("failed to clean old backup file: {e}");
+            }
             // Backup current index
             if let Err(e) = fs::rename(&final_path, &backup_path) {
                 tracing::warn!("Failed to backup existing index: {}", e);
@@ -1210,12 +1230,20 @@ impl Builder {
         self.committed = true;
         // Remove backup after successful rename
         if old_index_exists {
-            let _ = fs::remove_file(&backup_path);
+            if let Err(e) = fs::remove_file(&backup_path) {
+                tracing::warn!("failed to clean backup file: {e}");
+            }
         }
 
-        let _ = fs::remove_file(self.ix_dir.join("shard.ix.tmp.files"));
-        let _ = fs::remove_file(self.ix_dir.join("shard.ix.tmp.blooms"));
-        let _ = fs::remove_file(self.ix_dir.join("shard.ix.tmp.strings"));
+        if let Err(e) = fs::remove_file(self.ix_dir.join("shard.ix.tmp.files")) {
+            tracing::warn!("failed to clean temp files: {e}");
+        }
+        if let Err(e) = fs::remove_file(self.ix_dir.join("shard.ix.tmp.blooms")) {
+            tracing::warn!("failed to clean temp blooms: {e}");
+        }
+        if let Err(e) = fs::remove_file(self.ix_dir.join("shard.ix.tmp.strings")) {
+            tracing::warn!("failed to clean temp strings: {e}");
+        }
         for path in &self.temp_runs {
             if let Err(e) = fs::remove_file(path) {
                 tracing::warn!("Failed to cleanup temp run {}: {}", path.display(), e);

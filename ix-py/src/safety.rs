@@ -56,11 +56,11 @@ impl PyPipeline {
     /// * `oov_ratio` — out-of-vocabulary ratio (0–255)
     /// * `stages_executed` — bitmask of stages that ran
     /// * `step_count` — reasoning step count after invocation
-    #[allow(clippy::as_conversions)]
     fn process(&mut self, text: &str) -> PyResult<PyObject> {
         let code =
             llmosafe::c_abi::llmosafe_sift_and_process(self.handle, text.as_ptr(), text.len());
-        let id = self.handle as u32;
+        let id = u32::try_from(self.handle)
+            .map_err(|_| pyo3::exceptions::PyOverflowError::new_err("pipeline handle overflow"))?;
         // SAFETY: The GIL is guaranteed held because this method is called
         // from a #[pymethods] context, where pyo3 ensures the GIL is acquired
         // before invoking any bound method.

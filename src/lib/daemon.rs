@@ -442,7 +442,11 @@ fn run_main_loop(
                         }
                         match builder.build() {
                             Ok(_) => {
-                                println!("ixd [{log_prefix}]: compaction complete (idle)");
+                                posting_cache.invalidate_all();
+                                neg_cache.clear();
+                                tracing::debug!(
+                                    "ixd [{log_prefix}]: compaction complete (idle) - caches invalidated"
+                                );
                             }
                             Err(e) => {
                                 eprintln!("ixd [{log_prefix}]: compaction failed: {e}");
@@ -675,7 +679,12 @@ fn handle_changes(
         }
         match ctx.builder.build() {
             Ok(_) => {
-                println!("ixd [{}]: compaction complete", ctx.log_prefix);
+                ctx.posting_cache.invalidate_all();
+                ctx.neg_cache.clear();
+                tracing::debug!(
+                    "ixd [{}]: compaction complete - caches invalidated",
+                    ctx.log_prefix
+                );
             }
             Err(e) => {
                 eprintln!("ixd [{}]: compaction failed: {}", ctx.log_prefix, e);
@@ -729,6 +738,10 @@ fn broadcast_status(ctx: &DaemonCtx, msg: &ServerMessage) {
     }
 }
 
+/// Unified helper for setting the beacon status string, writing the beacon
+/// file to disk, updating the daemon socket status, and optionally
+/// broadcasting the change to connected clients.
+///
 fn broadcast_file_changes(ctx: &DaemonCtx, changed_files: &[PathBuf]) {
     let Some(sock) = ctx.daemon_sock else { return };
     let now = std::time::SystemTime::now()

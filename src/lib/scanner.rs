@@ -206,7 +206,13 @@ impl Scanner {
                     }
                 }
 
-                let file_matches = Self::scan_file(&path, &regex, options).ok()?;
+                let file_matches = match Self::scan_file(&path, &regex, options) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::warn!("scanner: cannot read {}: {e}", path.display());
+                        return None;
+                    }
+                };
                 matches_found.fetch_add(
                     u32::try_from(file_matches.len()).unwrap_or(0),
                     Ordering::Relaxed,

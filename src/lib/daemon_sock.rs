@@ -88,6 +88,8 @@ pub enum DaemonStatus {
         /// Current entropy reading.
         entropy: u16,
     },
+    /// Full compaction rebuild in progress (idle or delta-driven).
+    Compacting,
     /// Rebuild deferred due to high entropy.
     Deferred {
         /// Current entropy reading.
@@ -114,6 +116,7 @@ impl std::fmt::Display for DaemonStatus {
         match self {
             Self::Idle { .. } => write!(f, "idle"),
             Self::Indexing { entropy } => write!(f, "indexing (entropy: {entropy})"),
+            Self::Compacting => write!(f, "compacting"),
             Self::Deferred { entropy } => write!(f, "deferred (entropy: {entropy})"),
             Self::Escalated { entropy } => write!(f, "escalated (entropy: {entropy})"),
             Self::Warned { reason } => write!(f, "warned: {reason}"),
@@ -153,8 +156,14 @@ const fn default_true() -> bool {
 /// for backward compatibility: new daemon ↔ old client (old client ignores
 /// unknown field), old daemon ↔ new client (error deserializes as `None`).
 ///
-/// For progressive queries (`done` = `false`) the daemon sends multiple
-/// `SearchResults` messages, one per batch, ending with `done` = `true`.
+/// For progressive queries, the daemon sends `SearchResults` messages,
+/// ending with `done` = `true`.
+///
+/// NOTE: Progressive search currently operates in single-batch mode.
+/// Every search returns exactly one batch with `done: true`. The
+/// multi-batch progressive delivery path is not yet implemented.
+/// Clients MUST NOT wait for additional batches after receiving
+/// `done: true` — the channel is closed after the single batch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResults {
     /// Query ID (matches the id from the request).
@@ -572,8 +581,11 @@ impl DaemonServer {
                                 tracing::warn!("ixd: cannot set blocking on client: {e}");
                                 continue;
                             }
-                            let _ =
-                                stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
+                            if let Err(e) =
+                                stream.set_write_timeout(Some(std::time::Duration::from_secs(5)))
+                            {
+                                tracing::debug!("ixd: client write timeout setup failed: {e}");
+                            }
                             let read_stream = match stream.try_clone() {
                                 Ok(s) => s,
                                 Err(e) => {
@@ -680,7 +692,9 @@ fn client_read_loop(
     shared: &Arc<Mutex<Shared>>,
     running: &Arc<std::sync::atomic::AtomicBool>,
 ) {
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    if let Err(e) = stream.set_read_timeout(Some(std::time::Duration::from_secs(5))) {
+        tracing::debug!("ixd: client read timeout setup failed: {e}");
+    }
     let mut reader = BufReader::new(stream);
     let mut line_buf = String::new();
 
@@ -770,8 +784,12 @@ fn client_read_loop(
                                             }),
                                         ) {
                                             line.push('\n');
-                                            let _ = ws.write_all(line.as_bytes());
-                                            let _ = ws.flush();
+                                            if let Err(e) = ws.write_all(line.as_bytes()) {
+                                                tracing::warn!("daemon: client write failed: {e}");
+                                            }
+                                            if let Err(e) = ws.flush() {
+                                                tracing::warn!("daemon: client flush failed: {e}");
+                                            }
                                         }
                                     }
                                     continue;
@@ -789,15 +807,19 @@ fn client_read_loop(
                                         &query,
                                         &result_sender,
                                     ) {
-                                        tracing::warn!("ixd: progressive search failed: {e}");
-                                        let _ = result_sender.send(SearchResults {
-                                            id: query.id,
-                                            matches: vec![],
-                                            stats: crate::executor::QueryStats::default(),
-                                            error: Some(e.to_string()),
-                                            done: true,
-                                            batch: 0,
-                                        });
+                                    tracing::warn!("ixd: progressive search failed: {e}");
+                                    if result_sender.send(SearchResults {
+                                        id: query.id,
+                                        matches: vec![],
+                                        stats: crate::executor::QueryStats::default(),
+                                        error: Some(e.to_string()),
+                                        done: true,
+                                        batch: 0,
+                                    }).is_err() {
+                                        tracing::debug!(
+                                            "progressive search: receiver closed (client disconnected)"
+                                        );
+                                    }
                                     }
                                     // Ensure result_sender is dropped so the
                                     // receiver loop below terminates.
@@ -814,6 +836,9 @@ fn client_read_loop(
                                             if write_stream.write_all(line.as_bytes()).is_err()
                                                 || write_stream.flush().is_err()
                                             {
+                                                tracing::warn!(
+                                                    "ixd: client write failed for progressive batch"
+                                                );
                                                 break;
                                             }
                                         }
@@ -864,6 +889,7 @@ fn client_read_loop(
                             if write_stream.write_all(line.as_bytes()).is_err()
                                 || write_stream.flush().is_err()
                             {
+                                tracing::warn!("ixd: client write failed for query response");
                                 break;
                             }
                         }
@@ -1182,6 +1208,12 @@ pub fn execute_search(
 /// [`Executor::execute_progressive`]. Each batch of results is sent
 /// through `sender` as a [`SearchResults`] message.
 ///
+/// NOTE: Progressive search currently operates in single-batch mode.
+/// Every search returns exactly one batch with `done: true`. The
+/// multi-batch progressive delivery path is not yet implemented.
+/// Clients MUST NOT wait for additional batches after receiving
+/// `done: true` — the channel is closed after the single batch.
+///
 /// # Errors
 ///
 /// Returns an error if the index file cannot be read or the query cannot
@@ -1255,15 +1287,23 @@ pub fn execute_search_progressive(
         } else {
             batch.file_matches
         };
-        let is_last = batch_num == 0; // single-batch for now, last = first
-        let _ = sender.send(SearchResults {
-            id: query.id,
-            matches: filtered_matches,
-            stats: stats.clone(),
-            error: None,
-            done: is_last,
-            batch: batch_num,
-        });
+        // NOTE: Progressive search currently operates in single-batch mode.
+        // All results are delivered in batch 0 with done=true. The channel
+        // loop body runs exactly once. Multi-batch streaming is planned.
+        let is_last = batch_num == 0;
+        if sender
+            .send(SearchResults {
+                id: query.id,
+                matches: filtered_matches,
+                stats: stats.clone(),
+                error: None,
+                done: is_last,
+                batch: batch_num,
+            })
+            .is_err()
+        {
+            tracing::debug!("progressive search: receiver closed (client disconnected)");
+        }
         batch_num += 1;
         if is_last {
             break;
