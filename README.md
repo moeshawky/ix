@@ -122,7 +122,7 @@ file directly, not through the socket.
 
 ### Configuring the Daemon
 
-Scope what the daemon watches and indexes with `.ixd.toml`:
+Scope what `ixd` watches and `ix --build` indexes with `.ixd.toml`:
 
 ```toml
 # .ixd.toml

@@ -6,8 +6,48 @@ All notable changes to this project will be documented in this file.
 
 ## [0.12.3] - 2026-06-10
 
+### Added
+- Progressive streaming search with `SearchResultsIter` and backpressure via `execute_progressive` in `daemon_sock`
+- `--stdin` mode with `do_stdin_stream_search` using `stream_file_chunked` for piped input search
+- `--chunk-size` and `--chunk-overlap` CLI flags for streaming search over large files
+- `QueryStats.lines_read` tracking for stdin statistics in query results
+- `stream_file_chunked` in streaming module with `QueryOptions` chunk size and overlap fields
+- `search_window` helper and `StreamStats` struct for streaming search metrics
+- `CdxBlockCorrupted` typed error variant in the `Error` enum replacing string panics
+- `DaemonStatus` safety variants: `SafetyHalt`, `SafetyExit`, `Escalated`, `Warned`
+- `broadcast_status` function for safety state propagation to all socket clients
+- `Beacon.status` field (String) for human-readable daemon state in beacon.json
+- `QueryStats.total_available` field signaling `max_results` truncation to callers
+- `CwdGuard` struct in CLI binary for exception-safe CWD mutation with Drop guard
+- `BeaconStatusJson` and `SimpleStatusJson` serde structs for JSON output formatting
+- `ix-py` Python context manager support for `Index` class plus build tests
+- `rust-toolchain.toml` pinning stable channel with MSRV 1.85
+- `rustfmt.toml` configuring edition 2024 and max_width 100
+- `clippy.toml` additions: `avoid-breaking-exported-api`, `type-complexity` threshold
+
+### Changed
+- Hand-built JSON in CLI replaced with `serde_json` for consistent string escaping
+- CWD mutation in `execute_local_search` made exception-safe via `CwdGuard` Drop
+- `daemon.rs` cache invalidation after compaction on both idle and update paths
+- `verify_file` wired through streaming pipeline for thread-safe file verification
+- CLI now loads `.ixd.toml` config in `do_build()` for `exclude_patterns`
+- `config.rs` doc updated to note both CLI and daemon load `.ixd.toml`
+- `--archive` flag warns without `--no-index`; `--max-file-size` warns in scanner mode
+
 ### Fixed
-- **Daemon socket error swallowing** — When the daemon encountered a query execution error (e.g., invalid regex pattern), it previously returned a successful `SearchResults` with zero matches, causing `ix --regex "[invalid" /path` to exit 0 silently when a daemon was running. The wire protocol now carries an `error` field so clients can distinguish query failure from zero results and fall back to local search for proper error propagation.
+- Error-path opacity hardened: 35+ `tracing::warn!` calls added for silent failures in builder, reader, format, scanner, and executor
+- Daemon socket error swallowing: query errors now propagated via wire protocol `error` field, enabling clients to distinguish query failure from zero results
+- Archive security: `sanitize_archive_path` strips traversal sequences, tar entry type filter rejects non-file/non-dir entries, 100 MiB decompression bomb limit enforced
+- Path length overflow in index paths now returns `Err` instead of silent truncation
+- `usize` to `u32` FFI safety in Python bindings via `try_from` with `PyOverflowError` fallback
+- Executable compression reintegrated for binary files such as Android ELF executables
+- Scanner CWD resolution fixed for relative paths, matching builder's root-aware behavior
+
+### Removed
+- 5 dead exports: `varint::encoded_len`, `Header::file_count_usize`, `Header::total_trigrams`, and unused bloom and executor methods
+- Orphaned `verify_stream` function and associated unused imports
+- `run_daemon` function (deprecated since v0.7.0, zero consumers)
+- Duplicated error doc line in `error.rs`
 
 ## [0.12.2] - 2026-06-10
 

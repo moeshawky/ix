@@ -1,7 +1,7 @@
 # Daemon Operation Runbook
 
 **Purpose:** Operate and troubleshoot the `ixd` background indexing daemon  
-**Last Verified:** 2026-05-14  
+**Last Verified:** 2026-06-10  
 **Time to Complete:** 10 minutes
 
 ---
@@ -15,9 +15,7 @@ The `ixd` daemon watches a directory for file changes and incrementally updates 
 - **Memory safety**: LLMOSafe integration with 60% RSS ceiling
 - **Concurrent instance guard**: Prevents multiple daemons on same root
 
-**Binaries:**
-- `ixd` — Standalone daemon binary
-- `ix --daemon` — Deprecated, use `ixd` directly
+**Binary:** `ixd` — standalone daemon binary
 
 ---
 
