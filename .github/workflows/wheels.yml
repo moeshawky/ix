@@ -52,7 +52,7 @@ jobs:
             target: aarch64
             manylinux: auto
             pre-build: |
-              sudo apt-get update && sudo apt-get install -y build-essential || true
+              yum install -y gcc gcc-c++ make || true
 
     steps:
       - uses: actions/checkout@v4
