@@ -53,6 +53,7 @@ jobs:
             manylinux: auto
             pre-build: |
               yum install -y gcc gcc-c++ make || true
+              ln -sf /usr/bin/gcc /usr/bin/aarch64-linux-gnu-gcc || true
 
     steps:
       - uses: actions/checkout@v4
