@@ -45,11 +45,15 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64
-            container: quay.io/pypa/manylinux_2_28_x86_64
+            manylinux: auto
+            pre-build: |
+              yum install -y openssl-devel || true
           - os: ubuntu-24.04-arm
             target: aarch64
+            manylinux: "off"
+            pre-build: |
+              sudo apt-get update && sudo apt-get install -y build-essential || true
 
-    container: ${{ matrix.container || null }}
     steps:
       - uses: actions/checkout@v4
 
@@ -58,9 +62,8 @@ jobs:
         with:
           working-directory: ${{ env.PROJECT }}-py
           args: --release --out dist -i python${{ env.PYTHON_VERSION }}
-          manylinux: auto
-          before-script-linux: |
-            yum install -y openssl-devel || true
+          manylinux: ${{ matrix.manylinux }}
+          before-script-linux: ${{ matrix.pre-build }}
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
