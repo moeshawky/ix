@@ -142,6 +142,9 @@ jobs:
     needs: [build-linux]
     if: always() && !cancelled() && !failure()
     runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/${{ env.PROJECT == 'ix' && 'moeix' || env.PROJECT == 'sniper' && 'moesniper' || 'llmosafe' }}
     permissions:
       id-token: write
 
