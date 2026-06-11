@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "moeix"
 version = "0.12.4"
 description = "Sub-millisecond code search via sparse trigram indexing."
-readme = "README.md"
+readme = "../README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [{ name = "ix contributors" }]

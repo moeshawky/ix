@@ -41,8 +41,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const ENTROPY_CRITICAL: u16 = 1000;
-const PRE_BUILD_WAIT_SECS: u64 = 5;
-const WARN_COOLDOWN_MS: u64 = 300;
 
 /// Per-root daemon context carrying the builder, index state, caches, and
 /// lifecycle handles used by the main event loop.
@@ -367,18 +365,8 @@ fn install_signal_handlers() -> crate::error::Result<()> {
 }
 
 fn wait_for_memory(guard: &ResourceGuard, log_prefix: &str) {
-    let pre_build_timeout = Duration::from_secs(30);
-    let pre_build_start = std::time::Instant::now();
-    while pre_build_start.elapsed() < pre_build_timeout {
-        match guard.check_blocking() {
-            Ok(_) => break,
-            Err(e) => {
-                eprintln!(
-                    "ixd [{log_prefix}]: memory pressure before initial build: {e:?} — waiting..."
-                );
-                std::thread::sleep(Duration::from_secs(PRE_BUILD_WAIT_SECS));
-            }
-        }
+    if let Err(e) = guard.check_blocking() {
+        eprintln!("ixd [{log_prefix}]: memory pressure before initial build: {e:?}");
     }
 }
 
@@ -398,24 +386,15 @@ fn run_main_loop(
     daemon_sock: Option<&DaemonServer>,
     log_prefix: &str,
 ) {
-    let mut idle_ticks: u64 = 0;
-    // Dormant compaction triggers after 50 idle ticks × 100 ms timeout = 5 s
-    // of inactivity. This was previously ≤500 ms with blocking `recv()`, but
-    // the 5 s window reduces CPU wakeups while still compacting promptly for
-    // a background daemon.
+    let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
+    SHUTDOWN_HANDLER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .replace(shutdown_tx);
 
     loop {
-        if SHUTDOWN.load(Ordering::SeqCst) {
-            running.store(false, Ordering::SeqCst);
-            if let Some(sock) = daemon_sock {
-                sock.shutdown_notify("signal", 1000);
-            }
-            break;
-        }
-
-        match rx.recv_timeout(Duration::from_millis(100)) {
+        match rx.recv_timeout(Duration::from_secs(30)) {
             Ok(changed_files) => {
-                idle_ticks = 0;
                 let mut ctx = DaemonCtx {
                     builder,
                     ix_dir,
@@ -432,40 +411,33 @@ fn run_main_loop(
                 handle_changes(&mut ctx, &changed_files, rx);
             }
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                idle_ticks = idle_ticks.saturating_add(1);
-                if idle_ticks >= 50 && idle.state() == crate::idle::DaemonState::Dormant {
-                    let delta_file = ix_dir.join("shard.ix.delta");
-                    if delta_file.exists() && delta_file.metadata().map_or(0, |m| m.len()) > 0 {
-                        beacon.status = "compacting".to_string();
-                        if let Err(e) = beacon.write_to(ix_dir) {
-                            eprintln!("ixd [{log_prefix}]: beacon write error: {e}");
-                        }
-                        match builder.build() {
-                            Ok(_) => {
-                                posting_cache.invalidate_all();
-                                neg_cache.clear();
-                                tracing::debug!(
-                                    "ixd [{log_prefix}]: compaction complete (idle) - caches invalidated"
-                                );
-                            }
-                            Err(e) => {
-                                eprintln!("ixd [{log_prefix}]: compaction failed: {e}");
-                            }
-                        }
+                let delta_file = ix_dir.join("shard.ix.delta");
+                if delta_file.exists() && delta_file.metadata().map_or(0, |m| m.len()) > 0 {
+                    let pressure = guard.pressure();
+                    if pressure < 60 {
+                        compact(
+                            builder,
+                            posting_cache,
+                            neg_cache,
+                            &delta_file,
+                            beacon,
+                            ix_dir,
+                            daemon_sock,
+                            log_prefix,
+                        );
                         while rx.try_recv().is_ok() {}
-                        idle.record_change();
-                        let idle_status = DaemonStatus::Idle;
-                        beacon.status = idle_status.to_string();
-                        if let Err(e) = beacon.write_to(ix_dir) {
-                            eprintln!("ixd [{log_prefix}]: beacon write error: {e}");
-                        }
-                        if let Some(sock) = daemon_sock {
-                            sock.set_status(&idle_status, builder.files_len());
-                        }
                     }
                 }
             }
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+        }
+
+        if shutdown_rx.try_recv().is_ok() || SHUTDOWN.load(Ordering::SeqCst) {
+            running.store(false, Ordering::SeqCst);
+            if let Some(sock) = daemon_sock {
+                sock.shutdown_notify("signal", 1000);
+            }
+            break;
         }
     }
 }
@@ -484,7 +456,7 @@ fn handle_changes(
     let (entropy, safety_decision) = evaluate_safety(ctx.guard, pressure, ctx.log_prefix);
 
     match &safety_decision {
-        SafetyDecision::Halt(err, cooldown) => {
+        SafetyDecision::Halt(err, _cooldown) => {
             let prefix = ctx.log_prefix;
             eprintln!(
                 "ixd [{prefix}]: critical safety decision (Halt: {err:?}) — pausing operations",
@@ -501,7 +473,9 @@ fn handle_changes(
                 ctx,
                 &beacon_status_msg(&halt_status, ctx.builder.files_len()),
             );
-            std::thread::sleep(Duration::from_millis(u64::from(*cooldown)));
+            if let Err(e) = ctx.guard.check_blocking() {
+                eprintln!("ixd [{prefix}]: resource check failed: {e:?}");
+            }
             return;
         }
         SafetyDecision::Exit(err) => {
@@ -525,7 +499,7 @@ fn handle_changes(
         SafetyDecision::Escalate {
             entropy: esc_entropy,
             reason,
-            cooldown_ms,
+            ..
         } => {
             let prefix = ctx.log_prefix;
             eprintln!(
@@ -545,7 +519,9 @@ fn handle_changes(
                 ctx,
                 &beacon_status_msg(&escalated_status, ctx.builder.files_len()),
             );
-            std::thread::sleep(Duration::from_millis(u64::from(*cooldown_ms)));
+            if let Err(e) = ctx.guard.check_blocking() {
+                eprintln!("ixd [{prefix}]: resource check failed: {e:?}");
+            }
             return;
         }
         SafetyDecision::Warn(reason) => {
@@ -569,7 +545,9 @@ fn handle_changes(
                     ctx,
                     &beacon_status_msg(&warned_status, ctx.builder.files_len()),
                 );
-                std::thread::sleep(Duration::from_millis(WARN_COOLDOWN_MS));
+                if let Err(e) = ctx.guard.check_blocking() {
+                    eprintln!("ixd [{prefix}]: resource check failed: {e:?}");
+                }
             }
         }
         SafetyDecision::Proceed => {}
@@ -695,6 +673,39 @@ fn handle_changes(
     ctx.idle.record_change();
 }
 
+fn compact(
+    builder: &mut Builder,
+    posting_cache: &Arc<PostingCache>,
+    neg_cache: &Arc<NegCache>,
+    delta_file: &Path,
+    beacon: &mut Beacon,
+    ix_dir: &Path,
+    daemon_sock: Option<&DaemonServer>,
+    log_prefix: &str,
+) {
+    if !delta_file.exists() || delta_file.metadata().map_or(0, |m| m.len()) == 0 {
+        return;
+    }
+    beacon.status = "compacting".to_string();
+    let _ = beacon.write_to(ix_dir);
+    match builder.build() {
+        Ok(_) => {
+            posting_cache.invalidate_all();
+            neg_cache.clear();
+            tracing::debug!("ixd [{log_prefix}]: compaction complete - caches invalidated");
+        }
+        Err(e) => {
+            eprintln!("ixd [{log_prefix}]: compaction failed: {e}");
+        }
+    }
+    let idle_status = DaemonStatus::Idle;
+    beacon.status = idle_status.to_string();
+    let _ = beacon.write_to(ix_dir);
+    if let Some(sock) = daemon_sock {
+        sock.set_status(&idle_status, builder.files_len());
+    }
+}
+
 fn evaluate_safety(guard: &ResourceGuard, pressure: u8, log_prefix: &str) -> (u16, SafetyDecision) {
     match guard.check_blocking() {
         Ok(synapse) => {
@@ -765,6 +776,9 @@ fn root_name(root: &Path) -> String {
         .and_then(|n| n.to_str())
         .map_or_else(|| root.display().to_string(), String::from)
 }
+
+static SHUTDOWN_HANDLER: std::sync::Mutex<Option<crossbeam_channel::Sender<()>>> =
+    std::sync::Mutex::new(None);
 
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
