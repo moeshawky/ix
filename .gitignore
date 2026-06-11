@@ -73,6 +73,7 @@ COPILOT_INSTRUCTIONS.md
 # Agent session artifacts
 .aiconfig
 .agent/
+.anthropic/
 .session/
 *.session
 conversation.md

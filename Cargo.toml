@@ -32,7 +32,7 @@ install-path = "CARGO_HOME"
 
 [[bin]]
 name = "ix"
-path = "src/bin/ix.rs"
+path = "src/bin/ix/main.rs"
 
 [[bin]]
 name = "ixd"

@@ -145,6 +145,18 @@ pub enum VerificationResult {
 impl VerificationResult {
     /// Project into `Option<Vec<Match>>` for use with `Iterator::filter_map`.
     ///
+    /// **Scar tissue:** Both `Cached` and `Failed` collapse to `None`.
+    /// This overloads the `Option<Vec<Match>>` semantic space — callers
+    /// using `filter_map` cannot distinguish "file known to be irrelevant"
+    /// from "file could not be read (I/O error)" using the return value
+    /// alone. The `files_failed_verify` counter in [`QueryStats`] carries
+    /// the I/O-error signal. Consumers MUST inspect
+    /// [`QueryStats::files_failed_verify`] to detect partial results.
+    ///
+    /// Restoring type-level distinction would require restructuring the
+    /// parallel `filter_map` verification chain — a non-trivial refactor
+    /// of the hot verification path.
+    ///
     /// `Matches` becomes `Some`, `Cached` becomes `None` (file skipped
     /// cheaply), and `Failed` logs a warning, increments the
     /// `files_failed_verify` counter in `accum`, and returns `None`.

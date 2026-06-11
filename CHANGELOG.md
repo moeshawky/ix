@@ -2,13 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
-
 ## [0.12.5] - 2026-06-11
 
 ### Changed
 - Daemon event loop uses 30×1s timeout sub-iterations instead of single 30s timeout,
   so shutdown signals are detected within ~1s (was up to 30s)
+- `daemon_sock.rs` (1733 lines) decomposed into 6 domain modules under
+  `src/lib/daemon_sock/`: `types`, `resolve`, `server`, `client`, `search`
+- `ix.rs` binary (1541 lines) decomposed into 5 modules under `src/bin/ix/`:
+  `args`, `output`, `commands`, `service`
+  (entry point renamed `src/bin/ix.rs` → `src/bin/ix/main.rs`)
 
 ### Fixed
 - Events arriving during `builder.build()` compaction are now deferred and replayed
@@ -19,6 +22,14 @@ All notable changes to this project will be documented in this file.
   actual long function `run_main_loop()`
 - Stale module declaration order comment in `lib.rs` updated to dual-heading format
   (alphabetical declaration order + leaf-first dependency order)
+- Daemon wire protocol now surfaces partial-result warnings: `SearchResults.error`
+  is set to a diagnostic message when `files_failed_verify > 0` during search
+  execution — clients can detect incomplete results without inspecting `QueryStats`
+- CLI `print_stats()` warning upgraded from bare counter to `[WARNING]` message with
+  actionable text when files fail verification during search
+- `VerificationResult::into_option()` documented as declared scar tissue:
+  `Failed → None` semantic overload is intentional (rayon `filter_map` constraint);
+  consumers must inspect `QueryStats::files_failed_verify` for partial-result detection
 
 ## [0.12.4] - 2026-06-10
 
