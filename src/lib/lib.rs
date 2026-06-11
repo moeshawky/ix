@@ -32,7 +32,15 @@
 //! let (matches, stats) = executor.execute(&plan, &QueryOptions::default())?;
 //! ```
 //!
-//! # Module Build Order
+//! # Module Declaration Order (alphabetical, as declared in source)
+//!
+//! `api` · `archive` · `bloom` · `builder` · `cache_policy` · `config` ·
+//! `daemon` · `daemon_sock` · `decompress` · `error` · `executor` ·
+//! `format` · `idle` · `neg_cache` · `planner` · `posting` ·
+//! `posting_cache` · `reader` · `regex_pool` · `scanner` · `streaming` ·
+//! `string_pool` · `trigram` · `varint` · `watcher`
+//!
+//! # Dependency order (build pipeline: leaf-first)
 //!
 //! `format` → `varint` → `trigram` → `bloom` → `posting` →
 //! `string_pool` → `builder` → `reader` → `planner` → `executor` → `scanner`

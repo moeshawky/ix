@@ -69,8 +69,7 @@ struct DaemonCtx<'a> {
 ///
 /// Returns an error if the root cannot be canonicalised, the index cannot be
 /// built, the file watcher fails, or a concurrent daemon instance is detected.
-// Daemon main loop requires all states in one function for shared borrows
-#[allow(clippy::too_many_lines)]
+/// Delegates to [`run_many`] with a single-entry slice.
 pub fn run(root: &Path) -> crate::error::Result<()> {
     run_many(&[root.to_path_buf()])
 }
@@ -370,8 +369,33 @@ fn wait_for_memory(guard: &ResourceGuard, log_prefix: &str) {
     }
 }
 
-// All parameters are independently sourced config values
+/// Main event loop: receives file-change batches, dispatches to
+/// [`handle_changes`], triggers idle compaction, and monitors shutdown.
+///
+/// Uses a 30 × 1 s timeout window instead of a single 30 s timeout so that
+/// the `SIGTERM`/`SIGINT` signal (written to [`SHUTDOWN`] by the signal
+/// handler) is detected within ~1 s rather than up to 30 s.  After 30
+/// consecutive idle seconds the loop checks for a non-empty delta file and
+/// calls [`compact`] if pressure permits.
+///
+/// # Parameters
+///
+/// * `builder` — index builder; mutated by change handling and compaction.
+/// * `rx` — file-change channel from the [`Watcher`](crate::watcher::Watcher).
+/// * `ix_dir` — `.ix/` directory holding the beacon and delta.
+/// * `beacon` — daemon lifecycle beacon, updated on status transitions.
+/// * `idle` — idle tracker marking dormant/active phases.
+/// * `guard` — resource guard for memory-pressure decisions.
+/// * `cache_policy` — adaptive cache policy driven by pressure.
+/// * `posting_cache` / `neg_cache` — cache layers managed by the policy.
+/// * `running` — set to `false` on graceful shutdown.
+/// * `daemon_sock` — optional IPC socket for broadcasting status.
+/// * `log_prefix` — human-readable root name for log messages.
+// All parameters are independently sourced config values.
+// The main loop is necessarily long \u{2014} it multiplexes event receipt,
+// change handling, compaction, and shutdown in a single borrowed scope.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
 fn run_main_loop(
     builder: &mut Builder,
     rx: &crossbeam_channel::Receiver<Vec<PathBuf>>,
@@ -393,51 +417,77 @@ fn run_main_loop(
         .replace(shutdown_tx);
 
     loop {
-        match rx.recv_timeout(Duration::from_secs(30)) {
-            Ok(changed_files) => {
-                let mut ctx = DaemonCtx {
-                    builder,
-                    ix_dir,
-                    beacon,
-                    idle,
-                    guard,
-                    cache_policy,
-                    posting_cache,
-                    neg_cache,
-                    daemon_sock,
-                    running,
-                    log_prefix,
-                };
-                handle_changes(&mut ctx, &changed_files, rx);
+        let mut had_events = false;
+        // 30 × 1s timeouts = ~30s idle detection; shutdown checked each second.
+        for _ in 0..30 {
+            match rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(changed_files) => {
+                    had_events = true;
+                    let mut ctx = DaemonCtx {
+                        builder,
+                        ix_dir,
+                        beacon,
+                        idle,
+                        guard,
+                        cache_policy,
+                        posting_cache,
+                        neg_cache,
+                        daemon_sock,
+                        running,
+                        log_prefix,
+                    };
+                    handle_changes(&mut ctx, &changed_files, rx);
+                    break;
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                    if shutdown_rx.try_recv().is_ok() || SHUTDOWN.load(Ordering::SeqCst) {
+                        running.store(false, Ordering::SeqCst);
+                        if let Some(sock) = daemon_sock {
+                            sock.shutdown_notify("signal", 1000);
+                        }
+                        return;
+                    }
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                    return;
+                }
             }
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                let delta_file = ix_dir.join("shard.ix.delta");
-                if delta_file.exists() && delta_file.metadata().map_or(0, |m| m.len()) > 0 {
-                    let pressure = guard.pressure();
-                    if pressure < 60 {
-                        compact(
-                            builder,
-                            posting_cache,
-                            neg_cache,
-                            &delta_file,
-                            beacon,
-                            ix_dir,
-                            daemon_sock,
-                            log_prefix,
-                        );
-                        while rx.try_recv().is_ok() {}
+        }
+        // No events in 30 seconds → idle compaction window.
+        if !had_events {
+            let delta_file = ix_dir.join("shard.ix.delta");
+            if delta_file.exists() && delta_file.metadata().map_or(0, |m| m.len()) > 0 {
+                let pressure = guard.pressure();
+                if pressure < 60 {
+                    compact(
+                        builder,
+                        posting_cache,
+                        neg_cache,
+                        &delta_file,
+                        beacon,
+                        ix_dir,
+                        daemon_sock,
+                        log_prefix,
+                        guard,
+                    );
+                    let mut deferred_batches = Vec::new();
+                    while let Ok(batch) = rx.try_recv() {
+                        deferred_batches.push(batch);
+                    }
+                    for batch in deferred_batches {
+                        let _ = builder.update(&batch);
                     }
                 }
             }
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
-        }
-
-        if shutdown_rx.try_recv().is_ok() || SHUTDOWN.load(Ordering::SeqCst) {
-            running.store(false, Ordering::SeqCst);
-            if let Some(sock) = daemon_sock {
-                sock.shutdown_notify("signal", 1000);
+            // Shutdown check after compaction (also catches shutdown during
+            // extended idle with empty delta).
+            if shutdown_rx.try_recv().is_ok() || SHUTDOWN.load(Ordering::SeqCst) {
+                running.store(false, Ordering::SeqCst);
+                if let Some(sock) = daemon_sock {
+                    sock.shutdown_notify("signal", 1000);
+                }
+                return;
             }
-            break;
         }
     }
 }
@@ -668,11 +718,35 @@ fn handle_changes(
                 eprintln!("ixd [{}]: compaction failed: {}", ctx.log_prefix, e);
             }
         }
-        while rx.try_recv().is_ok() {}
+        let mut deferred_batches = Vec::new();
+        while let Ok(batch) = rx.try_recv() {
+            deferred_batches.push(batch);
+        }
+        for batch in deferred_batches {
+            let _ = ctx.builder.update(&batch);
+        }
     }
     ctx.idle.record_change();
 }
 
+/// Rebuild the full index from the current state plus the accumulated delta.
+///
+/// Called during idle periods when the delta file exists and has non-zero size.
+/// Performs a second pressure check before calling [`Builder::build`] to close
+/// the TOCTOU window between the caller's pressure read and the expensive build.
+/// If pressure has risen to ≥60%, the build is skipped and the delta file is
+/// preserved for the next idle cycle.
+///
+/// # Parameters
+///
+/// * `builder` — index builder holding accumulated incremental state.
+/// * `posting_cache` / `neg_cache` — cache layers invalidated on successful build.
+/// * `delta_file` — path to the delta accumulation file (`shard.ix.delta`).
+/// * `beacon` / `ix_dir` — daemon beacon written before and after the build.
+/// * `daemon_sock` — optional IPC socket; status broadcast on idle transition.
+/// * `log_prefix` — human-readable root name for log messages.
+/// * `guard` — resource guard for the second pressure check.
+#[allow(clippy::too_many_arguments)]
 fn compact(
     builder: &mut Builder,
     posting_cache: &Arc<PostingCache>,
@@ -682,8 +756,18 @@ fn compact(
     ix_dir: &Path,
     daemon_sock: Option<&DaemonServer>,
     log_prefix: &str,
+    guard: &ResourceGuard,
 ) {
     if !delta_file.exists() || delta_file.metadata().map_or(0, |m| m.len()) == 0 {
+        return;
+    }
+    // Re-check pressure immediately before the expensive build — memory
+    // conditions can change between the caller's check and this point.
+    let pressure = guard.pressure();
+    if pressure >= 60 {
+        tracing::debug!(
+            "ixd [{log_prefix}]: skipping compaction \u{2014} pressure {pressure}% >= 60%"
+        );
         return;
     }
     beacon.status = "compacting".to_string();

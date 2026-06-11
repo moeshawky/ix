@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-06-11
+
+### Changed
+- Daemon event loop uses 30×1s timeout sub-iterations instead of single 30s timeout,
+  so shutdown signals are detected within ~1s (was up to 30s)
+
+### Fixed
+- Events arriving during `builder.build()` compaction are now deferred and replayed
+  as delta updates instead of being silently discarded by the event-drain loop
+- TOCTOU window between pressure check and `builder.build()` closed: `compact()`
+  now re-checks `guard.pressure()` immediately before the build and skips if ≥60%
+- `#[allow(clippy::too_many_lines)]` moved from delegation function `run()` to the
+  actual long function `run_main_loop()`
+- Stale module declaration order comment in `lib.rs` updated to dual-heading format
+  (alphabetical declaration order + leaf-first dependency order)
+
 ## [0.12.4] - 2026-06-10
 
 ### Added

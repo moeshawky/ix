@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "moeix"
-version = "0.12.4"
+version = "0.12.5"
 description = "Sub-millisecond code search via sparse trigram indexing."
 readme = "../README.md"
 license = "MIT"
