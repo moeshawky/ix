@@ -73,7 +73,10 @@ jobs:
   # ═══════════════════════════════════════════════════════════════════════════
   build-macos:
     name: macos (${{ matrix.target }})
-    if: env.PROJECT == 'ix'
+    # NOTE: Always runs for ix. For sniper/llmosafe, either remove this
+    # entire job or gate with github.repository check.
+    # env.PROJECT is NOT available in job-level if: conditions
+    # (GitHub Actions limitation).
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -105,7 +108,7 @@ jobs:
   # ═══════════════════════════════════════════════════════════════════════════
   build-windows:
     name: windows (${{ matrix.target }})
-    if: env.PROJECT == 'ix'
+    # NOTE: Always runs for ix. See build-macos comment above.
     runs-on: windows-latest
     strategy:
       fail-fast: false
