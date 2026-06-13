@@ -171,7 +171,7 @@ pub(crate) enum Command {
     #[command(name = "stats")]
     Stats {
         /// Path to the directory (walks upward to find .ix/, defaults to CWD).
-        #[arg(short = 'p', long = "path", value_name = "PATH", default_value = ".")]
+        #[arg(value_name = "PATH", default_value = ".")]
         path: PathBuf,
 
         /// Output in JSON format for machine readability.
