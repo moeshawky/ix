@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.12.6] - 2026-06-14
+
+### Changed
+- Upgraded llmosafe from 0.7.4 (yanked) to 0.7.5: 6 getter functions now use
+  out-parameter pattern (`int32_t` return + `uint16_t*` out) instead of direct
+  return values. Adds `LLMOSafeError` exception for Python bindings.
+
 ## [0.12.5] - 2026-06-11
 
 ### Changed
