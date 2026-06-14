@@ -27,7 +27,8 @@ fn main() {
             .num_threads(cli.threads)
             .build_global()
         {
-            eprintln!("ix: warning: failed to initialize global thread pool: {e}");
+            eprintln!("ix: error: failed to initialize global thread pool: {e}");
+            std::process::exit(1);
         }
     }
 
