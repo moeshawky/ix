@@ -54,7 +54,7 @@ archive = ["zip", "tar"]
 full = ["decompress", "notify", "archive"]
 
 [dependencies]
-llmosafe = "0.7.4"
+llmosafe = "0.7.5"
 memmap2 = "0.9"
 crc32c = "0.6"
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
@@ -91,7 +91,7 @@ tempfile = "3"
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
 proptest = "1"
-llmosafe = { version = "0.7.4", features = ["testing"] }
+llmosafe = { version = "0.7.5", features = ["testing"] }
 
 [[bench]]
 name = "search"

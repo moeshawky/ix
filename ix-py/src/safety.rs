@@ -6,6 +6,8 @@
 
 use pyo3::prelude::*;
 
+use crate::error::LLMOSafeError;
+
 /// A cognitive safety pipeline wrapping llmosafe's C-ABI arena.
 ///
 /// Each instance acquires a slot from the 16-slot static arena at
@@ -26,6 +28,22 @@ use pyo3::prelude::*;
 #[pyclass(name = "Pipeline")]
 pub struct PyPipeline {
     handle: usize,
+}
+
+/// Helper: call a getter that returns via out-parameter, translate rc to PyResult.
+///
+/// Return codes from llmosafe v0.7.5:
+///   0 = success, 1 = invalid handle, 2 = null pointer, 3 = no result
+fn getter_error(name: &str, instance_id: u32, rc: i32) -> PyErr {
+    let msg = match rc {
+        1 => format!("{name} failed for instance {instance_id}: invalid handle"),
+        2 => format!("{name} failed for instance {instance_id}: internal null pointer"),
+        3 => format!(
+            "{name} failed for instance {instance_id}: no result (sift_and_process not called)"
+        ),
+        _ => format!("{name} failed for instance {instance_id}: unknown code {rc}"),
+    };
+    LLMOSafeError::new_err(msg)
 }
 
 #[pymethods]
@@ -61,24 +79,56 @@ impl PyPipeline {
             llmosafe::c_abi::llmosafe_sift_and_process(self.handle, text.as_ptr(), text.len());
         let id = u32::try_from(self.handle)
             .map_err(|_| pyo3::exceptions::PyOverflowError::new_err("pipeline handle overflow"))?;
+
+        // Fetch all 6 getter values using the new out-parameter pattern (v0.7.5).
+        let mut entropy: u16 = 0;
+        let rc = llmosafe::c_abi::llmosafe_get_entropy(id, &mut entropy);
+        if rc != 0 {
+            return Err(getter_error("llmosafe_get_entropy", id, rc));
+        }
+
+        let mut surprise: u16 = 0;
+        let rc = llmosafe::c_abi::llmosafe_get_surprise(id, &mut surprise);
+        if rc != 0 {
+            return Err(getter_error("llmosafe_get_surprise", id, rc));
+        }
+
+        let mut detection_flags: u8 = 0;
+        let rc = llmosafe::c_abi::llmosafe_get_detection_flags(id, &mut detection_flags);
+        if rc != 0 {
+            return Err(getter_error("llmosafe_get_detection_flags", id, rc));
+        }
+
+        let mut oov_ratio: u8 = 0;
+        let rc = llmosafe::c_abi::llmosafe_get_oov_ratio(id, &mut oov_ratio);
+        if rc != 0 {
+            return Err(getter_error("llmosafe_get_oov_ratio", id, rc));
+        }
+
+        let mut stages_executed: u8 = 0;
+        let rc = llmosafe::c_abi::llmosafe_get_stages_executed(id, &mut stages_executed);
+        if rc != 0 {
+            return Err(getter_error("llmosafe_get_stages_executed", id, rc));
+        }
+
+        let mut step_count: u32 = 0;
+        let rc = llmosafe::c_abi::llmosafe_get_step_count(id, &mut step_count);
+        if rc != 0 {
+            return Err(getter_error("llmosafe_get_step_count", id, rc));
+        }
+
         // SAFETY: The GIL is guaranteed held because this method is called
         // from a #[pymethods] context, where pyo3 ensures the GIL is acquired
         // before invoking any bound method.
         let py = unsafe { Python::assume_gil_acquired() };
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("decision", code)?;
-        dict.set_item("entropy", llmosafe::c_abi::llmosafe_get_entropy(id))?;
-        dict.set_item("surprise", llmosafe::c_abi::llmosafe_get_surprise(id))?;
-        dict.set_item(
-            "detection_flags",
-            llmosafe::c_abi::llmosafe_get_detection_flags(id),
-        )?;
-        dict.set_item("oov_ratio", llmosafe::c_abi::llmosafe_get_oov_ratio(id))?;
-        dict.set_item(
-            "stages_executed",
-            llmosafe::c_abi::llmosafe_get_stages_executed(id),
-        )?;
-        dict.set_item("step_count", llmosafe::c_abi::llmosafe_get_step_count(id))?;
+        dict.set_item("entropy", entropy)?;
+        dict.set_item("surprise", surprise)?;
+        dict.set_item("detection_flags", detection_flags)?;
+        dict.set_item("oov_ratio", oov_ratio)?;
+        dict.set_item("stages_executed", stages_executed)?;
+        dict.set_item("step_count", step_count)?;
         Ok(dict.into())
     }
 

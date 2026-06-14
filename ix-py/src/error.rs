@@ -76,6 +76,13 @@ create_exception!(
     "Raised for archive errors (archive feature only)."
 );
 
+create_exception!(
+    "ix._ix",
+    LLMOSafeError,
+    IxError,
+    "Raised when an llmosafe C-ABI getter call fails."
+);
+
 /// Register all exception classes on the given Python module.
 ///
 /// # Arguments
@@ -92,6 +99,7 @@ pub fn register_exceptions(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("IxConfigError", m.py().get_type::<IxConfigError>())?;
     m.add("IxWatcherError", m.py().get_type::<IxWatcherError>())?;
     m.add("IxArchiveError", m.py().get_type::<IxArchiveError>())?;
+    m.add("LLMOSafeError", m.py().get_type::<LLMOSafeError>())?;
     Ok(())
 }
 
