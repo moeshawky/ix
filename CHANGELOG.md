@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.12.7] - 2026-06-15
 
 ### Added
 - 18 new tests across format, varint, posting, scanner, and reader:
