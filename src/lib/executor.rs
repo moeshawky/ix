@@ -491,6 +491,8 @@ impl<'a> Executor<'a> {
         }
 
         // ── Step 3: Filter remaining using Bloom filters ──
+        // KNOWN LIMITATION: bloom_may_contain only consults the main shard's
+        // bloom filters. Delta-only files pass this check unconditionally.
         for &(tri, _) in &infos[1..] {
             if candidates.is_empty() {
                 break;
@@ -604,6 +606,8 @@ impl<'a> Executor<'a> {
                 set_candidates.retain(|fid| next_set.contains(fid));
             }
 
+            // KNOWN LIMITATION: bloom_may_contain only consults the main
+            // shard's bloom filters; delta-only files pass unconditionally.
             for &(tri, _) in &infos[1..] {
                 set_candidates.retain(|&fid| self.index.bloom_may_contain(fid, tri));
             }

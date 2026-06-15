@@ -165,9 +165,14 @@ impl PostingCache {
                 .memory_used
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            map.remove(&trigram);
+            // Recompute removed size under the write lock to close the TOCTOU
+            // window: another thread may have removed this trigram between the
+            // read-lock check and write-lock acquisition.
+            let actual_removed_size = map
+                .remove(&trigram)
+                .map_or(0, |removed| estimate_posting_size(&removed));
             order.retain(|t| *t != trigram);
-            *mem = mem.saturating_sub(existing_size);
+            *mem = mem.saturating_sub(actual_removed_size);
             map.insert(trigram, list);
             order.push(trigram);
             *mem += entry_size;

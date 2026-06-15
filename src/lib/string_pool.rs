@@ -101,7 +101,8 @@ impl StringPool {
 
         let paths: Vec<String> = self.path_info.keys().cloned().collect();
         for path_str in paths {
-            let offset = u32::try_from(w.stream_position()? - start_pos).unwrap_or(0);
+            let offset = u32::try_from(w.stream_position()? - start_pos)
+                .map_err(|_| std::io::Error::other("string pool offset overflow"))?;
 
             let mut best_prefix_id = 0u16;
             let mut best_prefix_len = 0;

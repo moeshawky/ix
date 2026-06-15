@@ -302,10 +302,9 @@ impl Reader {
             let Some(key_bytes) = self.mmap.get(entry_off..entry_off + 4) else {
                 return Ok(None);
             };
-            let Some(key_val) = key_bytes.try_into().ok() else {
-                tracing::warn!("corrupt trigram table entry: invalid key bytes");
-                return Ok(None);
-            };
+            let key_val = key_bytes
+                .try_into()
+                .map_err(|_| Error::Config("corrupt trigram table entry".into()))?;
             let key = u32::from_le_bytes(key_val);
 
             match key.cmp(&trigram) {
@@ -385,10 +384,8 @@ impl Reader {
 
         let mut pos = 0;
         let num_entries = match crate::varint::decode(&decompressed, &mut pos) {
-            Ok(v) => usize::try_from(v).unwrap_or_else(|_| {
-                tracing::warn!("corrupt posting list entry: num_entries overflow");
-                0
-            }),
+            Ok(v) => usize::try_from(v)
+                .map_err(|_| Error::CdxBlockCorrupted("num_entries overflow".into()))?,
             Err(e) => {
                 return Err(Error::CdxBlockCorrupted(format!(
                     "num_entries varint decode failed: {e}"
@@ -399,10 +396,8 @@ impl Reader {
         let mut last_key = 0u32;
         for _ in 0..num_entries {
             let key_delta = match crate::varint::decode(&decompressed, &mut pos) {
-                Ok(v) => u32::try_from(v).unwrap_or_else(|_| {
-                    tracing::warn!("corrupt posting list entry: key_delta overflow");
-                    0
-                }),
+                Ok(v) => u32::try_from(v)
+                    .map_err(|_| Error::CdxBlockCorrupted("key_delta overflow".into()))?,
                 Err(e) => {
                     return Err(Error::CdxBlockCorrupted(format!(
                         "key_delta varint decode failed: {e}"
@@ -421,10 +416,8 @@ impl Reader {
                 }
             };
             let posting_length = match crate::varint::decode(&decompressed, &mut pos) {
-                Ok(v) => u32::try_from(v).unwrap_or_else(|_| {
-                    tracing::warn!("corrupt posting list entry: posting_length overflow");
-                    0
-                }),
+                Ok(v) => u32::try_from(v)
+                    .map_err(|_| Error::CdxBlockCorrupted("posting_length overflow".into()))?,
                 Err(e) => {
                     return Err(Error::CdxBlockCorrupted(format!(
                         "posting_length varint decode failed: {e}"
@@ -432,10 +425,8 @@ impl Reader {
                 }
             };
             let doc_frequency = match crate::varint::decode(&decompressed, &mut pos) {
-                Ok(v) => u32::try_from(v).unwrap_or_else(|_| {
-                    tracing::warn!("corrupt posting list entry: doc_frequency overflow");
-                    0
-                }),
+                Ok(v) => u32::try_from(v)
+                    .map_err(|_| Error::CdxBlockCorrupted("doc_frequency overflow".into()))?,
                 Err(e) => {
                     return Err(Error::CdxBlockCorrupted(format!(
                         "doc_frequency varint decode failed: {e}"
@@ -668,8 +659,9 @@ impl DeltaReader {
 
         let mut reader = Self::default();
         let mut magic = [0u8; 4];
-        if file.read_exact(&mut magic).is_err() || magic != DELTA_MAGIC {
-            return Ok(reader);
+        file.read_exact(&mut magic)?;
+        if magic != DELTA_MAGIC {
+            return Err(Error::Config("delta file magic mismatch".into()));
         }
 
         let mut type_buf = [0u8; 1];
@@ -746,5 +738,68 @@ impl DeltaReader {
             }
         }
         Ok(reader)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    // ── Rule 1: Error Path Tests ──────────────────────────────────────
+
+    /// Reader::open on an empty file must return Err (IndexTooSmall or Io).
+    #[test]
+    fn test_reader_empty_file_error() {
+        let mut tmp = tempfile::tempfile().expect("create tempfile");
+        tmp.write_all(b"").expect("write");
+        // Get the file path (on Unix we can read from /proc/self/fd)
+        // Simpler: create a tempfile via tempfile crate
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let path = dir.path().join("empty.ix");
+        std::fs::write(&path, b"").expect("write empty");
+        let result = Reader::open(&path);
+        assert!(result.is_err(), "empty file should fail Reader::open");
+        // Should be IndexTooSmall, but Io is also acceptable
+        assert!(matches!(
+            &result,
+            Err(Error::IndexTooSmall) | Err(Error::Io(_))
+        ));
+    }
+
+    /// DeltaReader::open on a file with wrong magic must return Err.
+    #[test]
+    fn test_delta_reader_corrupt_magic_error() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let path = dir.path().join("delta.ixd");
+        // Write a file that exists but has wrong magic (not "IXDL")
+        std::fs::write(&path, b"XXXXhello world extra bytes").expect("write corrupt delta");
+        let result = DeltaReader::open(&path);
+        assert!(result.is_err(), "wrong magic should fail DeltaReader::open");
+        match &result {
+            Err(Error::Config(msg)) => {
+                assert!(
+                    msg.contains("magic"),
+                    "expected magic mismatch message, got: {msg}"
+                );
+            }
+            _ => panic!("expected Config error about magic mismatch"),
+        }
+    }
+
+    /// DeltaReader::open returns Ok(default) when the file does not exist (not an error).
+    #[test]
+    fn test_delta_reader_missing_file_returns_default() {
+        let path = std::path::PathBuf::from("/tmp/ix_test_nonexistent_delta_xyzzy.ixd");
+        let result = DeltaReader::open(&path);
+        assert!(
+            result.is_ok(),
+            "missing file should return default, not error"
+        );
+        let reader = result.unwrap();
+        assert!(reader.tombstones.is_empty());
+        assert!(reader.postings.is_empty());
+        assert_eq!(reader.total_file_entries, 0);
     }
 }

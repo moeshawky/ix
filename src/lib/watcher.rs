@@ -4,7 +4,7 @@ use crate::error::Result;
 use crossbeam_channel::Receiver;
 use llmosafe::ResourceGuard;
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher as _};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
@@ -183,7 +183,7 @@ impl Watcher {
         let ix_dir = self.root.join(".ix");
         let debounce_dur = Duration::from_millis(self.debounce_ms);
         let handle = thread::spawn(move || {
-            let mut changed_paths = HashSet::new();
+            let mut changed_paths: HashMap<PathBuf, notify::EventKind> = HashMap::new();
             loop {
                 // Wait for the first event
                 match event_rx.recv() {
@@ -205,7 +205,8 @@ impl Watcher {
                                 Err(mpsc::RecvTimeoutError::Timeout) => {
                                     // Debounce period over
                                     if !changed_paths.is_empty() {
-                                        let paths: Vec<PathBuf> = changed_paths.drain().collect();
+                                        let paths: Vec<PathBuf> =
+                                            changed_paths.drain().map(|(p, _)| p).collect();
                                         if tx.send(paths).is_err() {
                                             return; // Receiver dropped
                                         }
@@ -241,12 +242,13 @@ impl Watcher {
     }
 
     fn collect_paths(
-        set: &mut HashSet<PathBuf>,
+        map: &mut HashMap<PathBuf, notify::EventKind>,
         event: Event,
         watch_roots: &[PathBuf],
         ix_dir: &Path,
     ) {
-        if event.kind.is_modify() || event.kind.is_create() || event.kind.is_remove() {
+        let kind = event.kind;
+        if kind.is_modify() || kind.is_create() || kind.is_remove() {
             for path in event.paths {
                 if path.starts_with(ix_dir) {
                     continue;
@@ -258,7 +260,11 @@ impl Watcher {
                 {
                     continue;
                 }
-                set.insert(path);
+                let prev = map.get(&path);
+                let should_insert = !matches!(prev, Some(notify::EventKind::Remove(_)));
+                if should_insert {
+                    map.insert(path, kind);
+                }
             }
         }
     }

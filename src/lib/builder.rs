@@ -1222,9 +1222,11 @@ impl Builder {
                 tracing::warn!("failed to clean old backup file: {e}");
             }
             // Backup current index
-            if let Err(e) = fs::rename(&final_path, &backup_path) {
-                tracing::warn!("Failed to backup existing index: {}", e);
-            }
+            fs::rename(&final_path, &backup_path).map_err(|e| {
+                Error::Io(std::io::Error::other(format!(
+                    "failed to backup existing index: {e}"
+                )))
+            })?;
         }
         fs::rename(&tmp_path, &final_path)?;
         self.committed = true;

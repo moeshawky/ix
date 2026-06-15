@@ -48,6 +48,7 @@ mod types;
 // Complete re-export of all 15 public items.
 pub use client::{DaemonClient, SearchResultsIter};
 pub use resolve::socket_path;
+pub(crate) use search::SearchCaches;
 pub use search::{execute_search, execute_search_progressive};
 pub use server::DaemonServer;
 pub use types::{

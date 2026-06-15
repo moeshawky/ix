@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use super::resolve::{ensure_socket_dir, socket_path};
-use super::search::{execute_search, execute_search_progressive};
+use super::search::{SearchCaches, execute_search_inner, execute_search_progressive_inner};
 use super::types::{
     ClientMessage, DaemonSockError, DaemonStatus, FileChange, Result, SearchResults, ServerMessage,
     ShutdownNotice, now_secs,
@@ -53,6 +53,8 @@ struct Shared {
     root: PathBuf,
     /// Max concurrent progressive search queries (backpressure).
     search_slots: Arc<SearchSlots>,
+    /// Cache handles shared across all daemon-mode search queries.
+    search_caches: Option<SearchCaches>,
 }
 
 /// Simple permit counter for limiting concurrent progressive searches.
@@ -160,6 +162,7 @@ impl DaemonServer {
             files_count: 0,
             root: root.to_path_buf(),
             search_slots: Arc::new(SearchSlots::new(4)),
+            search_caches: None,
         }));
         let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
 
@@ -176,6 +179,17 @@ impl DaemonServer {
     #[must_use]
     pub fn path(&self) -> &std::path::Path {
         &self.socket_path
+    }
+
+    /// Set the cache handles used by daemon-mode search queries.
+    ///
+    /// Must be called before search queries arrive. All subsequent
+    /// progressive and non-progressive searches will use the supplied
+    /// posting cache, negative cache, and regex pool.
+    pub(crate) fn set_caches(&mut self, caches: SearchCaches) {
+        if let Ok(mut s) = self.shared.lock() {
+            s.search_caches = Some(caches);
+        }
     }
 
     /// Start the accept-and-read loop in a background thread.
@@ -373,12 +387,12 @@ fn client_read_loop(
                         }
                     }
                     ClientMessage::SearchQuery(query) => {
-                        let root = {
+                        let (root, caches) = {
                             let Ok(s) = shared.lock() else {
                                 tracing::warn!("ixd: shared lock poisoned in search query");
                                 continue;
                             };
-                            s.root.clone()
+                            (s.root.clone(), s.search_caches.clone())
                         };
 
                         if query.progressive {
@@ -430,10 +444,11 @@ fn client_read_loop(
                                     // Hold the slot guard for the duration of the
                                     // search. Released when this closure ends.
                                     let _held = slot;
-                                    if let Err(e) = execute_search_progressive(
+                                    if let Err(e) = execute_search_progressive_inner(
                                         &root_clone,
                                         &query,
                                         &result_sender,
+                                        caches.as_ref(),
                                     ) {
                                     tracing::warn!("ixd: progressive search failed: {e}");
                                     if result_sender.send(SearchResults {
@@ -483,7 +498,7 @@ fn client_read_loop(
                         }
 
                         // Non-progressive: single response path
-                        execute_search(&root, &query).map_or_else(
+                        execute_search_inner(&root, &query, caches.as_ref()).map_or_else(
                             |e| {
                                 tracing::warn!("ixd: search failed: {e}");
                                 ServerMessage::SearchResults(SearchResults {
