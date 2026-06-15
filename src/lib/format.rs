@@ -144,48 +144,45 @@ impl Header {
             return Err(crate::error::Error::BadMagic);
         }
 
-        let r = |off: usize| -> u64 {
+        let r = |off: usize| -> crate::error::Result<u64> {
             data.get(off..off + 8)
                 .and_then(|s| s.try_into().ok())
-                .map_or_else(
-                    || {
-                        tracing::warn!("corrupted header: field at offset 0x{off:02X} unreadable");
-                        0
-                    },
-                    u64::from_le_bytes,
-                )
+                .map(u64::from_le_bytes)
+                .ok_or_else(|| {
+                    crate::error::Error::Config(format!(
+                        "corrupted header: field at offset 0x{off:02X} unreadable"
+                    ))
+                })
         };
-        let r16 = |off: usize| -> u16 {
+        let r16 = |off: usize| -> crate::error::Result<u16> {
             data.get(off..off + 2)
                 .and_then(|s| s.try_into().ok())
-                .map_or_else(
-                    || {
-                        tracing::warn!("corrupted header: field at offset 0x{off:02X} unreadable");
-                        0
-                    },
-                    u16::from_le_bytes,
-                )
+                .map(u16::from_le_bytes)
+                .ok_or_else(|| {
+                    crate::error::Error::Config(format!(
+                        "corrupted header: field at offset 0x{off:02X} unreadable"
+                    ))
+                })
         };
-        let r32 = |off: usize| -> u32 {
+        let r32 = |off: usize| -> crate::error::Result<u32> {
             data.get(off..off + 4)
                 .and_then(|s| s.try_into().ok())
-                .map_or_else(
-                    || {
-                        tracing::warn!("corrupted header: field at offset 0x{off:02X} unreadable");
-                        0
-                    },
-                    u32::from_le_bytes,
-                )
+                .map(u32::from_le_bytes)
+                .ok_or_else(|| {
+                    crate::error::Error::Config(format!(
+                        "corrupted header: field at offset 0x{off:02X} unreadable"
+                    ))
+                })
         };
 
-        let major = r16(0x04);
-        let minor = r16(0x06);
+        let major = r16(0x04)?;
+        let minor = r16(0x06)?;
         if major != VERSION_MAJOR || minor < VERSION_MINOR {
             return Err(crate::error::Error::UnsupportedVersion { major, minor });
         }
 
         // Validate CRC32C of header (bytes 0x00..0xF8)
-        let expected_crc = r32(0xF8);
+        let expected_crc = r32(0xF8)?;
         let actual_crc = crc32c::crc32c(
             data.get(0..0xF8)
                 .ok_or(crate::error::Error::IndexTooSmall)?,
@@ -200,25 +197,25 @@ impl Header {
         Ok(Self {
             version_major: major,
             version_minor: minor,
-            flags: r(0x08),
-            created_at: r(0x10),
-            source_bytes_total: r(0x18),
-            file_count: r32(0x20),
-            trigram_count: r32(0x24),
-            file_table_offset: r(0x28),
-            file_table_size: r(0x30),
-            trigram_table_offset: r(0x38),
-            trigram_table_size: r(0x40),
-            posting_data_offset: r(0x48),
-            posting_data_size: r(0x50),
-            bloom_offset: r(0x58),
-            bloom_size: r(0x60),
-            string_pool_offset: r(0x68),
-            string_pool_size: r(0x70),
-            name_index_offset: r(0x78),
-            name_index_size: r(0x80),
-            cdx_block_index_offset: r(0x88),
-            cdx_block_index_size: r(0x90),
+            flags: r(0x08)?,
+            created_at: r(0x10)?,
+            source_bytes_total: r(0x18)?,
+            file_count: r32(0x20)?,
+            trigram_count: r32(0x24)?,
+            file_table_offset: r(0x28)?,
+            file_table_size: r(0x30)?,
+            trigram_table_offset: r(0x38)?,
+            trigram_table_size: r(0x40)?,
+            posting_data_offset: r(0x48)?,
+            posting_data_size: r(0x50)?,
+            bloom_offset: r(0x58)?,
+            bloom_size: r(0x60)?,
+            string_pool_offset: r(0x68)?,
+            string_pool_size: r(0x70)?,
+            name_index_offset: r(0x78)?,
+            name_index_size: r(0x80)?,
+            cdx_block_index_offset: r(0x88)?,
+            cdx_block_index_size: r(0x90)?,
         })
     }
 
@@ -681,5 +678,70 @@ mod tests {
             is_binary(&data),
             "stray continuation bytes should be flagged as binary"
         );
+    }
+
+    // ── Rule 1: Error Path Tests ──────────────────────────────────────
+
+    /// Pass <256 bytes to Header::parse → must return Err(IndexTooSmall).
+    #[test]
+    fn test_header_truncated_input_error() {
+        let data = vec![0u8; 100];
+        let result = Header::parse(&data);
+        assert!(result.is_err(), "truncated input should fail");
+        match result {
+            Err(crate::error::Error::IndexTooSmall) => {}
+            other => panic!("expected IndexTooSmall, got {other:?}"),
+        }
+    }
+
+    /// Pass exactly 256 bytes with wrong magic → must return Err(BadMagic).
+    #[test]
+    fn test_header_bad_magic_error() {
+        let mut data = vec![0u8; 256];
+        // Write "XXXX" instead of "IX01" as magic
+        data[0..4].copy_from_slice(b"XXXX");
+        let result = Header::parse(&data);
+        assert!(result.is_err(), "bad magic should fail");
+        match result {
+            Err(crate::error::Error::BadMagic) => {}
+            other => panic!("expected BadMagic, got {other:?}"),
+        }
+    }
+
+    /// Header with correct magic and version but corrupted CRC32C
+    /// must return Err(HeaderCorrupted).
+    #[test]
+    fn test_header_crc_mismatch_error() {
+        let mut data = [0u8; 256];
+        data[0..4].copy_from_slice(&MAGIC); // "IX01"
+        // Write version 1.3 (identical to actual version constants)
+        data[4..6].copy_from_slice(&1u16.to_le_bytes());
+        data[6..8].copy_from_slice(&3u16.to_le_bytes());
+        // flags = 0 (no features)
+        data[8..16].copy_from_slice(&0u64.to_le_bytes());
+        // Leave CRC field as zeros → CRC32C will mismatch
+        let result = Header::parse(&data);
+        assert!(result.is_err(), "bad CRC should fail");
+        match result {
+            Err(crate::error::Error::HeaderCorrupted { .. }) => {}
+            other => panic!("expected HeaderCorrupted, got {other:?}"),
+        }
+    }
+
+    // ── Rule 2: Corruption Proptests ──────────────────────────────────
+
+    /// Random 256-byte buffers must never parse as valid headers.
+    #[test]
+    fn prop_random_header_always_err() {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        for _ in 0..100 {
+            let data: Vec<u8> = (0..256).map(|_| rng.r#gen()).collect();
+            let result = Header::parse(&data);
+            assert!(
+                result.is_err(),
+                "random 256-byte buffer should never parse as valid header"
+            );
+        }
     }
 }

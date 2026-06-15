@@ -98,8 +98,14 @@ impl RegexPool {
                 }
             }
 
+            // Double-check: another thread may have compiled and inserted
+            // the same pattern between our read-lock miss and write-lock
+            // acquisition. Without this check, `order` accumulates duplicate
+            // entries for the same pattern, corrupting FIFO eviction.
+            if !pool.contains_key(pattern) {
+                order.push(pattern.to_owned());
+            }
             pool.insert(pattern.to_owned(), re.clone());
-            order.push(pattern.to_owned());
             stats.misses += 1;
             drop(stats);
             drop(order);

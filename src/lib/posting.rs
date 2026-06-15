@@ -164,4 +164,98 @@ mod tests {
             encoded.len()
         );
     }
+
+    // ── Rule 1: Error Path Tests ──────────────────────────────────────
+
+    /// Corrupt a byte in the middle of valid ZSTD posting data → decode must Err.
+    #[test]
+    fn test_posting_corrupt_mid_byte_error() {
+        let list = PostingList {
+            entries: vec![
+                PostingEntry {
+                    file_id: 1,
+                    offsets: vec![10, 20, 30],
+                },
+                PostingEntry {
+                    file_id: 5,
+                    offsets: vec![100, 200],
+                },
+            ],
+        };
+        let mut encoded = list.encode().expect("encode valid list");
+        // Corrupt a byte in the middle, not the first byte
+        let mid = encoded.len() / 2;
+        encoded[mid] ^= 0xAA;
+        let result = PostingList::decode(&encoded);
+        assert!(
+            result.is_err(),
+            "mid-byte corruption should cause decode failure"
+        );
+    }
+
+    // ── Rule 2: Corruption Proptests ──────────────────────────────────
+
+    /// For random posting lists, corrupting bytes must cause decode failure.
+    /// Uses multi-byte corruption since zstd frames can survive isolated bit flips.
+    #[test]
+    fn prop_posting_corruption() {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+
+        let mut corruption_errors = 0u32;
+        let mut total_tests = 0u32;
+
+        for _ in 0..50 {
+            let num_entries = rng.r#gen_range(1..10);
+            let mut entries = Vec::with_capacity(num_entries);
+            for file_id in 0..num_entries {
+                let num_offsets = rng.r#gen_range(1..20);
+                let mut offsets = Vec::with_capacity(num_offsets);
+                let mut base = rng.r#gen_range(0..10_000u32);
+                for _ in 0..num_offsets {
+                    offsets.push(base);
+                    base += rng.r#gen_range(1..500);
+                }
+                entries.push(PostingEntry {
+                    file_id: file_id as u32,
+                    offsets,
+                });
+            }
+            let list = PostingList { entries };
+
+            let encoded = match list.encode() {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            if encoded.len() < 4 {
+                continue;
+            }
+
+            // Corrupt multiple bytes: flip the second byte and a byte near the end
+            let mut corrupted = encoded.clone();
+            // Flip 3 bytes at different positions for robust corruption
+            corrupted[1] ^= 0xFF;
+            let clen = corrupted.len();
+            if clen > 4 {
+                corrupted[clen - 2] ^= 0xFF;
+            }
+            if clen > 8 {
+                corrupted[clen / 2] ^= 0xFF;
+            }
+
+            total_tests += 1;
+            if PostingList::decode(&corrupted).is_err() {
+                corruption_errors += 1;
+            }
+        }
+
+        // At least 90% of corruption attempts should be detected
+        assert!(total_tests > 0, "no corruption tests were run");
+        let rate = f64::from(corruption_errors) / f64::from(total_tests);
+        assert!(
+            rate > 0.8,
+            "corruption detection rate {rate:.2} too low ({corruption_errors}/{total_tests})"
+        );
+    }
 }

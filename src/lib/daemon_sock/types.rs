@@ -61,6 +61,11 @@ pub enum DaemonStatus {
     SafetyHalt,
     /// Unrecoverable safety exit.
     SafetyExit,
+    /// Initial index build failed; daemon will watch for changes.
+    BuildFailed {
+        /// Human-readable build error message.
+        error: String,
+    },
 }
 
 impl std::fmt::Display for DaemonStatus {
@@ -74,6 +79,7 @@ impl std::fmt::Display for DaemonStatus {
             Self::Warned { reason } => write!(f, "warned: {reason}"),
             Self::SafetyHalt => write!(f, "safety halt"),
             Self::SafetyExit => write!(f, "safety exit"),
+            Self::BuildFailed { error } => write!(f, "build failed: {error}"),
         }
     }
 }

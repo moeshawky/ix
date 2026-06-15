@@ -10,7 +10,13 @@ use std::path::{Path, PathBuf};
 /// Where `hash` is the first 16 hex characters of `XXH64(canonical_root, 0)`.
 #[must_use]
 pub fn socket_path(root: &Path) -> PathBuf {
-    let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let canonical = match root.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("cannot canonicalize root {}: {e}", root.display());
+            root.to_path_buf()
+        }
+    };
     let hash = format!(
         "{:016x}",
         xxhash_rust::xxh64::xxh64(canonical.to_string_lossy().as_bytes(), 0,)

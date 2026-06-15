@@ -1,38 +1,74 @@
 use std::path::Path;
+use std::sync::Arc;
+
+use crate::neg_cache::NegCache;
+use crate::posting_cache::PostingCache;
+use crate::regex_pool::RegexPool;
 
 use super::types::{SearchQuery, SearchResults};
 
-/// Execute a search query against the index at the given root path.
-///
-/// This reads directly from the shard.ix file, ensuring consistency with
-/// the daemon's current state (since the daemon rebuilds the index on each change).
-///
+/// Bundled cache handles for daemon-mode search execution.
+#[derive(Clone)]
+pub(crate) struct SearchCaches {
+    pub posting_cache: Arc<PostingCache>,
+    pub neg_cache: Arc<NegCache>,
+    pub regex_pool: Arc<RegexPool>,
+}
+
 /// # Errors
 ///
-/// Returns an error if the index file cannot be read, the index format is
-/// corrupt, or the query cannot be executed.
+/// Returns an error if the index cannot be opened or the search fails.
 pub fn execute_search(
     root: &Path,
     query: &SearchQuery,
+) -> std::result::Result<SearchResults, Box<dyn std::error::Error + Send + Sync>> {
+    execute_search_inner(root, query, None)
+}
+
+/// Execute a search query in progressive mode, sending results via a channel.
+///
+/// # Errors
+///
+/// Returns an error if the index cannot be opened or the search fails.
+pub fn execute_search_progressive(
+    root: &Path,
+    query: &SearchQuery,
+    sender: &std::sync::mpsc::Sender<SearchResults>,
+) -> std::result::Result<crate::executor::QueryStats, Box<dyn std::error::Error + Send + Sync>> {
+    execute_search_progressive_inner(root, query, sender, None)
+}
+
+pub(crate) fn execute_search_inner(
+    root: &Path,
+    query: &SearchQuery,
+    caches: Option<&SearchCaches>,
 ) -> std::result::Result<SearchResults, Box<dyn std::error::Error + Send + Sync>> {
     use crate::executor::{Executor, QueryOptions};
     use crate::planner::Planner;
     use crate::reader::Reader;
 
-    // Find the index file
     let index_dir = root.join(".ix");
     let index_path = index_dir.join("shard.ix");
-
     if !index_path.exists() {
         return Err("index not found".into());
     }
 
     let reader = Reader::open(&index_path)?;
-    let mut executor = Executor::new(&reader);
-
-    // Set up delta file path
     let delta_path = index_dir.join("shard.ix.delta");
-    executor.set_delta_path(delta_path);
+
+    let mut executor = if let Some(c) = caches {
+        Executor::new_with_caches(
+            &reader,
+            Arc::clone(&c.posting_cache),
+            Arc::clone(&c.neg_cache),
+            Arc::clone(&c.regex_pool),
+            Some(delta_path),
+        )
+    } else {
+        let mut e = Executor::new(&reader);
+        e.set_delta_path(delta_path);
+        e
+    };
 
     let plan = Planner::plan_with_pool(
         &query.pattern,
@@ -81,7 +117,7 @@ pub fn execute_search(
     };
     let error = if stats.files_failed_verify > 0 {
         Some(format!(
-            "{} file(s) could not be verified (I/O error) — results may be incomplete",
+            "{} file(s) could not be verified (I/O error) \u{2014} results may be incomplete",
             stats.files_failed_verify
         ))
     } else {
@@ -97,26 +133,11 @@ pub fn execute_search(
     })
 }
 
-/// Execute a search query progressively, sending batches through a channel.
-///
-/// Opens the index, creates an executor, and runs the query via
-/// `Executor::execute_progressive`. Each batch of results is sent
-/// through `sender` as a [`SearchResults`] message.
-///
-/// NOTE: Progressive search currently operates in single-batch mode.
-/// Every search returns exactly one batch with `done: true`. The
-/// multi-batch progressive delivery path is not yet implemented.
-/// Clients MUST NOT wait for additional batches after receiving
-/// `done: true` — the channel is closed after the single batch.
-///
-/// # Errors
-///
-/// Returns an error if the index file cannot be read or the query cannot
-/// be planned.
-pub fn execute_search_progressive(
+pub(crate) fn execute_search_progressive_inner(
     root: &Path,
     query: &SearchQuery,
     sender: &std::sync::mpsc::Sender<SearchResults>,
+    caches: Option<&SearchCaches>,
 ) -> std::result::Result<crate::executor::QueryStats, Box<dyn std::error::Error + Send + Sync>> {
     use crate::executor::{Executor, ProgressiveBatch, QueryOptions};
     use crate::planner::Planner;
@@ -129,10 +150,21 @@ pub fn execute_search_progressive(
     }
 
     let reader = Reader::open(&index_path)?;
-    let mut executor = Executor::new(&reader);
-
     let delta_path = index_dir.join("shard.ix.delta");
-    executor.set_delta_path(delta_path);
+
+    let mut executor = if let Some(c) = caches {
+        Executor::new_with_caches(
+            &reader,
+            Arc::clone(&c.posting_cache),
+            Arc::clone(&c.neg_cache),
+            Arc::clone(&c.regex_pool),
+            Some(delta_path),
+        )
+    } else {
+        let mut e = Executor::new(&reader);
+        e.set_delta_path(delta_path);
+        e
+    };
 
     let plan = Planner::plan_with_pool(
         &query.pattern,
@@ -182,13 +214,10 @@ pub fn execute_search_progressive(
         } else {
             batch.file_matches
         };
-        // NOTE: Progressive search currently operates in single-batch mode.
-        // All results are delivered in batch 0 with done=true. The channel
-        // loop body runs exactly once. Multi-batch streaming is planned.
         let is_last = batch_num == 0;
         let error = if stats.files_failed_verify > 0 {
             Some(format!(
-                "{} file(s) could not be verified (I/O error) — results may be incomplete",
+                "{} file(s) could not be verified (I/O error) \u{2014} results may be incomplete",
                 stats.files_failed_verify
             ))
         } else {

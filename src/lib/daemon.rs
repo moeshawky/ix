@@ -25,11 +25,14 @@
 use crate::builder::Builder;
 use crate::cache_policy::AdaptiveCachePolicy;
 use crate::config::Config;
-use crate::daemon_sock::{DaemonServer, DaemonStatus, FileChange, FileOp, ServerMessage};
+use crate::daemon_sock::{
+    DaemonServer, DaemonStatus, FileChange, FileOp, SearchCaches, ServerMessage,
+};
 use crate::format::{self, Beacon};
 use crate::idle::IdleTracker;
 use crate::neg_cache::NegCache;
 use crate::posting_cache::PostingCache;
+use crate::regex_pool::RegexPool;
 use crate::watcher::Watcher;
 use llmosafe::{
     DesignAssuranceLevel, EscalationPolicy, PressureLevel, ResourceGuard, SafetyDecision,
@@ -97,7 +100,16 @@ pub fn run_many(roots: &[PathBuf]) -> crate::error::Result<()> {
     let unique: Vec<PathBuf> = roots
         .iter()
         .filter_map(|r| {
-            let canonical = r.canonicalize().unwrap_or_else(|_| r.clone());
+            let canonical = match r.canonicalize() {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(
+                        "ixd: cannot canonicalize root {}: {e} -- using raw path",
+                        r.display()
+                    );
+                    r.clone()
+                }
+            };
             if seen.insert(canonical.clone()) {
                 Some(canonical)
             } else {
@@ -208,17 +220,30 @@ fn run_single_root(
     let posting_cache = Arc::new(PostingCache::with_ceiling(ceiling_bytes));
     let neg_cache = Arc::new(NegCache::new(65_536));
 
+    // Bundled cache handles for daemon-mode search queries via the socket server.
+    let regex_pool = Arc::new(RegexPool::new(256));
+    let caches = SearchCaches {
+        posting_cache: Arc::clone(&posting_cache),
+        neg_cache: Arc::clone(&neg_cache),
+        regex_pool,
+    };
+
     wait_for_memory(guard, &name);
 
-    if let Err(e) = builder.build() {
-        eprintln!("ixd [{name}]: initial build failed: {e} — will watch for changes anyway");
-    } else {
-        println!(
-            "ixd [{name}]: initial build complete ({} files, {} trigrams)",
-            builder.files_len(),
-            builder.trigrams_len()
-        );
-    }
+    let build_failed_error: Option<String> = match builder.build() {
+        Ok(_path) => {
+            println!(
+                "ixd [{name}]: initial build complete ({} files, {} trigrams)",
+                builder.files_len(),
+                builder.trigrams_len()
+            );
+            None
+        }
+        Err(e) => {
+            eprintln!("ixd [{name}]: initial build failed: {e} — will watch for changes anyway");
+            Some(format!("{e}"))
+        }
+    };
 
     let mut watcher = Watcher::new(&root, &watch_roots, &exclude_patterns);
     if let Some(ms) = debounce_ms {
@@ -231,6 +256,9 @@ fn run_single_root(
         fs::create_dir_all(&ix_dir)?;
     }
     let mut beacon = Beacon::with_instance_id(&root, instance_id);
+    if let Some(ref err) = build_failed_error {
+        beacon.status = DaemonStatus::BuildFailed { error: err.clone() }.to_string();
+    }
     beacon.write_to(&ix_dir)?;
 
     let mut idle = IdleTracker::new();
@@ -253,6 +281,12 @@ fn run_single_root(
         && let Err(e) = s.start()
     {
         eprintln!("ixd [{name}]: failed to start socket server: {e}");
+    }
+
+    // Wire the cache pipeline: SearchCaches are shared across all daemon
+    // search queries via the socket server's shared state.
+    if let Some(ref mut s) = daemon_sock {
+        s.set_caches(caches.clone());
     }
 
     run_main_loop(
@@ -364,8 +398,24 @@ fn install_signal_handlers() -> crate::error::Result<()> {
 }
 
 fn wait_for_memory(guard: &ResourceGuard, log_prefix: &str) {
-    if let Err(e) = guard.check_blocking() {
-        eprintln!("ixd [{log_prefix}]: memory pressure before initial build: {e:?}");
+    const MAX_WAIT: u32 = 30;
+    for attempt in 0..=MAX_WAIT {
+        match guard.check_blocking() {
+            Ok(_) => return,
+            Err(e) => {
+                if attempt == MAX_WAIT {
+                    eprintln!(
+                        "ixd [{log_prefix}]: memory check failed after {MAX_WAIT} attempts: {e:?} -- proceeding anyway"
+                    );
+                    return;
+                }
+                eprintln!(
+                    "ixd [{log_prefix}]: memory pressure before initial build (attempt {}/{MAX_WAIT}): {e:?}",
+                    attempt + 1
+                );
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        }
     }
 }
 
@@ -475,7 +525,12 @@ fn run_main_loop(
                         deferred_batches.push(batch);
                     }
                     for batch in deferred_batches {
-                        let _ = builder.update(&batch);
+                        if let Err(e) = builder.update(&batch) {
+                            tracing::warn!(
+                                "ixd [{log_prefix}]: deferred update failed for {} files: {e}",
+                                batch.len()
+                            );
+                        }
                     }
                 }
             }
@@ -723,7 +778,13 @@ fn handle_changes(
             deferred_batches.push(batch);
         }
         for batch in deferred_batches {
-            let _ = ctx.builder.update(&batch);
+            if let Err(e) = ctx.builder.update(&batch) {
+                tracing::warn!(
+                    "ixd [{}]: deferred update (post-compaction) failed for {} files: {e}",
+                    ctx.log_prefix,
+                    batch.len()
+                );
+            }
         }
     }
     ctx.idle.record_change();

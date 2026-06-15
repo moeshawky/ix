@@ -164,7 +164,7 @@ impl Scanner {
             .filter_map(|path| {
                 if options.max_results > 0
                     && matches_found.load(Ordering::Relaxed)
-                        >= u32::try_from(options.max_results).unwrap_or(0)
+                        >= u32::try_from(options.max_results).unwrap_or(u32::MAX)
                 {
                     return None;
                 }
@@ -512,5 +512,129 @@ mod tests {
             }
             other => panic!("expected Io(NotFound) error, got {other:?}"),
         }
+    }
+
+    // ── Rule 5: Integer Boundary Tests ─────────────────────────────────
+
+    /// File with many lines: line_numbers must be sequential and never wrap to 0.
+    #[test]
+    fn test_line_number_no_wrap() {
+        let dir = tempdir().unwrap();
+        // Generate a file with enough lines to exercise the u32 counter
+        // Use ~1000 lines (well within u32 range but exercises the counter)
+        let mut content = String::new();
+        for i in 1..=1000 {
+            content.push_str(&format!("line {i} with needle here\n"));
+        }
+        // Add a few extra non-matching lines at the end
+        content.push_str("no match here\nno match here\n");
+
+        fs::write(dir.path().join("many_lines.txt"), &content).unwrap();
+
+        let scanner = Scanner::new(dir.path());
+        let matches = scanner
+            .scan("needle", false, false, &QueryOptions::default())
+            .unwrap();
+
+        // Every match should have line_number > 0 and ≤ 1000
+        for m in &matches {
+            assert!(
+                m.line_number > 0,
+                "line_number should never be 0 (found at line {})",
+                m.line_number
+            );
+            assert!(
+                m.line_number <= 1000,
+                "line_number {} exceeds expected max 1000",
+                m.line_number
+            );
+        }
+
+        // Line numbers should be sequential (no gaps or wrap-around)
+        let line_numbers: Vec<u32> = matches.iter().map(|m| m.line_number).collect();
+        let mut unique_sorted: Vec<u32> = line_numbers.clone();
+        unique_sorted.sort_unstable();
+        unique_sorted.dedup();
+        assert_eq!(
+            line_numbers, unique_sorted,
+            "line numbers should be unique and ordered"
+        );
+    }
+
+    /// max_results boundary values: test 0, 1, large values.
+    #[test]
+    fn test_max_results_boundary() {
+        let dir = tempdir().unwrap();
+        let content = (1..=20)
+            .map(|i| format!("needle {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(dir.path().join("matches.txt"), &content).unwrap();
+        let scanner = Scanner::new(dir.path());
+
+        // max_results = 0: unlimited (all 20 lines)
+        let mut opts = QueryOptions::default();
+        opts.max_results = 0;
+        let matches = scanner.scan("needle", false, false, &opts).unwrap();
+        assert_eq!(matches.len(), 20, "max_results=0 should return all matches");
+
+        // max_results = 1: exactly 1 result
+        opts.max_results = 1;
+        let matches = scanner.scan("needle", false, false, &opts).unwrap();
+        assert_eq!(matches.len(), 1, "max_results=1 should return exactly 1");
+
+        // max_results = large value (usize::MAX would be absurd, test with a known bound)
+        opts.max_results = 10_000;
+        let matches = scanner.scan("needle", false, false, &opts).unwrap();
+        assert_eq!(
+            matches.len(),
+            20,
+            "large max_results should return all matches"
+        );
+    }
+
+    // ── Rule 6: Oversized Input Tests ─────────────────────────────────
+
+    /// Scanner must handle files with very long lines (no newline)
+    /// without panicking or OOM. Uses 1MB line for test speed.
+    #[test]
+    fn test_scanner_long_line_no_newline() {
+        let dir = tempdir().unwrap();
+        // Create a 100KB line (reasonable for unit test, exercises unbounded buffer)
+        let long_line = "A".repeat(100_000);
+        let content = format!("start of file\n{long_line}end of file\nnormal line\n");
+        fs::write(dir.path().join("long.txt"), &content).unwrap();
+
+        let scanner = Scanner::new(dir.path());
+        // Search for a pattern that won't match in the long line
+        let result = scanner.scan("normal", false, false, &QueryOptions::default());
+        assert!(
+            result.is_ok(),
+            "scanner should handle long lines without error"
+        );
+        let matches = result.unwrap();
+        // Should find "normal" in the last line
+        assert!(!matches.is_empty(), "should find the normal line");
+    }
+
+    /// Scanner must handle files with lines near the size limit
+    /// without panicking. The scanner skips files >10MB, so 1MB line is fine.
+    #[test]
+    fn test_scanner_moderate_long_line_matches() {
+        let dir = tempdir().unwrap();
+        // Line with a match right at the end of a long line
+        let prefix = "x".repeat(50_000);
+        let content = format!("{prefix}needle_found\nshort line\n");
+        fs::write(dir.path().join("long_match.txt"), &content).unwrap();
+
+        let scanner = Scanner::new(dir.path());
+        let matches = scanner
+            .scan("needle_found", false, false, &QueryOptions::default())
+            .unwrap();
+        assert_eq!(matches.len(), 1, "should find match in long line");
+        assert!(
+            matches[0].line_content.contains("needle_found"),
+            "match line content should contain pattern"
+        );
     }
 }

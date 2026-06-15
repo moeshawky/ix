@@ -25,6 +25,15 @@ pub struct NegCacheStats {
 /// Keys are `(query_fingerprint, content_hash)` pairs. When a file is verified
 /// and produces zero matches, it is recorded here so subsequent queries for the
 /// same pattern can skip re-reading the file if its content hasn't changed.
+///
+/// # Eviction policy
+///
+/// Unlike [`crate::posting_cache::PostingCache`] which uses FIFO (oldest-first)
+/// eviction, `NegCache` evicts entries in **arbitrary order** (determined by
+/// `HashSet` iteration). There is no access tracking, so hot entries may be
+/// evicted before cold ones. This is acceptable because the cost of an eviction
+/// is a single re-verification (reading a file that previously produced zero
+/// matches), which is cheap relative to trigram posting list decoding.
 #[derive(Debug)]
 pub struct NegCache {
     set: RwLock<HashSet<(u64, u64)>>,
@@ -106,6 +115,8 @@ impl NegCache {
                 .unwrap_or(1usize)
                 .max(1);
             let mut remaining = to_evict;
+            // NOTE: HashSet iteration order is arbitrary — eviction is NOT
+            // true FIFO. Hot entries may be evicted before cold ones.
             set.retain(|_| {
                 if remaining > 0 {
                     remaining -= 1;
