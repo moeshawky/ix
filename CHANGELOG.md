@@ -2,6 +2,61 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- 18 new tests across format, varint, posting, scanner, and reader:
+  error-path tests (corrupt header, bad magic, CRC mismatch, empty/overflow
+  varint, corrupt delta), corruption proptests (random header always errors,
+  varint truncation detection, posting byte-flip detection), integer boundary
+  tests (varint 0/MAX/MAX+1, scanner line_number no-wrap, max_results),
+  oversized input tests (100KB lines). All 187 tests pass.
+- `DaemonStatus::BuildFailed` variant surfaced to socket clients when the
+  initial index build fails — clients no longer see "idle" with 0 files.
+- `SearchCaches` infrastructure wired end-to-end: `PostingCache`, `NegCache`,
+  and `RegexPool` created in the daemon, stored in `DaemonServer` shared
+  state, and passed through `execute_search_inner` to `Executor`. Socket
+  searches now benefit from shared cache acceleration.
+- `QueryStats::files_missing_from_index` counter for delta file IDs that
+  cannot be resolved in the main shard — previously silently dropped.
+- `watcher` channel now preserves `EventKind` — `broadcast_file_changes`
+  reports actual `Create`/`Modify`/`Delete` operations instead of always
+  reporting `Modify`.
+
+### Changed
+- `PostingCache::evict_fraction` uses `ceil` for eviction count (was truncation,
+  which evicted 0 entries on small caches — matching `PostingCache` behavior).
+- `NegCache` eviction policy documented as arbitrary-order (not FIFO) with
+  inline comments distinguishing from `PostingCache`'s explicit order list.
+- `daemon_sock/resolve.rs` and `daemon.rs` canonicalize failures now log
+  `tracing::warn!` instead of silently falling back to non-canonical paths.
+- `check_blocking()` in the daemon's memory pressure guard now retries up to
+  30 times with 2s backoff instead of logging once and proceeding.
+
+### Fixed
+- **Error swallowing (11 sites):** Corrupted index headers, CDX blocks, delta
+  files, and varint overflows now return `Err` instead of silently defaulting
+  to zero, `Ok(None)`, or `Ok(empty)`. Corruption is no longer conflated with
+  "not found" — a truncated index is rejected rather than opened with bogus
+  offsets producing garbage results or segfaults.
+- **Integer safety (3 sites):** `max_results` overflow no longer produces zero
+  results (`unwrap_or(0)` → `unwrap_or(u32::MAX)`). `line_number` wrap-around
+  in streaming mode (`+1` → `saturating_add(1)`). `string_pool` offset overflow
+  returns `Err` instead of silently resolving to the first path in the pool.
+- **PostingCache TOCTOU race:** `memory_used` double-subtraction under
+  concurrent `insert`/`evict_fraction` — now recomputes removed entry size
+  under the write lock instead of using a stale pre-lock value.
+- **RegexPool concurrent duplicates:** Two racing `get_or_compile` calls for
+  the same uncached pattern no longer produce duplicate entries in the FIFO
+  order `Vec` — a `contains_key` guard added under the write lock.
+- **Builder backup rename:** Failure now aborts the build with `Err` instead of
+  silently swapping a new (potentially corrupt) index over the old one.
+- **DeltaReader magic mismatch:** Returns `Err(Config)` instead of silently
+  returning an empty default delta, which previously lost all incremental
+  index updates when a delta file was corrupted or truncated.
+- **Deferred batch update errors:** `builder.update()` failures during
+  compaction are now logged instead of silently discarded with `let _ =`.
+
 ## [0.12.6] - 2026-06-14
 
 ### Changed
