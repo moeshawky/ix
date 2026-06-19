@@ -124,7 +124,11 @@ Execute a search query.
   "decompress":false,
   "multiline":false,
   "archive":false,
-  "binary":false
+  "binary":false,
+  "search_path":null,
+  "progressive":false,
+  "chunk_size_bytes":0,
+  "chunk_overlap_bytes":0
 }
 ```
 
@@ -142,6 +146,10 @@ Execute a search query.
 | `multiline` | bool | No | false | Dot matches newline (regex only) |
 | `archive` | bool | No | false | Search inside archives |
 | `binary` | bool | No | false | Search binary files |
+| `search_path` | string\|null | No | null | Absolute path prefix filter |
+| `progressive` | bool | No | false | Stream results in batches |
+| `chunk_size_bytes` | u64 | No | 0 | Large-file chunk size (0 = 16 MiB default) |
+| `chunk_overlap_bytes` | u64 | No | 0 | Overlap between chunks (0 = 1 MiB default) |
 
 **Source**: `src/lib/daemon_sock.rs:195-236`
 
@@ -279,12 +287,55 @@ Search query results.
     "candidate_files":5,
     "files_verified":3,
     "bytes_verified":1024,
-    "total_matches":1
-  }
+    "total_matches":1,
+    "files_failed_verify":0,
+    "lines_read":150,
+    "total_available":12,
+    "posting_cache_hits":1,
+    "posting_cache_misses":2,
+    "neg_cache_hits":0,
+    "neg_cache_misses":5
+  },
+  "error":null,
+  "done":true,
+  "batch":0
 }
 ```
 
-**Source**: `src/lib/daemon_sock.rs:191-193`, `src/lib/executor.rs:58-72`
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `t` | string | Yes | Must be `"search_results"` |
+| `id` | u64 | Yes | Echoed from request |
+| `matches` | array | Yes | Array of match objects |
+| `stats` | object | Yes | Query execution statistics (see below) |
+| `error` | string\|null | No | Error message if query failed or is partial |
+| `done` | bool | Yes | Whether this is the final batch |
+| `batch` | u32 | No | Batch sequence number (0-based, for progressive queries) |
+
+**Critical — the `error` field:**
+When present, `error` means the daemon could not fully execute the query
+(invalid regex, index corruption, or some files could not be verified).
+Clients MUST check this field and **not** treat an empty result with an
+error as a successful zero-match search. A non-empty result with an error
+means some files were skipped and the result set is partial.
+
+**`QueryStats` fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `trigrams_queried` | u64 | Number of trigrams looked up |
+| `posting_lists_decoded` | u64 | Posting lists decoded from index |
+| `candidate_files` | u64 | Candidate files examined |
+| `files_verified` | u64 | Files actually verified (grepped) |
+| `bytes_verified` | u64 | Total bytes verified |
+| `total_matches` | u64 | Total matching lines found |
+| `files_failed_verify` | u64 | Files that could not be verified (I/O errors) |
+| `lines_read` | u64 | Total lines read during verification |
+| `total_available` | u64 | Total available results before truncation |
+| `posting_cache_hits` | u64 | Posting list cache hits |
+| `posting_cache_misses` | u64 | Posting list cache misses |
+| `neg_cache_hits` | u64 | Negative cache hits |
+| `neg_cache_misses` | u64 | Negative cache misses |
 
 ---
 
@@ -341,6 +392,12 @@ The `daemon_status` field provides structured status information:
 
 // Safety exit
 {"state":"safety_exit"}
+
+// Compacting
+{"state":"compacting"}
+
+// Build failed (daemon watching for changes, index incomplete)
+{"state":"build_failed","error":"permission denied reading src/secret.rs"}
 ```
 
 **Source**: `src/lib/daemon_sock.rs:80-121`

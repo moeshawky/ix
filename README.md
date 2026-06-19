@@ -120,6 +120,21 @@ Protocol is NDJSON — one JSON object per newline-terminated line. See
 [docs/SOCKET-API.md](docs/SOCKET-API.md). The `ix` CLI reads the index
 file directly, not through the socket.
 
+### Index Statistics
+
+Show what's inside an index — file count, trigram count, on-disk size:
+
+```bash
+# Human-readable
+ix stats /path/to/repo
+
+# JSON output
+ix stats --json /path/to/repo
+```
+
+This is distinct from `ix --stats "pattern"` (the search flag that shows
+per-query statistics). `ix stats` inspects the index itself.
+
 ### Configuring the Daemon
 
 Scope what `ixd` watches and `ix --build` indexes with `.ixd.toml`:

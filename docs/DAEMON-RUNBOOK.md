@@ -117,7 +117,7 @@ ls -la /run/user/1000/ixd/a1b2c3d4e5f67890.sock
   "status": "idle",
   "files": 1234,
   "daemon_status": {
-    "t": "idle"
+    "state": "idle"
   }
 }
 ```
@@ -135,7 +135,7 @@ ls -la /run/user/1000/ixd/a1b2c3d4e5f67890.sock
   "status": "indexing (entropy: 450)",
   "files": 1234,
   "daemon_status": {
-    "t": "indexing",
+    "state": "indexing",
     "entropy": 450
   }
 }
@@ -154,7 +154,7 @@ ls -la /run/user/1000/ixd/a1b2c3d4e5f67890.sock
   "status": "deferred (entropy: 950)",
   "files": 1234,
   "daemon_status": {
-    "t": "deferred",
+    "state": "deferred",
     "entropy": 950
   }
 }
@@ -164,10 +164,12 @@ ls -la /run/user/1000/ixd/a1b2c3d4e5f67890.sock
 
 | Status | Trigger | Recovery |
 |--------|---------|----------|
+| `"compacting"` | Full index rebuild (idle or delta size > 50 MB) | Automatic — completes within 30s–5min |
 | `"warned: ..."` | Minor safety concern | Automatic after 300ms |
 | `"escalated (entropy: N)"` | High entropy + surprise | Throttle, cooldown 1000ms |
 | `"safety halt"` | Critical safety decision | Manual intervention required |
 | `"safety exit"` | Unrecoverable error | Restart daemon |
+| `"build failed: ..."` | Initial index build failed | Fix underlying issue, daemon will retry |
 
 ---
 
