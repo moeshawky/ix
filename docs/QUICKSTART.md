@@ -20,15 +20,27 @@
 ### Step 1: Install (30 seconds)
 
 ```bash
-# Install from crates.io
+# Install from crates.io (standard — search + daemon)
 cargo install moeix
+
+# Or with all features (adds archive + compressed file support)
+cargo install moeix --features full
 
 # Expected output:
 # Finished release [optimized] target(s) in 45s
 # Installed binary `ix`
+# Installed binary `ixd`
 ```
 
-**Source**: `Cargo.toml:1-10`
+**Feature flags:**
+| Feature | What it adds | Increases binary by |
+|---------|-------------|---------------------|
+| `notify` (default) | File watching for daemon | ~2 MB |
+| `decompress` | `.gz` `.zst` `.bz2` `.xz` support | ~3 MB |
+| `archive` | `.zip` `.tar.gz` support | ~2 MB |
+| `full` | All of the above | ~7 MB |
+
+**Source**: `Cargo.toml:49-54`
 
 ### Step 2: Build Index (30 seconds)
 
@@ -92,7 +104,12 @@ ix --help
 
 ```bash
 cd /workspace/ix
-cargo build --release --features notify
+
+# Standard daemon (notify is already the default)
+cargo build --release
+
+# Or with full feature set (archive + compressed files)
+cargo build --release --features full
 
 # Expected output:
 # Finished release [optimized] target(s) in 45s

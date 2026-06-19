@@ -79,6 +79,7 @@ journalctl -u ixd -f  # if using systemd
 |----------|---------|-------------|
 | `XDG_RUNTIME_DIR` | `/run/user/{uid}` | Socket location |
 | `RUST_LOG` | `info` | Log level (debug/info/warn/error) |
+| `IX_DEBUG_BUILD` | (unset) | If set, emits `IX-INDEXED:` and `IX-FLUSH:` per-file lines to stderr during indexing |
 
 ### Socket Locations
 

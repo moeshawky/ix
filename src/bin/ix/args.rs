@@ -8,40 +8,88 @@ use std::path::PathBuf;
     about = "High-performance, safety-aware code search engine for humans and agents.",
 after_help = r#"USAGE:
 
-Existence check: ix -c "pattern" → Single integer (count)
-Location: ix -l "pattern" → Unique file paths
+Discovery: ix -l "pattern" → Unique file paths
+Existence:  ix -c "pattern" → Single integer (count)
 Contextual: ix -C 3 "pattern" → ±3 lines around match
-Structured: ix --json "pattern" → JSON Lines output
-Deterministic: ix --fresh "pattern" → Force rebuild + search
+Structured: ix --json "pattern" → JSON Lines output (schema: {file, line, col, content, byte_offset, context_before, context_after})
+Fresh:      ix --fresh "pattern" → Force rebuild + search
+Pipe:       cat file | ix --stdin "pattern" → Search stdin
 
 SEARCH MODES (mutually exclusive):
 
-1. Literal (default): ix "timeout" → exact substring match
-2. Word-boundary: ix -w "timeout" → whole-word match (finds "timeout" but not "timeoutExceeded")
-3. Regex: ix --regex "err(or|no).*timeout" → full regex pattern
+1. Literal (default):   ix "timeout" → exact substring
+2. Word-boundary:       ix -w "timeout" → whole-word (matches "timeout" but not "timeoutExceeded")
+3. Regex:               ix --regex "err(or|no).*timeout" → full regex syntax
+
+FILTERING:
+
+-t rs,py        Filter by file extension (repeatable)
+--max-file-size N  Skip files larger than N MB (default: 100, 0 = unlimited)
+--no-index          Bypass index, do a linear grep
+--binary            Search binary files (normally skipped)
+-z, --decompress    Search inside .gz, .zst, .bz2, .xz files
+--archive           Search inside .zip and .tar.gz archives
+    (--decompress and --archive require optional features; see install notes)
+
+OUTPUT CONTROL:
+
+-l, --files-only    Print only matching file paths
+-c, --count         Print only total match count
+--json              JSON Lines output (one object per match)
+--stats             Print query performance statistics to stderr
+-n N, --max-results N  Stop after N results (default: 0 = unlimited)
+
+PERFORMANCE:
+
+-j N, --threads N   Number of search threads (default: 0 = auto)
+--chunk-size N      Chunk size in bytes for streaming large files (default: 16 MiB)
+--chunk-overlap N   Overlap between chunks in bytes (default: 1 MiB)
+
+ADVANCED:
+
+-i, --ignore-case   Case-insensitive search
+-U, --multiline     Dot matches newline (requires --regex)
+--fresh             Rebuild index before searching
+--force             Override daemon lock (operate on daemon-managed roots)
+
+SUBCOMMANDS:
+
+ix --build [PATH]       Build or update the .ix index (defaults to CWD)
+ix service install [PATH]  Install ixd as a user-level systemd service
+ix service start|stop|restart|status  Manage the systemd daemon
+ix stats [PATH]         Display index statistics (files, trigrams, size)
+    --json              Output stats in JSON format
+ix service status --json  Machine-readable daemon status
 
 EXAMPLES:
 
-Index the current directory:
-ix --build
+  # Build the index
+  ix --build
 
-Search for a literal string:
-ix "ConnectionTimeout"
+  # Literal search
+  ix "ConnectionTimeout"
 
-Search for whole word "timeout":
-ix -w timeout
+  # Case-insensitive whole-word search
+  ix -i -w timeout
 
-Search using a Regular Expression:
-ix --regex "err(or|no).*timeout"
+  # Regex with file-type filter
+  ix --regex "fn\s+\w+_handler" -t rs -t py
 
-Search in a specific directory without using the index:
-ix --no-index "TODO" ./src
+  # JSON output with context
+  ix --json -C 2 "TODO"
+
+  # Count occurrences without indexing
+  ix --no-index -c "FIXME" ./src
+
+  # Pipe stdin (e.g., from a build log)
+  make 2>&1 | ix --stdin "error"
 
 NOTES:
- - Default is unlimited results (use -n N to cap at N results).
-- Index stored in .ix/shard.ix relative to search path.
-- Uses LLMOSafe for resource monitoring and back-pressure.
-- Word-boundary (-w) uses regex internally but enforces whole-word semantics."#
+ - Index stored in .ix/shard.ix relative to search path.
+ - Uses LLMOSafe for resource monitoring and back-pressure.
+ - Word-boundary (-w) uses regex internally but enforces whole-word semantics.
+ - --decompress and --archive require: cargo install moeix --features full
+ - --json schema: {file, line, col, content, byte_offset, context_before, context_after}"#
 )]
 pub(crate) struct Cli {
     /// The pattern to search for (literal string by default).
