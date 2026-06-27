@@ -14,6 +14,7 @@ use crate::reader::{DeltaReader, FileInfo, Reader};
 use crate::regex_pool::RegexPool;
 use crate::streaming;
 use crate::trigram::Trigram;
+use llmosafe::ResourceGuard;
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -212,6 +213,7 @@ pub struct QueryOptions {
 /// - [`PostingCache`] avoids re-decoding compressed posting lists
 /// - [`NegCache`] skips re-verification of known non-matching files
 /// - [`RegexPool`] caches compiled regex objects across queries
+/// - [`ResourceGuard`] provides backpressure under memory pressure
 pub struct Executor<'a> {
     index: &'a Reader,
     delta: Option<DeltaReader>,
@@ -219,6 +221,7 @@ pub struct Executor<'a> {
     posting_cache: Arc<PostingCache>,
     neg_cache: Arc<NegCache>,
     regex_pool: Arc<RegexPool>,
+    resource_guard: Option<Arc<ResourceGuard>>,
     neg_query_fingerprint: u64,
 }
 
@@ -233,6 +236,7 @@ impl<'a> Executor<'a> {
             posting_cache: Arc::new(PostingCache::default()),
             neg_cache: Arc::new(NegCache::new(65_536)),
             regex_pool: Arc::new(RegexPool::new(256)),
+            resource_guard: None,
             neg_query_fingerprint: 0,
         }
     }
@@ -259,8 +263,19 @@ impl<'a> Executor<'a> {
             posting_cache,
             neg_cache,
             regex_pool,
+            resource_guard: None,
             neg_query_fingerprint: 0,
         }
+    }
+
+    /// Create an executor with a `ResourceGuard` for backpressure under memory pressure.
+    ///
+    /// The guard is checked during parallel verification to apply backpressure
+    /// when system memory pressure exceeds 90%.
+    #[must_use]
+    pub fn with_resource_guard(mut self, guard: Arc<ResourceGuard>) -> Self {
+        self.resource_guard = Some(guard);
+        self
     }
 
     /// Returns a reference to the posting list cache.
@@ -507,37 +522,8 @@ impl<'a> Executor<'a> {
 
         let candidate_list: Vec<u32> = candidates.into_iter().collect();
 
-        let mut all_matches: Vec<Match> = candidate_list
-            .into_par_iter()
-            .filter_map(|fid| {
-                let file_info = self.get_file_info(fid)?;
-
-                if !options.type_filter.is_empty() {
-                    let ext = file_info
-                        .path
-                        .extension()
-                        .and_then(|e: &std::ffi::OsStr| e.to_str())
-                        .unwrap_or("");
-                    if !options.type_filter.iter().any(|e: &String| e == ext) {
-                        return None;
-                    }
-                }
-
-                accum.files_verified.fetch_add(1, Ordering::Relaxed);
-                accum
-                    .bytes_verified
-                    .fetch_add(file_info.size_bytes, Ordering::Relaxed);
-
-                let file_matches = self
-                    .verify_candidate(&file_info, regex, options, neg_fp, &accum)
-                    .into_option(&accum, &file_info)?;
-                accum
-                    .matches_found
-                    .fetch_add(file_matches.len() as u32, Ordering::Relaxed);
-                Some(file_matches)
-            })
-            .flatten()
-            .collect();
+        let mut all_matches =
+            self.verify_candidates_parallel(candidate_list, regex, options, neg_fp, &accum);
 
         accum.into_stats(stats.candidate_files, all_matches.len() as u32, &mut stats);
 
@@ -633,37 +619,8 @@ impl<'a> Executor<'a> {
 
         let candidate_list: Vec<u32> = final_candidates.into_iter().collect();
 
-        let mut all_matches: Vec<Match> = candidate_list
-            .into_par_iter()
-            .filter_map(|fid| {
-                let file_info = self.get_file_info(fid)?;
-
-                if !options.type_filter.is_empty() {
-                    let ext = file_info
-                        .path
-                        .extension()
-                        .and_then(|e: &std::ffi::OsStr| e.to_str())
-                        .unwrap_or("");
-                    if !options.type_filter.iter().any(|e: &String| e == ext) {
-                        return None;
-                    }
-                }
-
-                accum.files_verified.fetch_add(1, Ordering::Relaxed);
-                accum
-                    .bytes_verified
-                    .fetch_add(file_info.size_bytes, Ordering::Relaxed);
-
-                let file_matches = self
-                    .verify_candidate(&file_info, regex, options, neg_fp, &accum)
-                    .into_option(&accum, &file_info)?;
-                accum
-                    .matches_found
-                    .fetch_add(file_matches.len() as u32, Ordering::Relaxed);
-                Some(file_matches)
-            })
-            .flatten()
-            .collect();
+        let mut all_matches =
+            self.verify_candidates_parallel(candidate_list, regex, options, neg_fp, &accum);
 
         accum.into_stats(stats.candidate_files, all_matches.len() as u32, &mut stats);
 
@@ -739,37 +696,8 @@ impl<'a> Executor<'a> {
 
         let candidate_list: Vec<u32> = final_candidates.into_iter().collect();
 
-        let mut all_matches: Vec<Match> = candidate_list
-            .into_par_iter()
-            .filter_map(|fid| {
-                let file_info = self.get_file_info(fid)?;
-
-                if !options.type_filter.is_empty() {
-                    let ext = file_info
-                        .path
-                        .extension()
-                        .and_then(|e: &std::ffi::OsStr| e.to_str())
-                        .unwrap_or("");
-                    if !options.type_filter.iter().any(|e: &String| e == ext) {
-                        return None;
-                    }
-                }
-
-                accum.files_verified.fetch_add(1, Ordering::Relaxed);
-                accum
-                    .bytes_verified
-                    .fetch_add(file_info.size_bytes, Ordering::Relaxed);
-
-                let file_matches = self
-                    .verify_candidate(&file_info, regex, options, neg_fp, &accum)
-                    .into_option(&accum, &file_info)?;
-                accum
-                    .matches_found
-                    .fetch_add(file_matches.len() as u32, Ordering::Relaxed);
-                Some(file_matches)
-            })
-            .flatten()
-            .collect();
+        let mut all_matches =
+            self.verify_candidates_parallel(candidate_list, regex, options, neg_fp, &accum);
 
         accum.into_stats(stats.candidate_files, all_matches.len() as u32, &mut stats);
 
@@ -803,37 +731,8 @@ impl<'a> Executor<'a> {
         let accum = QueryStatsAccum::new();
         let neg_fp = self.neg_query_fingerprint;
 
-        let mut all_matches: Vec<Match> = candidates
-            .into_par_iter()
-            .filter_map(|fid| {
-                let file_info = self.get_file_info(fid)?;
-
-                if !options.type_filter.is_empty() {
-                    let ext = file_info
-                        .path
-                        .extension()
-                        .and_then(|e: &std::ffi::OsStr| e.to_str())
-                        .unwrap_or("");
-                    if !options.type_filter.iter().any(|e: &String| e == ext) {
-                        return None;
-                    }
-                }
-
-                accum.files_verified.fetch_add(1, Ordering::Relaxed);
-                accum
-                    .bytes_verified
-                    .fetch_add(file_info.size_bytes, Ordering::Relaxed);
-
-                let file_matches = self
-                    .verify_candidate(&file_info, regex, options, neg_fp, &accum)
-                    .into_option(&accum, &file_info)?;
-                accum
-                    .matches_found
-                    .fetch_add(file_matches.len() as u32, Ordering::Relaxed);
-                Some(file_matches)
-            })
-            .flatten()
-            .collect();
+        let mut all_matches =
+            self.verify_candidates_parallel(candidates, regex, options, neg_fp, &accum);
 
         let total_before_truncation = all_matches.len() as u32;
         if options.max_results > 0 && !options.files_only && all_matches.len() > options.max_results
@@ -887,6 +786,79 @@ impl<'a> Executor<'a> {
             }
             Err(e) => VerificationResult::Failed(e),
         }
+    }
+
+    /// Parallel verification of candidate files with backpressure and early termination.
+    ///
+    /// Extracts the common verification pattern used by all four execute methods.
+    /// Applies:
+    /// - Type filter (file extension)
+    /// - Early termination when `max_results` reached
+    /// - `ResourceGuard` backpressure when memory pressure >= 90%
+    /// - Negative cache lookup/recording
+    /// - File verification via `verify_candidate`
+    fn verify_candidates_parallel(
+        &self,
+        candidates: Vec<u32>,
+        regex: &Regex,
+        options: &QueryOptions,
+        neg_fp: u64,
+        accum: &QueryStatsAccum,
+    ) -> Vec<Match> {
+        let max_results = options.max_results;
+        let type_filter = options.type_filter.clone();
+        let resource_guard = self.resource_guard.clone();
+
+        candidates
+            .into_par_iter()
+            .filter_map(|fid| {
+                // Early termination: check if max_results already reached
+                // Uses Acquire ordering to ensure subsequent operations
+                // cannot be reordered before this check
+                if max_results > 0
+                    && accum.matches_found.load(Ordering::Acquire) >= max_results as u32
+                {
+                    return None;
+                }
+
+                // Backpressure: check ResourceGuard pressure
+                // TOCTOU race: pressure may change between check and file processing.
+                // This is acceptable — we'd rather skip a few files than OOM under pressure.
+                if let Some(ref guard) = resource_guard
+                    && guard.pressure() >= 90
+                {
+                    return None;
+                }
+
+                let file_info = self.get_file_info(fid)?;
+
+                // Type filter (file extension)
+                if !type_filter.is_empty() {
+                    let ext = file_info
+                        .path
+                        .extension()
+                        .and_then(|e: &std::ffi::OsStr| e.to_str())
+                        .unwrap_or("");
+                    if !type_filter.iter().any(|e: &String| e == ext) {
+                        return None;
+                    }
+                }
+
+                accum.files_verified.fetch_add(1, Ordering::Relaxed);
+                accum
+                    .bytes_verified
+                    .fetch_add(file_info.size_bytes, Ordering::Relaxed);
+
+                let file_matches = self
+                    .verify_candidate(&file_info, regex, options, neg_fp, accum)
+                    .into_option(accum, &file_info)?;
+                accum
+                    .matches_found
+                    .fetch_add(file_matches.len() as u32, Ordering::Relaxed);
+                Some(file_matches)
+            })
+            .flatten()
+            .collect()
     }
 
     fn verify_file(info: &FileInfo, regex: &Regex, options: &QueryOptions) -> Result<Vec<Match>> {
@@ -952,5 +924,107 @@ impl<'a> Executor<'a> {
         // SAFETY: See the SAFETY comment above; same invariants apply.
         let mmap = unsafe { memmap2::Mmap::map(&file)? };
         streaming::stream_file_chunked(&mmap[..], info.path.as_ref(), regex, effective_options)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::sync::Arc;
+
+    use tempfile::tempdir;
+
+    use crate::builder::Builder;
+    use crate::executor::{Executor, QueryOptions};
+    use crate::planner::Planner;
+    use crate::reader::Reader;
+    use llmosafe::ResourceGuard;
+
+    /// Helper: build an index with multiple files for backpressure testing.
+    fn build_test_index(root: &std::path::Path) -> Reader {
+        // Create multiple files to ensure there's work to skip under pressure
+        for i in 0..10 {
+            let content = format!("file {}\nsearch term {}\nanother line {}\n", i, i, i);
+            fs::write(root.join(format!("file_{}.txt", i)), content).unwrap();
+        }
+        let mut builder = Builder::new(root).unwrap();
+        builder.build().unwrap();
+        let index_path = root.join(".ix").join("shard.ix");
+        Reader::open(&index_path).unwrap()
+    }
+
+    #[test]
+    fn backpressure_skips_files_at_high_pressure() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let reader = build_test_index(root);
+
+        // Create a ResourceGuard with for_testing at 95% pressure (above 90% threshold)
+        let guard = ResourceGuard::for_testing(1024 * 1024, 0, 95);
+        let mut executor = Executor::new(&reader).with_resource_guard(Arc::new(guard));
+
+        let plan = Planner::plan_with_options("search term", Default::default()).unwrap();
+        let (matches, stats) = executor.execute(&plan, &QueryOptions::default()).unwrap();
+
+        // Under high pressure (95%), the backpressure filter should skip files
+        // We expect fewer files verified than the total number of files (10)
+        // Note: exact count depends on parallelism and timing, but should be < 10
+        assert!(
+            stats.files_verified < 10,
+            "High pressure (95%) should cause some files to be skipped, but verified {}",
+            stats.files_verified
+        );
+
+        // Under very high pressure, it's possible that all files are skipped
+        // before any matches are found. This is acceptable behavior — the
+        // backpressure mechanism is working as designed to prevent OOM.
+        // The test verifies that files_verified < 10, which confirms backpressure.
+    }
+
+    #[test]
+    fn backpressure_allows_files_at_low_pressure() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let reader = build_test_index(root);
+
+        // Create a ResourceGuard with for_testing at 25% pressure (below 90% threshold)
+        let guard = ResourceGuard::for_testing(1024 * 1024, 0, 25);
+        let mut executor = Executor::new(&reader).with_resource_guard(Arc::new(guard));
+
+        let plan = Planner::plan_with_options("search term", Default::default()).unwrap();
+        let (matches, stats) = executor.execute(&plan, &QueryOptions::default()).unwrap();
+
+        // Under low pressure (25%), all files should be processed
+        assert_eq!(
+            stats.files_verified, 10,
+            "Low pressure (25%) should allow all files to be processed"
+        );
+
+        // All 10 files should match (each contains "search term N")
+        assert_eq!(
+            matches.len(),
+            10,
+            "All 10 files should produce matches at low pressure"
+        );
+    }
+
+    #[test]
+    fn no_resource_guard_processes_all_files() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let reader = build_test_index(root);
+
+        // Create executor without ResourceGuard
+        let mut executor = Executor::new(&reader);
+
+        let plan = Planner::plan_with_options("search term", Default::default()).unwrap();
+        let (matches, stats) = executor.execute(&plan, &QueryOptions::default()).unwrap();
+
+        // Without backpressure, all files should be processed
+        assert_eq!(
+            stats.files_verified, 10,
+            "Without ResourceGuard, all files should be processed"
+        );
+        assert_eq!(matches.len(), 10, "All 10 files should produce matches");
     }
 }
