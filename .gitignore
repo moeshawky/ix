@@ -29,7 +29,7 @@ Thumbs.db
 .cursorrules
 .copilot/
 .copilot-instructions.md
-CLAUDE.md
+.CLAUDE.md
 .claude/
 .clinerules/
 .roo/
@@ -49,13 +49,9 @@ CLAUDE.md
 .aider*
 .gemini/
 .sniper/
-.claude/
-.codex/
-.cody/
-mcp_config.json
+.mcp_config.json
 
 # Agent-generated documents
-AGENTS.md
 PROMPT.md
 AGENTIC_README.md
 ABOUT.md
@@ -92,6 +88,7 @@ tests/docker_llmosafe_vendor/
 __pycache__/
 *.pyc
 ix-py/dist/
+*.egg-info/
 
 # Bench tooling / test scripts
 .bench-tools/
@@ -100,6 +97,8 @@ test_*.sh
 # Coverage / temporary
 /lcov.info
 ignored_file.txt
+*.tmp
+*.log
 
 # Dockerfiles for testing (generated/temporary)
 Dockerfile.*
@@ -112,3 +111,13 @@ tests/property_tests.proptest-regressions
 ix_test.ipynb
 .pi/
 RELEASE-ANNOUNCEMENT.md
+
+# Session/state files
+sess.json
+*.sess
+*.state
+
+# Node.js (if any)
+node_modules/
+dist/
+build/
