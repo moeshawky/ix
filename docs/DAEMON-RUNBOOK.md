@@ -73,6 +73,94 @@ journalctl -u ixd -f  # if using systemd
 
 ## Configuration
 
+### Configuration File (`.ixd.toml`)
+
+The daemon and CLI read `.ixd.toml` files to scope indexing behavior. The daemon discovers config files at startup:
+
+1. **Root config**: `.ixd.toml` at the watched root (e.g., `/path/to/repo/.ixd.toml`)
+2. **Subdirectory configs**: One level deep (e.g., `/path/to/repo/project-a/.ixd.toml`)
+
+Multiple configs are merged: root-level applies globally; subdirectory configs add `watch_roots` and `exclude_patterns`. Root-level `debounce_ms` takes precedence.
+
+#### Schema
+
+```toml
+# .ixd.toml
+
+# Directories within the watch root to index (optional).
+# When empty, the daemon indexes the entire root recursively.
+watch_roots = ["src", "lib", "tests"]
+
+# Directory names to exclude from indexing.
+# Defaults shown below — add or override as needed.
+exclude_patterns = [
+    ".git",
+    "node_modules",
+    "target",
+    "vendor",
+    "build",
+]
+
+# Debounce interval in milliseconds for file-watch event batching (optional).
+# Minimum 50 ms, maximum 10 000 ms. Omit or set to null for the default (500 ms).
+debounce_ms = 500
+```
+
+#### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `watch_roots` | `[String]` | `[]` | Subdirectories to scope indexing to. Empty = entire root. |
+| `exclude_patterns` | `[String]` | `.git`, `node_modules`, `target` | Directory names skipped during file walk. |
+| `debounce_ms` | `u64` or `null` | `null` (500 ms) | File-watch batching window in ms. Range: 50–10 000. Clamped to range. |
+
+#### Examples
+
+**Scope to specific directories:**
+```toml
+watch_roots = ["src", "lib", "include"]
+```
+
+Only `src/`, `lib/`, and `include/` will be indexed. All other directories under the watch root are ignored.
+
+**Add custom exclusions:**
+```toml
+exclude_patterns = [".git", "node_modules", "target", "vendor", "build"]
+```
+
+**Tune debounce for faster or quieter change pickup:**
+```toml
+# Faster: 100ms debounce — changes become searchable ~100ms after save.
+debounce_ms = 100
+
+# Slower: 2000ms debounce — fewer rebuilds during bulk operations.
+debounce_ms = 2000
+```
+
+The debounce window starts when the **first** file-change event arrives and resets every time a **new** event arrives within the window. Lower values give faster searchability; higher values reduce rebuild churn during bursty writes.
+
+**Per-project scoping with multi-root daemon:**
+```bash
+# /home/ubuntu/.ixd.toml — global excludes only
+# /home/ubuntu/project-a/.ixd.toml — watch src/ and lib/
+# /home/ubuntu/project-b/.ixd.toml — watch app/ only
+
+ixd /home/ubuntu
+```
+
+The daemon discovers all three config files. Project A indexes only its `src/` and `lib/`. Project B indexes only its `app/`. Global excludes apply everywhere.
+
+**Verification:**
+```bash
+# Start daemon with verbose output to see config loading
+ixd /path/to/root 2>&1 | grep "loaded config"
+
+# Expected:
+# ixd [project-name]: loaded config — 1 exclude patterns, 2 watch roots
+```
+
+For full schema and more examples, see [docs/.ixd.toml.md](.ixd.toml.md).
+
 ### Environment Variables
 
 | Variable | Default | Description |

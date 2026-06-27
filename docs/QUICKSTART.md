@@ -119,9 +119,22 @@ cargo build --release --features full
 
 ### Step 2: Start Daemon (1 minute)
 
+Before starting, optionally create an `.ixd.toml` to scope what the daemon watches:
+
+```bash
+cat > /path/to/repo/.ixd.toml << 'EOF'
+watch_roots = ["src", "lib"]
+exclude_patterns = [".git", "node_modules", "target", "vendor"]
+debounce_ms = 500
+EOF
+```
+
+This scopes indexing to `src/` and `lib/`, excludes common build directories, and sets a 500ms debounce. See [docs/.ixd.toml.md](.ixd.toml.md) for full schema.
+
 ```bash
 # Start watching a directory
 ./target/release/ixd /path/to/repo
+```
 
 # Expected output:
 # ixd: watching /path/to/repo...
