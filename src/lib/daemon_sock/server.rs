@@ -64,7 +64,7 @@ struct SearchSlots {
 }
 
 impl SearchSlots {
-    fn new(max: u32) -> Self {
+    const fn new(max: u32) -> Self {
         Self {
             max,
             available: std::sync::Mutex::new(max),

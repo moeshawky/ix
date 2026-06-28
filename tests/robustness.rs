@@ -296,30 +296,31 @@ fn test_builder_rss_fallback_code_path() {
 }
 
 #[test]
-fn test_format_v13_round_trip() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempdir()?;
+fn test_format_v13_round_trip() {
+    let dir = tempdir().unwrap();
     let root = dir.path();
 
     // ── Create known content in multiple files ──────────────────────
-    fs::write(root.join("alice.txt"), "Hello from Alice\n")?;
-    fs::write(root.join("bob.txt"), "Greetings from Bob\n")?;
-    fs::create_dir(root.join("sub"))?;
+    fs::write(root.join("alice.txt"), "Hello from Alice\n").unwrap();
+    fs::write(root.join("bob.txt"), "Greetings from Bob\n").unwrap();
+    fs::create_dir(root.join("sub")).unwrap();
     fs::write(
         root.join("sub/carol.txt"),
         "Carol says: needle in a haystack\n",
-    )?;
+    )
+    .unwrap();
 
     // ── Build the index ─────────────────────────────────────────────
-    let mut builder = Builder::new(root)?;
-    builder.build()?;
+    let mut builder = Builder::new(root).unwrap();
+    builder.build().unwrap();
 
     // ── Open the index file directly to check raw header bytes ──────
     let index_path = root.join(".ix/shard.ix");
     assert!(index_path.exists(), "index file should exist after build");
 
-    let mut raw_file = fs::File::open(&index_path)?;
+    let mut raw_file = fs::File::open(&index_path).unwrap();
     let mut header_bytes = [0u8; 256];
-    raw_file.read_exact(&mut header_bytes)?;
+    raw_file.read_exact(&mut header_bytes).unwrap();
 
     // Magic bytes "IX01" at offset 0
     assert_eq!(
@@ -329,7 +330,7 @@ fn test_format_v13_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Version major = 1 at offset 4
-    let version_major = u16::from_le_bytes(header_bytes[4..6].try_into()?);
+    let version_major = u16::from_le_bytes(header_bytes[4..6].try_into().unwrap());
     assert_eq!(
         version_major,
         format::VERSION_MAJOR,
@@ -337,7 +338,7 @@ fn test_format_v13_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Version minor >= VERSION_MINOR at offset 6
-    let version_minor = u16::from_le_bytes(header_bytes[6..8].try_into()?);
+    let version_minor = u16::from_le_bytes(header_bytes[6..8].try_into().unwrap());
     assert!(
         version_minor >= format::VERSION_MINOR,
         "version_minor {version_minor} must be >= VERSION_MINOR {}",
@@ -345,7 +346,7 @@ fn test_format_v13_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Flags at offset 8: HAS_CDX_INDEX must be set (always-on since v1.3)
-    let flags = u64::from_le_bytes(header_bytes[8..16].try_into()?);
+    let flags = u64::from_le_bytes(header_bytes[8..16].try_into().unwrap());
     assert!(
         flags & format::flags::HAS_CDX_INDEX != 0,
         "CDX index flag must be set in v1.3+ index (flags=0x{flags:X})"
@@ -356,7 +357,7 @@ fn test_format_v13_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // ── Open via Reader and verify parsed header fields ─────────────
-    let reader = Reader::open(&index_path)?;
+    let reader = Reader::open(&index_path).unwrap();
 
     // File count: we created alice.txt, bob.txt, sub/carol.txt
     assert_eq!(
@@ -384,8 +385,8 @@ fn test_format_v13_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     let mut executor = Executor::new(&reader);
 
     // "Hello" should match only alice.txt
-    let plan = Planner::plan("Hello", false)?;
-    let (matches, stats) = executor.execute(&plan, &QueryOptions::default())?;
+    let plan = Planner::plan("Hello", false).unwrap();
+    let (matches, stats) = executor.execute(&plan, &QueryOptions::default()).unwrap();
     assert_eq!(matches.len(), 1, "expected 1 match for 'Hello'");
     assert_eq!(stats.total_matches, 1);
     assert!(
@@ -394,8 +395,8 @@ fn test_format_v13_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // "needle" should match only sub/carol.txt
-    let plan2 = Planner::plan("needle", false)?;
-    let (matches2, stats2) = executor.execute(&plan2, &QueryOptions::default())?;
+    let plan2 = Planner::plan("needle", false).unwrap();
+    let (matches2, stats2) = executor.execute(&plan2, &QueryOptions::default()).unwrap();
     assert_eq!(matches2.len(), 1, "expected 1 match for 'needle'");
     assert_eq!(stats2.total_matches, 1);
     assert!(
@@ -407,8 +408,8 @@ fn test_format_v13_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // "from" should match both alice.txt and bob.txt
-    let plan3 = Planner::plan("from", false)?;
-    let (matches3, _) = executor.execute(&plan3, &QueryOptions::default())?;
+    let plan3 = Planner::plan("from", false).unwrap();
+    let (matches3, _) = executor.execute(&plan3, &QueryOptions::default()).unwrap();
     assert_eq!(matches3.len(), 2, "expected 2 matches for 'from'");
     let paths: Vec<_> = matches3
         .iter()
@@ -418,10 +419,8 @@ fn test_format_v13_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     assert!(paths.contains(&"bob.txt"));
 
     // ── Verify non-matching search returns empty gracefully ─────────
-    let plan4 = Planner::plan("zzzznotpresent", false)?;
-    let (matches4, stats4) = executor.execute(&plan4, &QueryOptions::default())?;
+    let plan4 = Planner::plan("zzzznotpresent", false).unwrap();
+    let (matches4, stats4) = executor.execute(&plan4, &QueryOptions::default()).unwrap();
     assert!(matches4.is_empty());
     assert_eq!(stats4.total_matches, 0);
-
-    Ok(())
 }

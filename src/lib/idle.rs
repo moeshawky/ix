@@ -71,6 +71,10 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "Instant::checked_sub returns None on Windows for large durations"
+    )]
     fn test_idle_tracker() {
         let mut tracker = IdleTracker::new();
         assert_eq!(tracker.state(), DaemonState::Active);

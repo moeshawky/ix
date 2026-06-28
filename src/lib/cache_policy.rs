@@ -122,7 +122,7 @@ impl AdaptiveCachePolicy {
     /// | Orange | 71–90    | 0.5               | false               | false            |
     /// | Red    | 91–100   | 1.0               | false               | false            |
     #[must_use]
-    pub fn directive_for_pressure(&self, pressure: u8) -> CacheDirective {
+    pub const fn directive_for_pressure(&self, pressure: u8) -> CacheDirective {
         let zone = PressureZone::from_pressure(pressure);
         let (evict_fraction, allow_new_entries, allow_mmap_pin) = zone.fields();
         CacheDirective {
