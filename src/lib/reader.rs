@@ -749,7 +749,7 @@ mod tests {
 
     // ── Rule 1: Error Path Tests ──────────────────────────────────────
 
-    /// Reader::open on an empty file must return Err (IndexTooSmall or Io).
+    /// `Reader::open` on an empty file must return Err (`IndexTooSmall` or `Io`).
     #[test]
     fn test_reader_empty_file_error() {
         let mut tmp = tempfile::tempfile().expect("create tempfile");
@@ -762,13 +762,10 @@ mod tests {
         let result = Reader::open(&path);
         assert!(result.is_err(), "empty file should fail Reader::open");
         // Should be IndexTooSmall, but Io is also acceptable
-        assert!(matches!(
-            &result,
-            Err(Error::IndexTooSmall) | Err(Error::Io(_))
-        ));
+        assert!(matches!(&result, Err(Error::IndexTooSmall | Error::Io(_))));
     }
 
-    /// DeltaReader::open on a file with wrong magic must return Err.
+    /// `DeltaReader::open` on a file with wrong magic must return Err.
     #[test]
     fn test_delta_reader_corrupt_magic_error() {
         let dir = tempfile::tempdir().expect("create tempdir");
@@ -788,7 +785,7 @@ mod tests {
         }
     }
 
-    /// DeltaReader::open returns Ok(default) when the file does not exist (not an error).
+    /// `DeltaReader::open` returns Ok(default) when the file does not exist (not an error).
     #[test]
     fn test_delta_reader_missing_file_returns_default() {
         let path = std::path::PathBuf::from("/tmp/ix_test_nonexistent_delta_xyzzy.ixd");

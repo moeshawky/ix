@@ -682,7 +682,7 @@ mod tests {
 
     // ── Rule 1: Error Path Tests ──────────────────────────────────────
 
-    /// Pass <256 bytes to Header::parse → must return Err(IndexTooSmall).
+    /// Pass <256 bytes to `Header::parse` → must return Err(IndexTooSmall).
     #[test]
     fn test_header_truncated_input_error() {
         let data = vec![0u8; 100];

@@ -944,8 +944,8 @@ mod tests {
     fn build_test_index(root: &std::path::Path) -> Reader {
         // Create multiple files to ensure there's work to skip under pressure
         for i in 0..10 {
-            let content = format!("file {}\nsearch term {}\nanother line {}\n", i, i, i);
-            fs::write(root.join(format!("file_{}.txt", i)), content).unwrap();
+            let content = format!("file {i}\nsearch term {i}\nanother line {i}\n");
+            fs::write(root.join(format!("file_{i}.txt")), content).unwrap();
         }
         let mut builder = Builder::new(root).unwrap();
         builder.build().unwrap();
@@ -963,8 +963,10 @@ mod tests {
         let guard = ResourceGuard::for_testing(1024 * 1024, 0, 95);
         let mut executor = Executor::new(&reader).with_resource_guard(Arc::new(guard));
 
-        let plan = Planner::plan_with_options("search term", Default::default()).unwrap();
-        let (matches, stats) = executor.execute(&plan, &QueryOptions::default()).unwrap();
+        let plan =
+            Planner::plan_with_options("search term", crate::planner::QueryOptions::default())
+                .unwrap();
+        let (_matches, stats) = executor.execute(&plan, &QueryOptions::default()).unwrap();
 
         // Under high pressure (95%), the backpressure filter should skip files
         // We expect fewer files verified than the total number of files (10)
@@ -991,7 +993,9 @@ mod tests {
         let guard = ResourceGuard::for_testing(1024 * 1024, 0, 25);
         let mut executor = Executor::new(&reader).with_resource_guard(Arc::new(guard));
 
-        let plan = Planner::plan_with_options("search term", Default::default()).unwrap();
+        let plan =
+            Planner::plan_with_options("search term", crate::planner::QueryOptions::default())
+                .unwrap();
         let (matches, stats) = executor.execute(&plan, &QueryOptions::default()).unwrap();
 
         // Under low pressure (25%), all files should be processed
@@ -1017,7 +1021,9 @@ mod tests {
         // Create executor without ResourceGuard
         let mut executor = Executor::new(&reader);
 
-        let plan = Planner::plan_with_options("search term", Default::default()).unwrap();
+        let plan =
+            Planner::plan_with_options("search term", crate::planner::QueryOptions::default())
+                .unwrap();
         let (matches, stats) = executor.execute(&plan, &QueryOptions::default()).unwrap();
 
         // Without backpressure, all files should be processed

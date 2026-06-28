@@ -357,6 +357,7 @@ impl Scanner {
 mod tests {
     use super::*;
     use crate::executor::QueryOptions;
+    use std::fmt::Write as _;
     use std::fs;
     use tempfile::tempdir;
 
@@ -425,8 +426,10 @@ mod tests {
         let scanner = Scanner::new(dir.path());
 
         // Filter to only .rs files
-        let mut opts = QueryOptions::default();
-        opts.type_filter = vec!["rs".to_string()];
+        let opts = QueryOptions {
+            type_filter: vec!["rs".to_string()],
+            ..QueryOptions::default()
+        };
         let matches = scanner.scan("TODO", false, false, &opts).unwrap();
         let matched_files: std::collections::BTreeSet<&str> = matches
             .iter()
@@ -442,8 +445,10 @@ mod tests {
         assert_eq!(matches.len(), 1);
 
         // Filter to only .md files
-        let mut opts = QueryOptions::default();
-        opts.type_filter = vec!["md".to_string()];
+        let opts = QueryOptions {
+            type_filter: vec!["md".to_string()],
+            ..QueryOptions::default()
+        };
         let matches = scanner.scan("TODO", false, false, &opts).unwrap();
         let matched_files: std::collections::BTreeSet<&str> = matches
             .iter()
@@ -483,8 +488,10 @@ mod tests {
         fs::write(dir.path().join("many.txt"), &content).unwrap();
 
         let scanner = Scanner::new(dir.path());
-        let mut opts = QueryOptions::default();
-        opts.max_results = 3;
+        let opts = QueryOptions {
+            max_results: 3,
+            ..QueryOptions::default()
+        };
         let matches = scanner.scan("needle", false, false, &opts).unwrap();
 
         assert_eq!(matches.len(), 3);
@@ -516,7 +523,7 @@ mod tests {
 
     // ── Rule 5: Integer Boundary Tests ─────────────────────────────────
 
-    /// File with many lines: line_numbers must be sequential and never wrap to 0.
+    /// File with many lines: `line_numbers` must be sequential and never wrap to 0.
     #[test]
     fn test_line_number_no_wrap() {
         let dir = tempdir().unwrap();
@@ -524,7 +531,7 @@ mod tests {
         // Use ~1000 lines (well within u32 range but exercises the counter)
         let mut content = String::new();
         for i in 1..=1000 {
-            content.push_str(&format!("line {i} with needle here\n"));
+            let _ = writeln!(content, "line {i} with needle here");
         }
         // Add a few extra non-matching lines at the end
         content.push_str("no match here\nno match here\n");
@@ -561,7 +568,7 @@ mod tests {
         );
     }
 
-    /// max_results boundary values: test 0, 1, large values.
+    /// `max_results` boundary values: test 0, 1, large values.
     #[test]
     fn test_max_results_boundary() {
         let dir = tempdir().unwrap();
@@ -573,18 +580,26 @@ mod tests {
         let scanner = Scanner::new(dir.path());
 
         // max_results = 0: unlimited (all 20 lines)
-        let mut opts = QueryOptions::default();
-        opts.max_results = 0;
+        let opts = QueryOptions {
+            max_results: 0,
+            ..QueryOptions::default()
+        };
         let matches = scanner.scan("needle", false, false, &opts).unwrap();
         assert_eq!(matches.len(), 20, "max_results=0 should return all matches");
 
         // max_results = 1: exactly 1 result
-        opts.max_results = 1;
+        let opts = QueryOptions {
+            max_results: 1,
+            ..QueryOptions::default()
+        };
         let matches = scanner.scan("needle", false, false, &opts).unwrap();
         assert_eq!(matches.len(), 1, "max_results=1 should return exactly 1");
 
         // max_results = large value (usize::MAX would be absurd, test with a known bound)
-        opts.max_results = 10_000;
+        let opts = QueryOptions {
+            max_results: 10_000,
+            ..QueryOptions::default()
+        };
         let matches = scanner.scan("needle", false, false, &opts).unwrap();
         assert_eq!(
             matches.len(),

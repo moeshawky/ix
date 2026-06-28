@@ -92,7 +92,7 @@ mod tests {
 
     // ── Rule 1: Error Path Tests ──────────────────────────────────────
 
-    /// Decoding from an empty slice must return TruncatedVarint.
+    /// Decoding from an empty slice must return `TruncatedVarint`.
     #[test]
     fn test_decode_empty_slice_error() {
         let mut pos = 0;
@@ -104,7 +104,7 @@ mod tests {
         }
     }
 
-    /// A varint with 11 consecutive continuation bytes must return OverflowVarint.
+    /// A varint with 11 consecutive continuation bytes must return `OverflowVarint`.
     #[test]
     fn test_decode_overflow_varint_error() {
         // 11 bytes, each with continuation bit set (0x80), followed by a final byte
@@ -118,7 +118,7 @@ mod tests {
         }
     }
 
-    /// Decoding from a slice that starts past the end must return TruncatedVarint.
+    /// Decoding from a slice that starts past the end must return `TruncatedVarint`.
     #[test]
     fn test_decode_position_past_end_error() {
         let data = [0x01u8];
@@ -137,7 +137,7 @@ mod tests {
         let mut rng = rand::thread_rng();
         let test_values: Vec<u64> = (0..20)
             .map(|_| rng.r#gen::<u64>() % (1 << rng.r#gen_range(0..64)))
-            .chain([0, 1, 127, 128, u32::MAX as u64, u64::MAX])
+            .chain([0, 1, 127, 128, u64::from(u32::MAX), u64::MAX])
             .collect();
 
         for &v in &test_values {
@@ -174,8 +174,8 @@ mod tests {
             128,
             255,
             256,
-            u32::MAX as u64,
-            (u32::MAX as u64) + 1,
+            u64::from(u32::MAX),
+            u64::from(u32::MAX) + 1,
             u64::MAX,
         ];
         for &v in &values {

@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::args::{BeaconStatusJson, ServiceAction, SimpleStatusJson};
 use crate::commands::find_index;
@@ -19,6 +19,7 @@ pub(crate) fn find_systemctl() -> std::ffi::OsString {
 }
 
 #[cfg(all(feature = "notify", not(target_os = "linux")))]
+#[allow(dead_code)]
 pub(crate) fn find_systemctl() -> std::ffi::OsString {
     std::ffi::OsString::from("systemctl")
 }
@@ -33,6 +34,8 @@ pub(crate) fn handle_service(action: &ServiceAction) -> ix::error::Result<()> {
 
     #[cfg(target_os = "linux")]
     {
+        use std::path::PathBuf;
+
         let home =
             std::env::var("HOME").map_err(|_| ix::error::Error::Config("HOME not set".into()))?;
         let service_dir = PathBuf::from(&home).join(".config/systemd/user");

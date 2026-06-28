@@ -223,9 +223,8 @@ mod tests {
             }
             let list = PostingList { entries };
 
-            let encoded = match list.encode() {
-                Ok(e) => e,
-                Err(_) => continue,
+            let Ok(encoded) = list.encode() else {
+                continue;
             };
 
             if encoded.len() < 4 {

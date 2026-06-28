@@ -93,7 +93,6 @@ pub fn maybe_decompress<'a>(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use std::io::Read;
     use std::path::Path;
 
     // ---------------------------------------------------------------------------
