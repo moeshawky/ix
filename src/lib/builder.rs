@@ -14,6 +14,7 @@ use crate::posting::{PostingEntry, PostingList};
 use crate::trigram::{Extractor, Trigram};
 use crate::varint;
 use ignore::WalkBuilder;
+#[cfg(unix)]
 use libc;
 use llmosafe::ResourceGuard;
 use memmap2::Mmap;
@@ -697,6 +698,7 @@ impl Builder {
 
     /// Windows: skip the upfront disk check (no statvfs).
     #[cfg(not(unix))]
+    #[allow(clippy::unnecessary_wraps)]
     fn free_bytes_at(_path: &Path) -> std::io::Result<u64> {
         Ok(u64::MAX)
     }
