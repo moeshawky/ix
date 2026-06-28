@@ -144,7 +144,11 @@ fn print_match(
 
         println!(
             "{{\"file\":\"{}\",\"line\":{},\"col\":{},\"content\":\"{}\",\"byte_offset\":{},\"context_before\":{:?},\"context_after\":{:?},\"is_binary\":{}}}",
-            m.file_path.display(),
+            m.file_path
+                .display()
+                .to_string()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\""),
             m.line_number,
             m.col,
             line_content
