@@ -786,6 +786,22 @@ fn handle_changes(
                 );
             }
         }
+        // Reset the beacon after inline compaction completes (success or failure),
+        // mirroring `compact()` (lines 846-851). Without this reset, the beacon
+        // remains stuck at "compacting" indefinitely, breaking health reporting
+        // and causing downstream consumers (e.g. codegraph-ferrari) to treat the
+        // daemon as perpetually busy. Caches were just invalidated on success, so
+        // pressure post-compaction is lower than the pre-compaction reading —
+        // `Idle` is the correct terminal state (the next `handle_changes` tick
+        // recomputes the pressure zone from scratch at lines 700/726-735).
+        let idle_status = DaemonStatus::Idle;
+        ctx.beacon.status = idle_status.to_string();
+        if let Err(e) = ctx.beacon.write_to(ctx.ix_dir) {
+            eprintln!("ixd [{}]: beacon write error: {e}", ctx.log_prefix);
+        }
+        if let Some(sock) = ctx.daemon_sock {
+            sock.set_status(&idle_status, ctx.builder.files_len());
+        }
     }
     ctx.idle.record_change();
 }
