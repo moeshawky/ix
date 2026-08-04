@@ -30,11 +30,16 @@ pub struct PyPipeline {
     handle: usize,
 }
 
-/// Helper: call a getter that returns via out-parameter, translate rc to PyResult.
+/// Helper: call a getter that returns via out-parameter, translate rc to `PyResult`.
 ///
 /// Return codes from llmosafe v0.7.5:
 ///   0 = success, 1 = invalid handle, 2 = null pointer, 3 = no result
-fn getter_error(name: &str, instance_id: u32, rc: i32) -> PyErr {
+///
+/// `instance_id` is the native handle type (`usize`) returned by
+/// `llmosafe_create` and accepted verbatim by every `c_abi` getter in
+/// llmosafe 0.7.7. Keep it as `usize` here so callers can pass the
+/// handle directly without a narrowing conversion.
+fn getter_error(name: &str, instance_id: usize, rc: i32) -> PyErr {
     let msg = match rc {
         1 => format!("{name} failed for instance {instance_id}: invalid handle"),
         2 => format!("{name} failed for instance {instance_id}: internal null pointer"),
@@ -77,42 +82,49 @@ impl PyPipeline {
     fn process(&mut self, text: &str) -> PyResult<PyObject> {
         let code =
             llmosafe::c_abi::llmosafe_sift_and_process(self.handle, text.as_ptr(), text.len());
-        let id = u32::try_from(self.handle)
-            .map_err(|_| pyo3::exceptions::PyOverflowError::new_err("pipeline handle overflow"))?;
+        // `self.handle` is already `PyPipeline::handle: usize`, the exact type
+        // every llmosafe 0.7.7 c_abi getter takes as its first parameter. Pass
+        // it through directly — no narrowing conversion is needed (and a `u32`
+        // narrowing would only create an unreachable overflow path on a 16-slot
+        // arena whose handles fit in 4 bits).
+        let id = self.handle;
 
         // Fetch all 6 getter values using the new out-parameter pattern (v0.7.5).
+        // Each c_abi getter's out-parameter is a raw `*mut T`; use `&raw mut` (the
+        // Rust 2024 idiom clippy's `borrow_as_ptr` enforces) rather than `&mut x`
+        // coerced to a raw pointer, which would create an unwanted aliasing borrow.
         let mut entropy: u16 = 0;
-        let rc = llmosafe::c_abi::llmosafe_get_entropy(id, &mut entropy);
+        let rc = llmosafe::c_abi::llmosafe_get_entropy(id, &raw mut entropy);
         if rc != 0 {
             return Err(getter_error("llmosafe_get_entropy", id, rc));
         }
 
         let mut surprise: u16 = 0;
-        let rc = llmosafe::c_abi::llmosafe_get_surprise(id, &mut surprise);
+        let rc = llmosafe::c_abi::llmosafe_get_surprise(id, &raw mut surprise);
         if rc != 0 {
             return Err(getter_error("llmosafe_get_surprise", id, rc));
         }
 
         let mut detection_flags: u8 = 0;
-        let rc = llmosafe::c_abi::llmosafe_get_detection_flags(id, &mut detection_flags);
+        let rc = llmosafe::c_abi::llmosafe_get_detection_flags(id, &raw mut detection_flags);
         if rc != 0 {
             return Err(getter_error("llmosafe_get_detection_flags", id, rc));
         }
 
         let mut oov_ratio: u8 = 0;
-        let rc = llmosafe::c_abi::llmosafe_get_oov_ratio(id, &mut oov_ratio);
+        let rc = llmosafe::c_abi::llmosafe_get_oov_ratio(id, &raw mut oov_ratio);
         if rc != 0 {
             return Err(getter_error("llmosafe_get_oov_ratio", id, rc));
         }
 
         let mut stages_executed: u8 = 0;
-        let rc = llmosafe::c_abi::llmosafe_get_stages_executed(id, &mut stages_executed);
+        let rc = llmosafe::c_abi::llmosafe_get_stages_executed(id, &raw mut stages_executed);
         if rc != 0 {
             return Err(getter_error("llmosafe_get_stages_executed", id, rc));
         }
 
         let mut step_count: u32 = 0;
-        let rc = llmosafe::c_abi::llmosafe_get_step_count(id, &mut step_count);
+        let rc = llmosafe::c_abi::llmosafe_get_step_count(id, &raw mut step_count);
         if rc != 0 {
             return Err(getter_error("llmosafe_get_step_count", id, rc));
         }
