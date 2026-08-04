@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.12.9] - 2026-08-04
+
+### Fixed
+- **Beacon stuck at "compacting" after inline compaction.** The `handle_changes`
+  inline compaction path set the beacon to `"compacting"` before `builder.build()`
+  but never reset it afterward, leaving the daemon permanently stuck at
+  `"compacting"` even after compaction succeeded. The standalone `compact()`
+  idle-window path already reset to `Idle` — the two paths are now symmetric.
+  Downstream health reporters (e.g. codegraph-ferrari) no longer see the daemon
+  as perpetually busy.
+- **ix-py compile errors against llmosafe 0.7.7.** llmosafe changed every c_abi
+  getter's first parameter from `u32` to `usize`; the Python bindings narrowed
+  the pipeline handle to `u32` and passed it to the getters, producing type
+  mismatches that broke `cargo build --workspace`. The handle is now passed
+  through as `usize` directly, and the 6 raw out-parameters use `&raw mut`
+  (Rust 2024 `borrow_as_ptr` idiom) instead of implicit `&mut` coercion.
+- **Escaped backslashes in JSON file paths** on Windows (`\\` no longer corrupted).
+- **Windows clippy + tier 3 dependency gate failures** resolved (CI green again).
+- **29 clippy violations** across the workspace resolved (clippy strict, zero
+  `#[allow(...)]`).
+
+### Changed
+- `[package] exclude` list added to `Cargo.toml` — agent/internal artifacts
+  (`AGENTS.md`, `SUBAGENT_ROLES.md`, `bugs/`, `.moeinclude`) are no longer
+  packaged into the published crate. These were inadvertently included in v0.12.8.
+
+## [0.12.8] - 2026-07-16
+
+### Added
+- TypedDict definitions for Python binding return types.
+- Dependabot for weekly Cargo dependency upgrades.
+
+### Changed
+- `.ixd.toml` config exposed to socket clients.
+- `.gitignore` hardened; agent config files now tracked deliberately.
+
+### Fixed
+- Executor backpressure and early termination on large result sets.
+
+### Docs
+- 8 documentation gaps covered across the socket API, daemon runbook, and README
+  (including `debounce_ms` in the `.ixd.toml` reference).
+
 ## [0.12.7] - 2026-06-15
 
 ### Added

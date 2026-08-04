@@ -1,6 +1,6 @@
 [package]
 name = "moeix"
-version = "0.12.8"
+version = "0.12.9"
 edition = "2024"
 description = "Sub-millisecond code search via sparse trigram indexing."
 homepage = "https://github.com/moeshawky/ix"
@@ -11,6 +11,15 @@ readme = "README.md"
 keywords = ["search", "trigram", "code-search", "indexing", "grep"]
 categories = ["command-line-utilities", "development-tools", "text-processing"]
 rust-version = "1.85"
+# Agent/internal artifacts must never ship in the published crate.
+# These were inadvertently included in v0.12.8 (AGENTS.md, SUBAGENT_ROLES.md,
+# bugs/ reached crates.io). Keep them out of the package going forward.
+exclude = [
+    "AGENTS.md",
+    "SUBAGENT_ROLES.md",
+    "bugs/",
+    ".moeinclude",
+]
 
 [workspace]
 members = [".", "ix-py"]
