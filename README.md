@@ -224,7 +224,7 @@ verified from actual indexes.
 | Block index overhead | **0.02%** of index | 12 B per 1024 trigrams |
 | CDX lookup latency | **<50 μs** | block index search + 1 ZSTD call |
 | Build RAM peak | **<8 MB** | HashMap flushes at 500K entries |
-| Safety ceiling | **60% RAM** | ResourceGuard (llmosafe), 80% fallback |
+| Safety ceiling | **60% RAM** | ResourceGuard, 80% proportional-RSS fallback |
 | Cold start | <3 s | From disk to first result |
 | Selective query (10% match) | 40 ms | 10× fewer files than ripgrep |
 

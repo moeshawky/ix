@@ -32,13 +32,25 @@ cargo build --release --features notify
 ### Step 2: Start the Daemon
 
 ```bash
-# Watch a directory
+# Watch a directory (foreground — for debugging or systemd units)
 ./target/release/ixd /path/to/repo
 
 # Expected output:
 # ixd: watching /path/to/repo...
 # ixd: initial build complete (1234 files, 56789 trigrams)
 # ixd: socket at /run/user/1000/ixd/{hash}.sock
+```
+
+To detach from the terminal and run in the background, use `--daemon` (double-fork +
+`setsid`; stdio is redirected to `/dev/null`, so no `nohup ... & disown` wrapper is
+needed):
+
+```bash
+# Detach and run in the background. The shell returns immediately (exit 0).
+./target/release/ixd --daemon /path/to/repo
+
+# Confirm it is live:
+ix service status
 ```
 
 ### Step 3: Verify Operation

@@ -63,10 +63,15 @@ pub(crate) fn try_ipc_search(
     params: &SearchParams,
     index_root: &Path,
     search_path_abs: &Path,
+    beacon: Option<&ix::format::Beacon>,
 ) -> Option<(Vec<ix::executor::Match>, ix::executor::QueryStats)> {
     use ix::daemon_sock::{DaemonClient, SearchQuery};
 
-    let mut client = DaemonClient::connect(index_root).ok()?;
+    // Prefer the daemon's authoritative socket path (recorded in beacon.json)
+    // so the client connects to the socket the daemon actually bound, even
+    // when environment/root canonicalization differs between the processes.
+    let preferred_socket = beacon.and_then(|b| b.socket_path.as_deref());
+    let mut client = DaemonClient::connect_with_socket(index_root, preferred_socket).ok()?;
 
     let query = SearchQuery {
         id: 1,
@@ -523,7 +528,8 @@ pub(crate) fn do_search(params: &SearchParams) -> ix::error::Result<()> {
                 #[cfg(feature = "notify")]
                 {
                     // Try IPC search with silent fallback
-                    match try_ipc_search(params, index_root, &search_path_abs) {
+                    match try_ipc_search(params, index_root, &search_path_abs, beacon_opt.as_ref())
+                    {
                         Some((m, s)) => (m, s),
                         None => execute_local_search(
                             params,

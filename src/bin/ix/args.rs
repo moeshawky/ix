@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[command(
     name = "ix",
     version = env!("CARGO_PKG_VERSION"),
-    about = "High-performance, safety-aware code search engine for humans and agents.",
+    about = "High-performance code search via sparse-trigram indexing.",
 after_help = r#"USAGE:
 
 Discovery: ix -l "pattern" → Unique file paths
@@ -86,7 +86,6 @@ EXAMPLES:
 
 NOTES:
  - Index stored in .ix/shard.ix relative to search path.
- - Uses LLMOSafe for resource monitoring and back-pressure.
  - Word-boundary (-w) uses regex internally but enforces whole-word semantics.
  - --decompress and --archive require: cargo install moeix --features full
  - --json schema: {file, line, col, content, byte_offset, context_before, context_after}"#

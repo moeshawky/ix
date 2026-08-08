@@ -16,11 +16,35 @@ pub struct DaemonClient {
 impl DaemonClient {
     /// Connect to the daemon socket for the given watched root.
     ///
+    /// Resolves the socket path from the environment via [`socket_path`].
+    ///
     /// # Errors
     ///
     /// Returns an error if the socket does not exist or the connection fails.
     pub fn connect(root: &Path) -> Result<Self> {
-        let sp = socket_path(root);
+        Self::connect_with_socket(root, None)
+    }
+
+    /// Connect to the daemon socket, preferring the authoritative socket path
+    /// recorded in the daemon's `beacon.json`.
+    ///
+    /// The daemon derives its socket path from its own canonical root and
+    /// environment, which may differ from the client's (`$XDG_RUNTIME_DIR`,
+    /// `$HOME`, or uid can differ between processes, and the root may
+    /// canonicalize differently). Recomputing `socket_path(root)` client-side
+    /// can therefore target a *different* socket than the one the daemon
+    /// actually bound, leaving the daemon "up but silent". When
+    /// `preferred_socket` is `Some`, it is used verbatim; otherwise the
+    /// environment-derived [`socket_path`] is the fallback.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the socket does not exist or the connection fails.
+    pub fn connect_with_socket(root: &Path, preferred_socket: Option<&Path>) -> Result<Self> {
+        let sp = match preferred_socket {
+            Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+            _ => socket_path(root),
+        };
         let stream = UnixStream::connect(&sp)?;
         stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
         stream.set_write_timeout(Some(std::time::Duration::from_secs(5)))?;

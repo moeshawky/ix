@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.0] - 2026-08-08
+
+### Added
+- **`ixd --daemon`** — self-detach flag. `ixd --daemon /path` double-forks +
+  `setsid`s and runs in the background, so launching the daemon no longer
+  requires a `nohup ... & disown` wrapper. The shell returns immediately
+  (exit 0); stdio is redirected to `/dev/null`; relative root paths are
+  resolved against the caller's working directory before detaching. Foreground
+  mode (no flag) remains the default for debugging and systemd units.
+
+### Fixed
+- **Client trusts the daemon's authoritative socket path** (`beacon.json`
+  `socket_path`). The client previously recomputed the socket path from its
+  own environment/root, which could differ from the socket the daemon actually
+  bound (`$XDG_RUNTIME_DIR`, `$HOME`, or root canonicalization can differ
+  between processes), leaving the daemon "up but silent" — index searches
+  silently fell back to the local scan even though a live daemon was serving.
+  `DaemonClient::connect_with_socket` now prefers `beacon.socket_path` verbatim
+  when present, falling back to the env-derived path only when absent.
+
+### Changed
+- Removed `llmosafe` reference from the `ix --help` text and daemon docs;
+  user-facing text no longer advertises the resource-monitoring dependency.
+- `docs/DAEMON-RUNBOOK.md` Quick Start documents the new `ixd --daemon` mode.
+
 ## [0.12.9] - 2026-08-04
 
 ### Fixed

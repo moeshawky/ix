@@ -86,6 +86,32 @@ mod tests {
     }
 
     #[test]
+    fn client_connect_prefers_beacon_socket_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().to_path_buf();
+
+        // Pin the daemon's socket to a known env-derived location.
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/tmp/ix-pref-sock-test") };
+        let mut server = DaemonServer::new(&root).expect("create server");
+        let authoritative = server.path().to_path_buf();
+        let _ = server.start();
+
+        // Same environment: the env-derived path matches the daemon's socket.
+        let mut c1 = DaemonClient::connect(&root).expect("connect via env-derived path");
+        c1.send(&ClientMessage::StatusQuery { id: 1 })
+            .expect("send");
+
+        // Drop XDG_RUNTIME_DIR so the env-derived path now resolves to a
+        // DIFFERENT socket (one the daemon never bound). The authoritative
+        // beacon socket path must still connect — this is the fix.
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+        let mut c2 = DaemonClient::connect_with_socket(&root, Some(&authoritative))
+            .expect("connect via authoritative beacon socket path");
+        c2.send(&ClientMessage::StatusQuery { id: 2 })
+            .expect("send");
+    }
+
+    #[test]
     fn from_notify_kind_maps_rename_correctly() {
         use notify::EventKind;
         use notify::event::ModifyKind;
