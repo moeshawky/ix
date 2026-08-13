@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.1] - 2026-08-13
+
+### Fixed
+- **Delta search returned zero results for base-absent trigrams**
+  (`execute_literal`, `execute_regex_indexed`): both paths early-returned
+  `Ok(empty)` on the first pattern trigram absent from the base shard,
+  never reaching `merge_delta_candidates`. On the live daemon-update path
+  (`Builder::update`, trunk base) a newly-added identifier whose trigrams
+  lived only in `shard.ix.delta` was invisible to search until an idle
+  compaction folded the delta into the base; under sustained writes the
+  30s-idle compaction never fired, so searches for new symbols failed
+  indefinitely. Now falls through to `execute_full_scan` (delta- and
+  tombstone-aware, same regex verify) when a trigram is base-absent but
+  delta-present, preserving the empty result only when the trigram is
+  absent from both base and delta. Added a C5 regression test that
+  mirrors the live path via `Builder::update` + `set_delta_path`.
+
+### Changed
+- Agent context files (`AGENTS.md`, `SUBAGENT_ROLES.md`) are no longer
+  shipped in the published crate.
+
 ## [0.13.0] - 2026-08-08
 
 ### Added

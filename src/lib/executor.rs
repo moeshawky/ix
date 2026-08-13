@@ -450,7 +450,19 @@ impl<'a> Executor<'a> {
             stats.trigrams_queried += 1;
             if let Some(info) = self.index.get_trigram(tri)? {
                 infos.push((tri, info));
+            } else if self
+                .delta
+                .as_ref()
+                .is_some_and(|d| d.postings.contains_key(&tri))
+            {
+                // Trigram absent from the base shard but present in the delta —
+                // the trigram-driven path cannot seed a candidate set from a
+                // base posting list it doesn't have. Fall back to a content
+                // scan, which is delta- and tombstone-aware (see
+                // [`Executor::execute_full_scan`]).
+                return Ok(self.execute_full_scan(regex, options));
             } else {
+                // Trigram absent from both base and delta — no file can match.
                 return Ok((vec![], stats));
             }
         }
@@ -557,6 +569,18 @@ impl<'a> Executor<'a> {
                 stats.trigrams_queried += 1;
                 if let Some(info) = self.index.get_trigram(tri)? {
                     infos.push((tri, info));
+                } else if self
+                    .delta
+                    .as_ref()
+                    .is_some_and(|d| d.postings.contains_key(&tri))
+                {
+                    // Required-literal trigram absent from the base shard but
+                    // present in the delta — the index-driven intersection
+                    // cannot proceed without a base posting list for this
+                    // fragment. Fall back to a content scan, which is delta-
+                    // and tombstone-aware and verifies the full regex against
+                    // every live file (see [`Executor::execute_full_scan`]).
+                    return Ok(self.execute_full_scan(regex, options));
                 } else {
                     return Ok((vec![], stats));
                 }

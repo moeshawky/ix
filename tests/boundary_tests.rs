@@ -494,3 +494,90 @@ fn test_c3_regex_delta_only_pattern_included_in_results() {
         matches2.iter().map(|m| &m.file_path).collect::<Vec<_>>()
     );
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// C5: Contract Mismatch — Live delta / base-absent trigram
+//
+// Regression test for bug B1: execute_literal early-returns zero results on
+// the first pattern trigram absent from the base shard but present in the
+// live delta, never reaching merge_delta_candidates. This is the exact live
+// daemon-update path (Builder::update, trunk base) that went undetected by
+// the existing C3 parameter tests, which all use Builder::build() (rebuilds
+// base, so the base-absent-trigram case never arises).
+//
+// Dialectical review vetted the minimal fix: on base-absent-but-delta-present
+// trigram, fall through to execute_full_scan (delta+tombstone-aware) instead
+// of early-returning zero. Regression test for this exact failure class
+// (pattern with one+ base-absent trigram) consults delta on the scan path as
+// well and must find the delta-only file despite no pattern-trigram overlap
+// with the base.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+#[test]
+fn test_c5_live_delta_present_trigram_found_via_full_scan() {
+    use std::fs::File;
+    use std::io::Write;
+
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    let index_dir = root.join(".ix");
+    std::fs::create_dir(&index_dir).unwrap();
+
+    // Build base index with ONE file whose content deliberately shares NO
+    // trigram with the query token we will search later.
+    let a_path = root.join("a.txt");
+    let mut a = File::create(&a_path).unwrap();
+    writeln!(a, "alpha base file common trigrams").unwrap();
+    drop(a);
+
+    let mut builder = Builder::new(root).unwrap();
+    builder.build().unwrap();
+
+    let index_path = index_dir.join("shard.ix");
+
+    // Add a NEW file containing a UNIQUE token whose trigrams do NOT appear
+    // in any base-indexed file. Use Builder::update (NOT build) so the file
+    // lives in the live delta and the base shard stays stale — exactly the
+    // daemon-update scenario.
+    let b_path = root.join("b.txt");
+    let mut b = File::create(&b_path).unwrap();
+    writeln!(b, "qqq_zephyr_unique_token_xyz").unwrap();
+    drop(b);
+
+    let mut builder2 = Builder::new(root).unwrap();
+    builder2.update(std::slice::from_ref(&b_path)).unwrap();
+
+    // Sanity: a delta file must now exist (else the test is not exercising
+    // bug B1's trigger at all).
+    let delta_path = index_dir.join("shard.ix.delta");
+    assert!(
+        delta_path.exists(),
+        "C5: Builder::update must produce shard.ix.delta"
+    );
+
+    // Wire the delta into the executor — the live search path the daemon
+    // uses. Without set_delta_path the executor would never see the delta
+    // and the test would be measuring the wrong thing.
+    let reader = Reader::open(&index_path).unwrap();
+    let mut executor = Executor::new(&reader);
+    executor.set_delta_path(delta_path);
+
+    let plan = Planner::plan("zephyr_unique_token", false).unwrap();
+    let (matches, _stats) = executor
+        .execute(&plan, &QueryOptions::default())
+        .unwrap();
+
+    // Pre-fix: 0 results (bug B1 early-returns on a base-absent trigram
+    // before consulting the delta). Post-fix: 1+ results from the delta
+    // file, found via execute_full_scan.
+    assert!(
+        !matches.is_empty(),
+        "C5: base-absent-but-delta-present trigram must find delta file via full-scan fallback, got: {:?}",
+        matches.iter().map(|m| &m.file_path).collect::<Vec<_>>()
+    );
+    assert!(
+        matches.iter().any(|m| m.file_path == b_path),
+        "C5: result should include delta-only file b.txt, got: {:?}",
+        matches.iter().map(|m| &m.file_path).collect::<Vec<_>>()
+    );
+}
