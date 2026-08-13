@@ -77,14 +77,31 @@ ix --type rs --type py "fn main"
 ## Daemon
 
 `ixd` watches one or more directories for file changes and incrementally
-updates the index:
+updates the index. **It builds the base index on startup**, so you do not
+need to run `ix --build` before it — running both rebuilds the same shard
+twice (verified: `ix --build` ran in ~12 ms on a 40-file / 240-trigram
+fixture, then `ixd` spent ~11 s rebuilding the identical base; source:
+`src/lib/daemon.rs:232` unconditionally calls `builder.build()`). Use
+`ix --build` only for a one-shot, no-daemon index.
 
 ```bash
-# Single directory
+# Foreground (debugging, or wrapped by systemd)
 ixd /path/to/repo
 
-# Multiple directories (v0.9+)
+# Detach into the background and return immediately (v0.13.0+)
+ixd --daemon /path/to/repo
+
+# Watch multiple directories (v0.9+)
 ixd /project-a /project-b /project-c
+```
+
+Expected startup output (v0.13.1, captured 2026-08-13):
+
+```
+ixd [repo-name]: watching ...
+ixd [repo-name]: loaded config — 3 exclude patterns, 0 watch roots
+ixd [repo-name]: initial build complete (40 files, 240 trigrams)
+ixd [repo-name]: socket at /run/user/1001/ixd/{hash}.sock
 ```
 
 Each directory runs on its own thread with independent index, watcher,

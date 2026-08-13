@@ -1,7 +1,7 @@
 # Daemon Operation Runbook
 
 **Purpose:** Operate and troubleshoot the `ixd` background indexing daemon  
-**Last Verified:** 2026-06-10  
+**Last Verified:** 2026-08-13  
 **Time to Complete:** 10 minutes
 
 ---
@@ -12,7 +12,7 @@ The `ixd` daemon watches a directory for file changes and incrementally updates 
 
 - **Continuous indexing**: Automatic index updates on file changes
 - **Unix domain socket**: Real-time notifications for editors/tooling
-- **Memory safety**: LLMOSafe integration with 60% RSS ceiling
+- **Memory safety**: `ResourceGuard` integration with 60% RSS ceiling
 - **Concurrent instance guard**: Prevents multiple daemons on same root
 
 **Binary:** `ixd` — standalone daemon binary
@@ -40,6 +40,12 @@ cargo build --release --features notify
 # ixd: initial build complete (1234 files, 56789 trigrams)
 # ixd: socket at /run/user/1000/ixd/{hash}.sock
 ```
+
+`ixd` performs its own initial build on startup (`src/lib/daemon.rs:232`
+unconditionally calls `builder.build()`), so there is no need to run
+`ix --build` first — running both rebuilds the same shard twice
+(measured 2026-08-13 on a 40-file / 240-trigram fixture: `ix --build`
+12 ms, then `ixd` ~11 s rebuilding the identical base).
 
 To detach from the terminal and run in the background, use `--daemon` (double-fork +
 `setsid`; stdio is redirected to `/dev/null`, so no `nohup ... & disown` wrapper is
@@ -438,7 +444,7 @@ ix --build /path/to/repo
 
 ## Safety Features
 
-### LLMOSafe Integration
+### ResourceGuard Integration
 
 The daemon uses `ResourceGuard` to monitor:
 
@@ -520,13 +526,19 @@ rm /path/to/repo/.ix/beacon.json
 
 ### Memory Limits
 
-```bash
-# Set explicit memory ceiling (default: 60%)
-export LLMOSAFE_CEILING=0.5  # 50% of system memory
+The 60% system-memory ceiling is hardcoded in `ResourceGuard`
+(`src/bin/ixd.rs:31`); it is not configurable via an environment
+variable. To control memory pressure in practice, scope what the daemon
+watches via `.ixd.toml` (see Configuration above) — smaller watch roots
+mean a smaller index and lower RSS.
 
+```bash
 # Monitor memory usage
 watch -n1 'ps -o pid,rss,cmd -p $(pgrep -f ixd)'
 ```
+
+If `ixd` reports `deferred (entropy: N)` frequently, reduce watch scope
+or close other memory-intensive applications, then restart the daemon.
 
 ### File Watch Limits
 

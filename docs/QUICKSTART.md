@@ -1,7 +1,7 @@
 # Quick Start Guide
 
 **Purpose**: Get started with ix code search in under 10 minutes  
-**Last Verified**: 2026-05-16  
+**Last Verified**: 2026-08-13  
 **Verification Command**: `./scripts/verify-docs.sh`  
 
 ---
@@ -44,6 +44,14 @@ cargo install moeix --features full
 
 ### Step 2: Build Index (30 seconds)
 
+> **Daemon users:** skip this step — `ixd` builds its own base index on
+> startup, so running `ix --build` first rebuilds the same shard twice
+> (verified: `ix --build` 12 ms + `ixd` ~11 s rebuilding the identical
+> base on a 40-file fixture; source: `src/lib/daemon.rs:232`). Use
+> `ix --build` only for a **one-shot, no-daemon** index. Jump to
+> [Daemon Quick Start](#daemon-quick-start) if you want continuous
+> indexing.
+
 ```bash
 cd /path/to/your/repo
 ix --build
@@ -81,7 +89,7 @@ ix --regex "fn\s+\w+_handler"
 # Check version
 ix --version
 
-# Expected: ix 0.6.3
+# Expected: ix 0.13.1
 
 # Check help
 ix --help
@@ -132,15 +140,22 @@ EOF
 This scopes indexing to `src/` and `lib/`, excludes common build directories, and sets a 500ms debounce. See [docs/.ixd.toml.md](.ixd.toml.md) for full schema.
 
 ```bash
-# Start watching a directory
+# Foreground (debugging, or wrapped by systemd)
 ./target/release/ixd /path/to/repo
+
+# Detach into the background and return immediately (v0.13.0+)
+./target/release/ixd --daemon /path/to/repo
 ```
 
 # Expected output:
-# ixd: watching /path/to/repo...
-# ixd: initial build complete (1234 files, 56789 trigrams)
-# ixd: socket at /run/user/1000/ixd/a1b2c3d4e5f67890.sock
+# ixd [repo-name]: watching /path/to/repo...
+# ixd [repo-name]: initial build complete (1234 files, 56789 trigrams)
+# ixd [repo-name]: socket at /run/user/1000/ixd/a1b2c3d4e5f67890.sock
 ```
+
+> `ixd` builds the base index on startup, so there's no need to run
+> `ix --build` first — that would build the same shard twice
+> (`src/lib/daemon.rs:232`).
 
 **Source**: `src/lib/daemon.rs:54-120`
 
