@@ -73,46 +73,12 @@ jobs:
           path: ${{ env.PROJECT }}-py/dist/
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # macOS wheels — ix only (skipped for sniper/llmosafe)
-  # ═══════════════════════════════════════════════════════════════════════════
-  build-macos:
-    name: macos (${{ matrix.target }})
-    # NOTE: Always runs for ix. For sniper/llmosafe, either remove this
-    # entire job or gate with github.repository check.
-    # env.PROJECT is NOT available in job-level if: conditions
-    # (GitHub Actions limitation).
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            target: aarch64
-          - os: macos-latest
-            target: x86_64
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build wheel
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: ${{ env.PROJECT }}-py
-          args: --release --out dist -i python${{ env.PYTHON_VERSION }}
-          manylinux: auto
-
-      - name: Upload wheel
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-macos-${{ matrix.target }}
-          path: ${{ env.PROJECT }}-py/dist/
-
-  # ═══════════════════════════════════════════════════════════════════════════
   # Windows wheels — ix only (skipped for sniper/llmosafe)
   # ═══════════════════════════════════════════════════════════════════════════
   build-windows:
     name: windows (${{ matrix.target }})
-    # NOTE: Always runs for ix. See build-macos comment above.
+    # NOTE: Always runs for ix. For sniper/llmosafe, either remove this
+    # entire job or gate with github.repository check.
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -168,7 +134,7 @@ jobs:
   # ═══════════════════════════════════════════════════════════════════════════
   publish-pypi:
     name: Publish → PyPI
-    needs: [build-linux, build-macos, build-windows]
+    needs: [build-linux, build-windows]
     if: |
       always() &&
       !cancelled() &&
