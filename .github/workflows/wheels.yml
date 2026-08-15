@@ -135,10 +135,13 @@ jobs:
   publish-pypi:
     name: Publish → PyPI
     needs: [build-linux, build-windows]
+    # Gate on OUR upstream build jobs only (not the run-wide !failure()), so a
+    # pre-existing publish-testpypi failure (e.g. test.pypi.org trusted-publisher
+    # misconfig) does NOT skip the real PyPI publish on a tag push.
     if: |
-      always() &&
       !cancelled() &&
-      !failure() &&
+      needs.build-linux.result == 'success' &&
+      needs.build-windows.result == 'success' &&
       startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment:
