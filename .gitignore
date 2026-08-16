@@ -1,6 +1,9 @@
 # Build output
 /target/
 
+# Local archive (not committed)
+.archive/
+
 # ix index files
 .ix/
 *.ix
