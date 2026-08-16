@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## Known Issues / TODO
+
+- **Windows binaries missing from the cargo-dist GitHub Release.** The `ixd`
+  daemon binary uses Unix-only APIs (`std::os::fd::AsRawFd`, Unix-domain
+  sockets, `daemonize`, signal handlers), so it does not compile for
+  `x86_64-pc-windows-msvc`. The cargo-dist `targets` are therefore Linux-only
+  for now (`x86_64-unknown-linux-gnu`), and `installers` is `["shell"]`.
+  To restore Windows release binaries, gate `ixd`'s Unix-specific code behind
+  `cfg(unix)` (with a Windows no-op / service path) so the `ix` CLI builds
+  cross-platform. PyPI wheels are unaffected — they still ship `win_amd64`
+  (the Python binding, not the daemon binary).
+
 ## [0.13.3] - 2026-08-16
 
 ### Fixed
