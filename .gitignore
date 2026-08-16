@@ -124,3 +124,6 @@ sess.json
 node_modules/
 dist/
 build/
+
+# Local diagnostic tools (not committed)
+actionlint
