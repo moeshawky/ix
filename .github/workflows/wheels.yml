@@ -128,6 +128,7 @@ jobs:
           repository-url: https://test.pypi.org/legacy/
           packages-dir: dist
           skip-existing: true
+          attestations: false
 
   # ═══════════════════════════════════════════════════════════════════════════
   # Publish to PyPI — on tag push only (not manual dispatch by default)
@@ -162,3 +163,5 @@ jobs:
         with:
           packages-dir: dist
           skip-existing: true
+          attestations: false
+          print-hash: true
