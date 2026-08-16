@@ -86,7 +86,7 @@ impl Scanner {
         let walker = WalkBuilder::new(&self.root)
             .hidden(false)
             .git_ignore(true)
-            .require_git(false)
+            .require_git(true) // within-repo .gitignore only; never ancestor ~/.gitignore (audit D4)
             .add_custom_ignore_filename(".ixignore")
             .filter_entry(move |entry| {
                 let path = entry.path();

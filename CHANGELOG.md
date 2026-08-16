@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.2] - 2026-08-16
+
+### Fixed
+- **Ancestor `.gitignore` silently excluded indexed files**
+  (`Builder`/`Scanner`/`Watcher`/`Reader` walkers): all four filesystem
+  walkers configured `.require_git(false)`, so the `ignore` crate climbed
+  ancestor directories and applied a PARENT `.gitignore` (such as the
+  user's `~/.gitignore`) on top of the project's own. A global `lib/`
+  rule there silently excluded every repo `lib/`-named directory from the
+  index, so file-scope and directory-scope searches returned 0 while
+  `rg`/`git`/`grep` found the matches. Switched all four sites to
+  `.require_git(true)` (ripgrep's default): `.gitignore` is applied only
+  WITHIN an actual git repo and never an ancestor `~/.gitignore`. The
+  repo's own `.gitignore` is still honored; `.ixignore` remains honored
+  in any directory (git or not). Matches ripgrep behavior.
+
+### Changed
+- **PyPI/`ix-py` release pipeline**: dropped the macOS wheel job, the
+  release now ships Linux (aarch64, x86_64) and Windows (x86_64) wheels.
+  `publish-pypi` no longer depends on a run-wide `!failure()` (which let
+  a separately-failing TestPyPI job skip the real publish); it now gates
+  only on `build-linux` + `build-windows` success plus the tag ref.
+  Attestation generation is disabled on both publish steps (the upstream
+  attestation post-processing was producing wheel bytes that PyPI
+  rejected as `ZIP archive not accepted: Trailing data`).
+
 ## [0.13.1] - 2026-08-13
 
 ### Fixed

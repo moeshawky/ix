@@ -424,3 +424,59 @@ fn test_format_v13_round_trip() {
     assert!(matches4.is_empty());
     assert_eq!(stats4.total_matches, 0);
 }
+
+// ── Adversarial regression: ancestor ~/.gitignore must NOT exclude repo files ──
+// Failure class (audit D4): `Builder`'s walker used `.require_git(false)`, which made the
+// `ignore` crate climb ancestor directories and apply a PARENT `.gitignore` (such as the
+// user's `~/.gitignore`, which commonly contains a Python-template `lib/` rule). That
+// silently excluded every `lib/`-named directory in the project from the index, so
+// file-scope and directory-scope searches returned 0 while `rg`/`git` found the matches.
+// With `.require_git(true)` (ripgrep's default), the walker applies `.gitignore` only
+// WITHIN an actual git repo and never an ancestor `.gitignore`, so tracked repo content
+// under `lib/` is indexed. This test pins that behavior.
+#[test]
+fn test_ancestor_gitignore_does_not_exclude_repo_lib() {
+    let outer = tempfile::tempdir().unwrap();
+    let ancestor = outer.path().join("ancestor");
+    let project = ancestor.join("project");
+    fs::create_dir_all(&project).unwrap();
+
+    // Ancestor `.gitignore` (simulates the user's `~/.gitignore`) with a `lib/` rule.
+    fs::write(ancestor.join(".gitignore"), "lib/\n").unwrap();
+
+    // Make `project` look like a git repo so require_git(true) applies within-repo
+    // gitignore only. (The ignore crate only checks for a `.git` entry to consider a dir a
+    // repo; an empty directory is sufficient for walker detection.)
+    fs::create_dir_all(project.join(".git")).unwrap();
+
+    // A tracked-style source file under a `lib/` directory with a unique trigram token.
+    let needle = "zMmergeItemNeedleXyz"; // 3-char trigrams, unique to this file
+    fs::create_dir_all(project.join("lib")).unwrap();
+    fs::write(project.join("lib").join("needle.rs"), needle).unwrap();
+
+    // Build the index rooted at the project.
+    let mut builder = Builder::new(&project).unwrap();
+    builder.build().unwrap();
+
+    let index_path = project.join(".ix").join("shard.ix");
+    let reader = Reader::open(&index_path).unwrap();
+    let mut executor = Executor::new(&reader);
+
+    let plan = Planner::plan(needle, false).unwrap();
+    let (matches, _stats) = executor.execute(&plan, &QueryOptions::default()).unwrap();
+
+    // Under the bug (require_git(false)) the ancestor `lib/` rule excluded `lib/needle.rs`,
+    // so matches would be empty. After the fix, the file is indexed and the needle is found.
+    assert_eq!(
+        matches.len(),
+        1,
+        "ancestor `.gitignore`'s `lib/` rule must NOT exclude the repo's own \
+         `lib/` directory from indexing; the file should be searchable"
+    );
+    assert!(
+        matches[0]
+            .file_path
+            .to_string_lossy()
+            .ends_with("lib/needle.rs")
+    );
+}

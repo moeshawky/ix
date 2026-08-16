@@ -11,7 +11,7 @@
 # To adopt for a new project:
 #   1. Copy this file to .github/workflows/wheels.yml
 #   2. Change PROJECT below
-#   3. Set up Trusted Publishing on pypi.org and test.pypi.org for the repo
+#   3. Set up Trusted Publishing on pypi.org for the repo
 #   4. Add a "pypi" environment in repo Settings > Environments
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -102,43 +102,13 @@ jobs:
           path: ${{ env.PROJECT }}-py/dist/
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # Publish to TestPyPI — on every tag push and manual dispatch
-  # ═══════════════════════════════════════════════════════════════════════════
-  publish-testpypi:
-    name: Publish → TestPyPI
-    needs: [build-linux]
-    if: always() && !cancelled() && !failure()
-    runs-on: ubuntu-latest
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/p/${{ env.PROJECT == 'ix' && 'moeix' || env.PROJECT == 'sniper' && 'moesniper' || 'llmosafe' }}
-    permissions:
-      id-token: write
-
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: wheels-*
-          path: dist
-          merge-multiple: true
-
-      - name: Publish to TestPyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-          packages-dir: dist
-          skip-existing: true
-          attestations: false
-
-  # ═══════════════════════════════════════════════════════════════════════════
   # Publish to PyPI — on tag push only (not manual dispatch by default)
   # ═══════════════════════════════════════════════════════════════════════════
   publish-pypi:
     name: Publish → PyPI
     needs: [build-linux, build-windows]
-    # Gate on OUR upstream build jobs only (not the run-wide !failure()), so a
-    # pre-existing publish-testpypi failure (e.g. test.pypi.org trusted-publisher
-    # misconfig) does NOT skip the real PyPI publish on a tag push.
+    # Gate on OUR upstream build jobs only (not a run-wide !failure()), so an
+    # unrelated job failing does NOT skip the real PyPI publish on a tag push.
     if: |
       !cancelled() &&
       needs.build-linux.result == 'success' &&

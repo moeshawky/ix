@@ -477,7 +477,12 @@ impl Builder {
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true)
-            .require_git(false)
+            // require_git(true): apply .gitignore only WITHIN a git repo, never ancestor
+            // (e.g. ~/.gitignore). With require_git(false) the ignore crate climbs parent
+            // directories and pulls in ~/.gitignore rules — a global `lib/` rule then
+            // silently excludes src/lib from the index (file-scope search returns 0
+            // while rg/find match). Matches ripgrep's default. See audit D4.
+            .require_git(true)
             .add_custom_ignore_filename(".ixignore")
             .filter_entry({
                 let exclude_patterns = self.exclude_patterns.clone();
