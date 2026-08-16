@@ -28,6 +28,11 @@ members = [".", "ix-py"]
 [workspace.metadata.dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.31.0"
+# Allow cargo-dist to run even when the generated release.yml differs from
+# what this cargo-dist version would emit. The committed release.yml was
+# hand-standardized (2026-06-10) and cargo-dist 0.31.0 flags it as "out of
+# date"; this avoids the `plan` job failing with "out of date contents".
+allow-dirty = true
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
