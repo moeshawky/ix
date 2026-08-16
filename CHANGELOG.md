@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.3] - 2026-08-16
+
+### Fixed
+- **Daemon built an empty index when `.ixd.toml` used relative `watch_roots`**
+  (audit D1): `Config::discover_under` returned `watch_roots` exactly as
+  written in `.ixd.toml` (e.g. `watch_roots = ["src", "test"]`), which are
+  relative to the search root. Both the `Builder` and the runtime `Watcher`
+  match with `Path::starts_with` on **absolute** file paths, so a relative
+  root never matched — every file was filtered out and `ixd` indexed **0
+  files** (while `ix --build --force` worked, because it does not apply
+  `.ixd.toml`). `discover_under` now resolves root-level `watch_roots`
+  against the search root and subdir `.ixd.toml` `watch_roots` against
+  their owning subdirectory, so the daemon indexes the intended sources
+  and keeps them updated on file changes. Adds regression test
+  `test_discover_under_resolves_relative_watch_roots`.
+
 ## [0.13.2] - 2026-08-16
 
 ### Fixed
