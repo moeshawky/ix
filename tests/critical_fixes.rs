@@ -140,3 +140,34 @@ fn test_json_output_golden() {
     assert_eq!(json["line"].as_u64().unwrap(), 1, "Should be line 1");
     assert_eq!(json["content"].as_str().unwrap(), "def test_func(): pass");
 }
+
+/// F1 (audit): multiple PATH arguments must fail loudly (exit 2) instead of
+/// silently searching only the first. The index is per-root, so >1 root is
+/// unsupported; the guard turns a silent partial result into an explicit error.
+#[test]
+fn test_multi_path_fails_loudly() {
+    let dir = TempDir::new().unwrap();
+    let a = dir.path().join("a.txt");
+    let b = dir.path().join("b.txt");
+    fs::write(&a, "needle in a").unwrap();
+    fs::write(&b, "needle in b").unwrap();
+
+    // Two paths -> exit 2 with the guard message (not a partial 1-match result).
+    let (code, _out, err) = run_ix_with_status(&[
+        "--no-index",
+        "needle",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "multiple PATH args must exit 2; stderr={err}");
+    assert!(
+        err.contains("multiple PATH arguments"),
+        "expected the multi-path guard message; stderr={err}"
+    );
+
+    // Single path -> still works (exit 0).
+    let (code, out, _err) =
+        run_ix_with_status(&["--no-index", "needle", a.to_str().unwrap()]);
+    assert_eq!(code, 0, "single path must still search; stderr={_err}");
+    assert!(out.contains("a.txt"), "single path must find a.txt; out={out}");
+}

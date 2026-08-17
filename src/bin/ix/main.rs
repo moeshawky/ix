@@ -106,6 +106,16 @@ fn main() {
         }
     }
 
+    // Multiple PATH arguments are accepted by the parser but only a single
+    // search root is supported (the index is per-root). Fail loudly instead of
+    // silently searching only the first (audit F1).
+    if cli.build.is_none() && cli.path.len() > 1 {
+        eprintln!(
+            "ix: multiple PATH arguments are not supported; pass a single root (or search from their common parent)"
+        );
+        std::process::exit(2);
+    }
+
     // Determine path and handle build action
     let search_path = if let Some(ref build_path) = cli.build {
         // Build mode: path comes from --build flag, or CWD if not specified

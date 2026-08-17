@@ -20,6 +20,10 @@ SEARCH MODES (mutually exclusive):
 1. Literal (default):   ix "timeout" → exact substring
 2. Word-boundary:       ix -w "timeout" → whole-word (matches "timeout" but not "timeoutExceeded")
 3. Regex:               ix --regex "err(or|no).*timeout" → full regex syntax
+   In regex mode the PATTERN is a regex: metacharacters (.*+?()[]|) are active and a
+   space is a literal space. So `--regex "async expandQuery"` matches that exact
+   contiguous text only. To match "async" and "expandQuery" with anything between
+   them, use `--regex "async.*expandQuery"` (or `async[\s\S]*expandQuery` with -U).
 
 FILTERING:
 
@@ -95,7 +99,10 @@ pub(crate) struct Cli {
     #[arg(value_name = "PATTERN")]
     pub(crate) pattern: Option<String>,
 
-    /// The directories to search in (one or more).
+    /// The directory to search in (a single root; `-` for stdin).
+    ///
+    /// The parser accepts `0..` positional paths so a stray extra path fails
+    /// loudly (see main.rs) instead of being silently ignored.
     #[arg(value_name = "PATH", num_args = 0..)]
     pub(crate) path: Vec<PathBuf>,
 
@@ -109,7 +116,9 @@ pub(crate) struct Cli {
 )]
     pub(crate) build: Option<PathBuf>,
 
-    /// Interpret the pattern as a regular expression.
+    /// Interpret the pattern as a regular expression (metacharacters active; a space
+    /// is a literal space, so a multi-word pattern matches contiguously unless you
+    /// use e.g. `.*` between the words).
     #[arg(short, long)]
     pub(crate) regex: bool,
 
