@@ -233,6 +233,8 @@ fn test_search_path_prefix_filtering() {
         multiline: false,
         archive: false,
         binary: false,
+        count_only: false,
+        files_only: false,
         search_path: Some(root.join("src")),
         progressive: false,
         chunk_size_bytes: 0,

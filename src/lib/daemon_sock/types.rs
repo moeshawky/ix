@@ -201,7 +201,7 @@ pub enum ServerMessage {
 
 /// Search query parameters sent from client to daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-// SearchQuery is a wire format struct with 7 boolean query flags
+// SearchQuery is a wire format struct with 9 boolean query flags
 // that cannot be decomposed without breaking the JSON protocol.
 #[allow(clippy::struct_excessive_bools)]
 pub struct SearchQuery {
@@ -254,6 +254,13 @@ pub struct SearchQuery {
     /// 0 means use the streaming module's default (1 `MiB`).
     #[serde(default)]
     pub chunk_overlap_bytes: usize,
+    /// Count only: return the match count instead of matches (audit F3 —
+    /// carried over IPC so `--count` behaves identically to the local path).
+    #[serde(default)]
+    pub count_only: bool,
+    /// Files only: return distinct file paths instead of matches (audit F3).
+    #[serde(default)]
+    pub files_only: bool,
 }
 
 /// Graceful shutdown notice sent from server to clients.

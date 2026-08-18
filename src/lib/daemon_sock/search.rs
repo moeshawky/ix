@@ -82,10 +82,10 @@ pub(crate) fn execute_search_inner(
     )?;
 
     let options = QueryOptions {
-        count_only: false,
-        files_only: false,
+        count_only: query.count_only,
+        files_only: query.files_only,
         max_results: query.max_results,
-        type_filter: query.file_types.clone(),
+        type_filter: crate::file_types::expand(&query.file_types),
         context_lines: query.context_lines,
         decompress: query.decompress,
 
@@ -178,10 +178,10 @@ pub(crate) fn execute_search_progressive_inner(
     )?;
 
     let options = QueryOptions {
-        count_only: false,
-        files_only: false,
+        count_only: query.count_only,
+        files_only: query.files_only,
         max_results: query.max_results,
-        type_filter: query.file_types.clone(),
+        type_filter: crate::file_types::expand(&query.file_types),
         context_lines: query.context_lines,
         decompress: query.decompress,
 

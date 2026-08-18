@@ -336,6 +336,8 @@ mod tests {
             multiline: false,
             archive: false,
             binary: false,
+            count_only: false,
+            files_only: false,
             search_path: Some(PathBuf::from("/abs/path")),
             progressive: false,
             chunk_size_bytes: 0,

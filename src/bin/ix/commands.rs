@@ -86,6 +86,8 @@ pub(crate) fn try_ipc_search(
         multiline: params.flags.multiline,
         archive: params.flags.archive,
         binary: params.flags.binary,
+        count_only: params.flags.count,
+        files_only: params.flags.files_only,
         search_path: Some(search_path_abs.to_path_buf()),
         progressive: false,
         chunk_size_bytes: params.chunk_size,
@@ -463,34 +465,9 @@ pub(crate) fn do_search(params: &SearchParams) -> ix::error::Result<()> {
 
     let start_time = std::time::Instant::now();
 
-    let mut extensions = Vec::new();
-    for t in params.file_types {
-        match t.as_str() {
-            "rs" => extensions.push("rs".to_string()),
-            "py" => extensions.push("py".to_string()),
-            "ts" => extensions.push("ts".to_string()),
-            "js" => extensions.push("js".to_string()),
-            "go" => extensions.push("go".to_string()),
-            "c" => extensions.push("c".to_string()),
-            "cpp" => {
-                extensions.push("cpp".to_string());
-                extensions.push("cc".to_string());
-                extensions.push("cxx".to_string());
-            }
-            "h" => {
-                extensions.push("h".to_string());
-                extensions.push("hpp".to_string());
-            }
-            "md" => extensions.push("md".to_string()),
-            "toml" => extensions.push("toml".to_string()),
-            "yaml" => {
-                extensions.push("yaml".to_string());
-                extensions.push("yml".to_string());
-            }
-            "json" => extensions.push("json".to_string()),
-            other => extensions.push(other.to_string()),
-        }
-    }
+    // Shared file-type → extension map (audit F6): the same mapping the
+    // daemon applies, so `--type` resolves identically locally and over IPC.
+    let extensions = ix::file_types::expand(params.file_types);
 
     if params.flags.archive && !params.flags.no_index {
         eprintln!("ix: --archive is only supported with --no-index (raw file scanner)");

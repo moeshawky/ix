@@ -36,7 +36,7 @@
 //!
 //! `api` · `archive` · `bloom` · `builder` · `cache_policy` · `config` ·
 //! `daemon` · `daemon_sock` · `decompress` · `error` · `executor` ·
-//! `format` · `idle` · `neg_cache` · `planner` · `posting` ·
+//! `file_types` · `format` · `idle` · `neg_cache` · `planner` · `posting` ·
 //! `posting_cache` · `reader` · `regex_pool` · `scanner` · `streaming` ·
 //! `string_pool` · `trigram` · `varint` · `watcher`
 //!
@@ -111,6 +111,8 @@ pub mod error;
 pub mod executor;
 
 pub use executor::ProgressiveBatch;
+/// File-type → extension expansion, shared by the CLI and the daemon.
+pub mod file_types;
 /// Index file format definitions and magic bytes.
 pub mod format;
 /// Idle timeout tracker for the daemon process.
