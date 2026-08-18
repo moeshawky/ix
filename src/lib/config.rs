@@ -4,6 +4,7 @@
 //! behaviour. Each config file specifies which subdirectories to watch
 //! and which patterns to exclude.
 
+use crate::Builder;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -135,6 +136,22 @@ impl Config {
         merged.exclude_patterns.dedup();
 
         Ok(merged)
+    }
+
+    /// Apply this configuration's `exclude_patterns` and `watch_roots`
+    /// to a [`Builder`], returning the configured builder.
+    ///
+    /// This is the single source of truth for wiring config → builder,
+    /// used by both the CLI (`ix --build`) and the daemon (`ixd`).
+    /// Ensures `--build` and the daemon scope identically (audit F2).
+    pub fn apply_to_builder(&self, mut builder: Builder) -> Builder {
+        if !self.exclude_patterns.is_empty() {
+            builder = builder.with_exclude_patterns(self.exclude_patterns.clone());
+        }
+        if !self.watch_roots.is_empty() {
+            builder = builder.with_watch_roots(self.watch_roots.clone());
+        }
+        builder
     }
 }
 

@@ -188,7 +188,8 @@ fn run_single_root(
         }
     };
 
-    // Discover and apply `.ixd.toml` configuration
+    // Discover and apply `.ixd.toml` configuration via shared helper
+    // so `ix --build` and the daemon scope identically (audit F2).
     let (watch_roots, exclude_patterns, debounce_ms) =
         if let Ok(config) = Config::discover_under(&root) {
             if !config.exclude_patterns.is_empty() || !config.watch_roots.is_empty() {
@@ -201,10 +202,7 @@ fn run_single_root(
             let wr = config.watch_roots.clone();
             let ep = config.exclude_patterns.clone();
             let db = config.debounce_ms;
-            builder = builder.with_exclude_patterns(config.exclude_patterns);
-            if !config.watch_roots.is_empty() {
-                builder = builder.with_watch_roots(config.watch_roots);
-            }
+            builder = config.apply_to_builder(builder);
             (wr, ep, db)
         } else {
             (Vec::new(), Vec::new(), None)

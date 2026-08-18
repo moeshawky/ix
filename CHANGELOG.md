@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **IPC search parity: `--type` expansion and `-c`/`-l -n N` flags now honored over daemon** (audit F3, F6): The `SearchQuery` wire format gained `count_only` and `files_only` fields (total 9 booleans). The daemon's `execute_search_inner` and `execute_search_progressive_inner` now read these and use the shared `file_types::expand()` map (cpp→[cpp,cc,cxx], h→[h,hpp], yaml→[yaml,yml]). CLI `try_ipc_search` populates the new fields. Before the fix: IPC `--type cpp` returned 1 file (`b.cpp` only) instead of 3 (`.cc`, `.cpp`, `.cxx`); IPC `qq -l -n 2` returned 1 distinct file instead of 2; IPC `qq -c` count diverged from local. After the fix: IPC matches local exactly on all three axes. Adds `file_types` module with unit tests and `SearchQuery` serde round-trip test.
+
+- **`ix --build` now honors `.ixd.toml` `watch_roots` identically to the daemon** (audit F2): Introduced shared `Config::apply_to_builder()` that applies both `exclude_patterns` and `watch_roots` to the `Builder`. Both `do_build` (CLI) and `run_single_root` (daemon) now call this helper. Before the fix: `--build` ignored `watch_roots` and indexed the entire tree (e.g. 3 files including `outer/drop.txt`), while the daemon honored `watch_roots = ["src"]` and indexed only `src/file1.rs` (1 file). After the fix: CLI and daemon produce identical file sets. Adds regression test `test_build_scope_matches_daemon_with_watch_roots`.
+
 ## Known Issues / TODO
 
 - **Windows binaries missing from the cargo-dist GitHub Release.** The `ixd`

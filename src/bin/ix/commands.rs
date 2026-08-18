@@ -226,14 +226,10 @@ pub(crate) fn do_build(
     builder.set_decompress(decompress);
     builder.set_max_file_size(max_file_size_mb * 1024 * 1024);
 
-    // Load .ixd.toml config if present to apply exclude_patterns.
-    // Only apply when a config file actually exists to avoid changing
-    // default CLI behavior (the daemon uses its own defaults).
-    if path.join(".ixd.toml").exists()
-        && let Ok(config) = Config::discover_under(path)
-        && !config.exclude_patterns.is_empty()
-    {
-        builder = builder.with_exclude_patterns(config.exclude_patterns);
+    // Apply config (exclude_patterns + watch_roots) so `ix --build`
+    // and the daemon scope identically (audit F2).
+    if let Ok(config) = Config::discover_under(path) {
+        builder = config.apply_to_builder(builder);
     }
 
     let out = builder.build()?;
