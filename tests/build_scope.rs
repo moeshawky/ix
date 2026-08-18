@@ -18,7 +18,11 @@ fn build_cli(root: &PathBuf) -> Vec<PathBuf> {
         .args(["--force"])
         .output()
         .expect("ix --build failed");
-    assert!(output.status.success(), "ix --build failed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "ix --build failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // Read the index and list files
     let ix_dir = root.join(".ix");
@@ -88,8 +92,8 @@ fn test_build_scope_matches_daemon_with_watch_roots() {
     //   src/file1.rs
     //   outer/drop.txt  (should be excluded)
     let base = std::env::temp_dir().join(format!("ix_build_scope_{}", std::process::id()));
-    fs::create_dir_all(&base.join("src")).unwrap();
-    fs::create_dir_all(&base.join("outer")).unwrap();
+    fs::create_dir_all(base.join("src")).unwrap();
+    fs::create_dir_all(base.join("outer")).unwrap();
     fs::write(base.join("src/file1.rs"), "fn main() {}\n").unwrap();
     fs::write(base.join("outer/drop.txt"), "excluded\n").unwrap();
     fs::write(
@@ -100,17 +104,25 @@ fn test_build_scope_matches_daemon_with_watch_roots() {
 
     // CLI build
     let cli_files = build_cli(&base);
-    assert_eq!(cli_files, vec![PathBuf::from("src/file1.rs")],
-        "CLI --build must honor watch_roots and only index src/file1.rs");
+    assert_eq!(
+        cli_files,
+        vec![PathBuf::from("src/file1.rs")],
+        "CLI --build must honor watch_roots and only index src/file1.rs"
+    );
 
     // Daemon build
     let daemon_files = build_daemon(&base);
-    assert_eq!(daemon_files, vec![PathBuf::from("src/file1.rs")],
-        "Daemon must honor watch_roots and only index src/file1.rs");
+    assert_eq!(
+        daemon_files,
+        vec![PathBuf::from("src/file1.rs")],
+        "Daemon must honor watch_roots and only index src/file1.rs"
+    );
 
     // They must match exactly
-    assert_eq!(cli_files, daemon_files,
-        "CLI --build and daemon must produce identical file sets when watch_roots is set");
+    assert_eq!(
+        cli_files, daemon_files,
+        "CLI --build and daemon must produce identical file sets when watch_roots is set"
+    );
 
     // Cleanup
     let _ = fs::remove_dir_all(&base);

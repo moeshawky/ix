@@ -166,8 +166,10 @@ fn test_multi_path_fails_loudly() {
     );
 
     // Single path -> still works (exit 0).
-    let (code, out, _err) =
-        run_ix_with_status(&["--no-index", "needle", a.to_str().unwrap()]);
+    let (code, out, _err) = run_ix_with_status(&["--no-index", "needle", a.to_str().unwrap()]);
     assert_eq!(code, 0, "single path must still search; stderr={_err}");
-    assert!(out.contains("a.txt"), "single path must find a.txt; out={out}");
+    assert!(
+        out.contains("a.txt"),
+        "single path must find a.txt; out={out}"
+    );
 }

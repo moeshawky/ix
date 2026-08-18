@@ -563,9 +563,7 @@ fn test_c5_live_delta_present_trigram_found_via_full_scan() {
     executor.set_delta_path(delta_path);
 
     let plan = Planner::plan("zephyr_unique_token", false).unwrap();
-    let (matches, _stats) = executor
-        .execute(&plan, &QueryOptions::default())
-        .unwrap();
+    let (matches, _stats) = executor.execute(&plan, &QueryOptions::default()).unwrap();
 
     // Pre-fix: 0 results (bug B1 early-returns on a base-absent trigram
     // before consulting the delta). Post-fix: 1+ results from the delta

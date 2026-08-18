@@ -144,6 +144,7 @@ impl Config {
     /// This is the single source of truth for wiring config → builder,
     /// used by both the CLI (`ix --build`) and the daemon (`ixd`).
     /// Ensures `--build` and the daemon scope identically (audit F2).
+    #[must_use]
     pub fn apply_to_builder(&self, mut builder: Builder) -> Builder {
         if !self.exclude_patterns.is_empty() {
             builder = builder.with_exclude_patterns(self.exclude_patterns.clone());

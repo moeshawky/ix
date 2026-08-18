@@ -14,6 +14,7 @@
 /// `cpp` → `cpp`, `cc`, `cxx`; `h` → `h`, `hpp`; `yaml` → `yaml`, `yml`.
 /// Every other name passes through unchanged (a name is treated as a literal
 /// extension, so `rs` → `rs` and an arbitrary `myext` → `myext`).
+#[must_use]
 pub fn expand(types: &[String]) -> Vec<String> {
     let mut extensions = Vec::new();
     for t in types {
