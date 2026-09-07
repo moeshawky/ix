@@ -58,11 +58,9 @@ fn main() {
                 #[allow(clippy::redundant_clone)]
                 cli.path.clone()
             };
-            for path in &paths {
-                if let Err(e) = ix::daemon::run(path) {
-                    eprintln!("Error watching {}: {e}", path.display());
-                    std::process::exit(1);
-                }
+            if let Err(e) = ix::daemon::run_many(&paths) {
+                eprintln!("Error watching roots: {e}");
+                std::process::exit(1);
             }
             return;
         }

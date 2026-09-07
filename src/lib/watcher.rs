@@ -99,6 +99,7 @@ impl Watcher {
                             || name == ".venv"
                             || name == "venv"
                             || name == ".ix"
+                            || name == ".codegraph"
                             || exclude_patterns.iter().any(|p| p == name))
                     {
                         return false;

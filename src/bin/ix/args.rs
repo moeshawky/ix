@@ -244,12 +244,24 @@ pub(crate) enum ServiceAction {
         #[arg(value_name = "PATH")]
         path: Option<PathBuf>,
     },
-    /// Start the ixd systemd service.
-    Start,
-    /// Stop the ixd systemd service.
-    Stop,
-    /// Restart the ixd systemd service.
-    Restart,
+    /// Start the ixd background daemon.
+    Start {
+        /// Directory to watch (defaults to current directory).
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+    },
+    /// Stop the running ixd daemon.
+    Stop {
+        /// Directory to stop daemon for (defaults to current directory).
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+    },
+    /// Restart the ixd background daemon.
+    Restart {
+        /// Directory to watch (defaults to current directory).
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+    },
     /// Check the status of the ixd daemon.
     Status {
         /// Directory to check (walks upward to find .ix/, defaults to CWD).

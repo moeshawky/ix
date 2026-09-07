@@ -2,7 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.14.0] - 2026-09-07
+
+### Added
+- **`ixd --stop`** — clean daemon shutdown. `ixd --stop [path]` locates the running
+  daemon via its live `.ix/beacon.json`, sends `SIGTERM`, and confirms process
+  termination. Handles multi-root daemon PID deduplication and automatic stale
+  beacon cleanup.
+- **Native `ix service` aliases without systemd lock-in.** `ix service start`,
+  `ix service stop`, and `ix service restart` now delegate directly to `ixd --daemon`
+  and `ixd --stop`. Works across all Unix environments (containers, macOS, WSL)
+  without requiring `systemctl --user`. Commands now accept an optional target `[PATH]`
+  argument, defaulting to the current directory.
+- **Support for legacy nested `[watch]` and `[build]` tables in `.ixd.toml`.**
+  Configurations using TOML section tables are automatically normalized into
+  canonical flat fields (`watch_roots`, `exclude_patterns`, `debounce_ms`),
+  preventing silent exclusion dropping.
+
+### Fixed
+- **Perpetual indexing loop on active repositories.** Added `.codegraph` to built-in
+  directory exclusions in `watcher.rs`, `builder.rs`, and default config exclusions,
+  preventing metadata churn feedback loops from starving the daemon.
+- **`ix --daemon` multi-root blocking.** `ix --daemon` now passes all target paths
+  to `ix::daemon::run_many(&paths)` concurrently instead of sequentially blocking
+  on the first path.
+
+## [0.13.4] - 2026-08-16
 
 ### Fixed
 - **IPC search parity: `--type` expansion and `-c`/`-l -n N` flags now honored over daemon** (audit F3, F6): The `SearchQuery` wire format gained `count_only` and `files_only` fields (total 9 booleans). The daemon's `execute_search_inner` and `execute_search_progressive_inner` now read these and use the shared `file_types::expand()` map (cpp→[cpp,cc,cxx], h→[h,hpp], yaml→[yaml,yml]). CLI `try_ipc_search` populates the new fields. Before the fix: IPC `--type cpp` returned 1 file (`b.cpp` only) instead of 3 (`.cc`, `.cpp`, `.cxx`); IPC `qq -l -n 2` returned 1 distinct file instead of 2; IPC `qq -c` count diverged from local. After the fix: IPC matches local exactly on all three axes. Adds `file_types` module with unit tests and `SearchQuery` serde round-trip test.

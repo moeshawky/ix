@@ -1,6 +1,6 @@
 [package]
 name = "moeix"
-version = "0.13.4"
+version = "0.14.0"
 edition = "2024"
 description = "Sub-millisecond code search via sparse trigram indexing."
 homepage = "https://github.com/moeshawky/ix"
@@ -19,6 +19,7 @@ exclude = [
     "SUBAGENT_ROLES.md",
     "bugs/",
     ".moeinclude",
+    "PROJECT-ROADMAP.md",
 ]
 
 [workspace]
