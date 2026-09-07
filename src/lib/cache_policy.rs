@@ -47,11 +47,70 @@ pub struct AdaptiveCachePolicy {
     ceiling: usize,
 }
 
+/// Returns the total system memory in bytes cross-platform.
+///
+/// Reads `/proc/meminfo` via `llmosafe::ResourceGuard` on Linux, and falls back
+/// to POSIX `sysconf` on macOS and other Unix systems. If neither is available,
+/// returns a safe default floor of 2 `GiB`.
+#[must_use]
+pub fn system_memory_bytes() -> usize {
+    let sys_mem = ResourceGuard::system_memory_bytes();
+    if sys_mem > 0 {
+        return sys_mem;
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: sysconf is POSIX and thread-safe for reading system configuration.
+        let pages = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) };
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        if pages > 0 && page_size > 0 {
+            let pages_usize = usize::try_from(pages).unwrap_or(0);
+            let page_size_usize = usize::try_from(page_size).unwrap_or(0);
+            if let Some(total) = pages_usize.checked_mul(page_size_usize) {
+                if total > 0 {
+                    return total;
+                }
+            }
+        }
+    }
+    2 * 1024 * 1024 * 1024
+}
+
+/// Creates a `ResourceGuard` with a ceiling based on a rational fraction (numerator / denominator) of system memory.
+#[must_use]
+pub fn resource_guard_fraction(numerator: usize, denominator: usize) -> ResourceGuard {
+    let total = system_memory_bytes();
+    let den = denominator.max(1);
+    let ceiling = total.saturating_mul(numerator) / den;
+    ResourceGuard::new(ceiling.max(256 * 1024 * 1024))
+}
+
+/// Creates a `ResourceGuard` with a ceiling based on a float fraction of system memory.
+///
+/// Uses standard rational buckets to avoid float-to-int cast clippy lints while providing
+/// accurate ceilings for standard ratios (e.g. 0.6 → 3/5, 0.5 → 1/2).
+#[must_use]
+pub fn resource_guard_auto(ceiling_fraction: f64) -> ResourceGuard {
+    if ceiling_fraction >= 0.75 {
+        resource_guard_fraction(4, 5)
+    } else if ceiling_fraction >= 0.55 {
+        resource_guard_fraction(3, 5)
+    } else if ceiling_fraction >= 0.45 {
+        resource_guard_fraction(1, 2)
+    } else if ceiling_fraction >= 0.3 {
+        resource_guard_fraction(1, 3)
+    } else if ceiling_fraction >= 0.2 {
+        resource_guard_fraction(1, 5)
+    } else {
+        resource_guard_fraction(1, 10)
+    }
+}
+
 impl AdaptiveCachePolicy {
     /// Creates a new policy with the given ceiling fraction of system memory.
     ///
     /// For example, `0.6` means use 60 % of system memory as the ceiling.
-    /// Internally delegates to `ResourceGuard::auto(ceiling_fraction)`.
+    /// Internally delegates to [`resource_guard_auto`].
     #[must_use]
     #[allow(
         clippy::cast_precision_loss,
@@ -60,8 +119,8 @@ impl AdaptiveCachePolicy {
         clippy::as_conversions
     )]
     pub fn new(ceiling_fraction: f64) -> Self {
-        let guard = ResourceGuard::auto(ceiling_fraction);
-        let ceiling = (ResourceGuard::system_memory_bytes() as f64 * ceiling_fraction) as usize;
+        let guard = resource_guard_auto(ceiling_fraction);
+        let ceiling = (system_memory_bytes() as f64 * ceiling_fraction) as usize;
         Self { guard, ceiling }
     }
 

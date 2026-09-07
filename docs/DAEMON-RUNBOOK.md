@@ -57,6 +57,10 @@ needed):
 
 # Confirm it is live:
 ix service status
+
+# Stop running daemon:
+ixd --stop /path/to/repo
+# (or use the service alias: ix service stop /path/to/repo)
 ```
 
 ### Step 3: Verify Operation

@@ -478,7 +478,6 @@ fn test_ancestor_gitignore_does_not_exclude_repo_lib() {
     assert!(
         matches[0]
             .file_path
-            .to_string_lossy()
-            .ends_with("lib/needle.rs")
+            .ends_with(std::path::Path::new("lib").join("needle.rs"))
     );
 }

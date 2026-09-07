@@ -9,7 +9,36 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// ix runtime configuration, loaded from `.ixd.toml`.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+/// Nested `[watch]` table for backward-compatibility with alternative `.ixd.toml` styles.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WatchSection {
+    /// Subdirectory paths to watch.
+    #[serde(default)]
+    pub paths: Vec<PathBuf>,
+    /// Debounce interval in milliseconds.
+    #[serde(default)]
+    pub debounce_ms: Option<u64>,
+    /// Ignore patterns specified in `[watch]` table.
+    #[serde(default)]
+    pub ignore: Vec<String>,
+    /// Exclude patterns specified in `[watch]` table.
+    #[serde(default)]
+    pub exclude_patterns: Vec<String>,
+}
+
+/// Nested `[build]` table for backward-compatibility with alternative `.ixd.toml` styles.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct BuildSection {
+    /// Exclude patterns specified in `[build]` table.
+    #[serde(default)]
+    pub exclude_patterns: Vec<String>,
+    /// Ignore patterns specified in `[build]` table.
+    #[serde(default)]
+    pub ignore: Vec<String>,
+}
+
+/// ix runtime configuration, loaded from `.ixd.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     /// Root directories to watch for indexing.
     #[serde(default)]
@@ -31,6 +60,14 @@ pub struct Config {
     /// debounce intervals per watched subtree, run separate `ixd` instances.
     #[serde(default)]
     pub debounce_ms: Option<u64>,
+
+    /// Deprecated `[watch]` table for backward compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watch: Option<WatchSection>,
+
+    /// Deprecated `[build]` table for backward compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<BuildSection>,
 }
 
 impl Default for Config {
@@ -42,11 +79,14 @@ impl Default for Config {
             // Builder (via with_exclude_patterns) and Watcher (via Watcher::new).
             // See also: src/lib/builder.rs:226, src/lib/watcher.rs:40
             exclude_patterns: vec![
+                ".codegraph".to_string(),
                 ".git".to_string(),
                 "node_modules".to_string(),
                 "target".to_string(),
             ],
             debounce_ms: None,
+            watch: None,
+            build: None,
         }
     }
 }
@@ -61,9 +101,49 @@ impl Config {
         let content = std::fs::read_to_string(path).map_err(|e| {
             crate::error::Error::Config(format!("cannot read config file {}: {e}", path.display()))
         })?;
-        toml::from_str(&content).map_err(|e| {
+        let mut cfg: Self = toml::from_str(&content).map_err(|e| {
             crate::error::Error::Config(format!("cannot parse config file {}: {e}", path.display()))
-        })
+        })?;
+        cfg.normalize_and_warn(path);
+        Ok(cfg)
+    }
+
+    /// Normalize legacy nested `[watch]` and `[build]` tables into flat fields,
+    /// emitting a deprecation warning if nested tables are present.
+    fn normalize_and_warn(&mut self, path: &Path) {
+        let has_nested = self.watch.is_some() || self.build.is_some();
+        if has_nested {
+            tracing::warn!(
+                "deprecated .ixd.toml format in {}: [watch]/[build] tables should be migrated to flat keys (see docs/.ixd.toml.md)",
+                path.display()
+            );
+        }
+
+        if let Some(ref w) = self.watch {
+            if self.watch_roots.is_empty() {
+                self.watch_roots.clone_from(&w.paths);
+            } else {
+                self.watch_roots.extend(w.paths.clone());
+            }
+
+            if self.debounce_ms.is_none() && w.debounce_ms.is_some() {
+                self.debounce_ms = w.debounce_ms;
+            }
+
+            self.exclude_patterns.extend(w.ignore.clone());
+            self.exclude_patterns.extend(w.exclude_patterns.clone());
+        }
+
+        if let Some(ref b) = self.build {
+            self.exclude_patterns.extend(b.exclude_patterns.clone());
+            self.exclude_patterns.extend(b.ignore.clone());
+        }
+
+        // Deduplicate
+        self.watch_roots.sort();
+        self.watch_roots.dedup();
+        self.exclude_patterns.sort();
+        self.exclude_patterns.dedup();
     }
 
     /// Discover `.ixd.toml` files under the given root directory by
@@ -169,11 +249,14 @@ mod tests {
             Config {
                 watch_roots: Vec::new(),
                 exclude_patterns: vec![
+                    ".codegraph".to_string(),
                     ".git".to_string(),
                     "node_modules".to_string(),
                     "target".to_string(),
                 ],
                 debounce_ms: None,
+                watch: None,
+                build: None,
             }
         );
     }
@@ -206,5 +289,36 @@ mod tests {
         assert!(cfg.watch_roots.contains(&base.join("test")));
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_config_nested_table_compatibility() {
+        let toml_str = r#"
+[watch]
+debounce_ms = 50
+paths = ["src/", "tests/"]
+ignore = ["*.pyc", "__pycache__", ".git"]
+
+[build]
+exclude_patterns = ["build/", "dist/"]
+"#;
+        let mut config: Config = toml::from_str(toml_str).unwrap();
+        config.normalize_and_warn(Path::new(".ixd.toml"));
+
+        assert_eq!(config.debounce_ms, Some(50));
+        assert_eq!(
+            config.watch_roots,
+            vec![PathBuf::from("src/"), PathBuf::from("tests/")]
+        );
+        assert_eq!(
+            config.exclude_patterns,
+            vec![
+                "*.pyc".to_string(),
+                ".git".to_string(),
+                "__pycache__".to_string(),
+                "build/".to_string(),
+                "dist/".to_string(),
+            ]
+        );
     }
 }

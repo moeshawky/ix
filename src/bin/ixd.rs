@@ -37,7 +37,6 @@
 #![allow(clippy::struct_field_names)]
 
 use clap::Parser;
-use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -67,6 +66,10 @@ struct Cli {
     /// ixd stays in the foreground (useful for debugging or systemd units).
     #[arg(long)]
     daemon: bool,
+
+    /// Stop the running ixd daemon for the specified directories.
+    #[arg(long)]
+    stop: bool,
 }
 
 #[cfg(unix)]
@@ -78,6 +81,11 @@ fn main() -> ix::error::Result<()> {
     // relative path like `.` resolve to the filesystem root. `run_many`
     // canonicalizes again, so handing it absolute paths is idempotent.
     let roots = resolve_roots(&cli.paths)?;
+
+    if cli.stop {
+        stop_daemons(&roots);
+        return Ok(());
+    }
 
     if cli.daemon {
         daemonize()?;
@@ -142,6 +150,7 @@ fn resolve_roots(paths: &[PathBuf]) -> ix::error::Result<Vec<PathBuf>> {
 fn daemonize() -> ix::error::Result<()> {
     use nix::unistd::{ForkResult, fork, setsid};
     use std::fs::OpenOptions;
+    use std::os::fd::AsRawFd;
 
     let cfg = |ctx: &str, e: nix::errno::Errno| {
         ix::error::Error::Config(format!("daemonize: {ctx}: {e}"))
@@ -192,4 +201,77 @@ fn daemonize() -> ix::error::Result<()> {
     std::mem::forget(devnull);
 
     Ok(())
+}
+
+/// Stop running ixd daemons managing the specified roots.
+#[cfg(unix)]
+fn stop_daemons(roots: &[PathBuf]) {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+    use std::collections::HashSet;
+    use std::thread::sleep;
+    use std::time::Duration;
+
+    let mut stopped_pids = HashSet::new();
+
+    for root in roots {
+        let ix_dir = root.join(".ix");
+        let beacon = if let Ok(b) = ix::format::Beacon::read_from(&ix_dir) {
+            b
+        } else {
+            let mut current = root.clone();
+            let mut found = None;
+            while current.pop() {
+                let candidate = current.join(".ix");
+                if let Ok(b) = ix::format::Beacon::read_from(&candidate) {
+                    found = Some(b);
+                    break;
+                }
+            }
+            if let Some(b) = found {
+                b
+            } else {
+                println!("ixd: no running daemon found for {}", root.display());
+                continue;
+            }
+        };
+
+        if !beacon.is_live() {
+            println!(
+                "ixd: no running daemon found for {} (stale beacon from PID {})",
+                root.display(),
+                beacon.pid
+            );
+            continue;
+        }
+
+        let pid = beacon.pid;
+        if stopped_pids.insert(pid) {
+            println!("ixd: stopping daemon (PID {pid}) for {}...", root.display());
+            let nix_pid = Pid::from_raw(pid);
+            if let Err(e) = kill(nix_pid, Some(Signal::SIGTERM)) {
+                eprintln!("ixd: failed to signal PID {pid}: {e}");
+                continue;
+            }
+
+            let mut exited = false;
+            for _ in 0..50 {
+                sleep(Duration::from_millis(100));
+                if kill(nix_pid, None).is_err() {
+                    exited = true;
+                    break;
+                }
+            }
+
+            if exited {
+                println!("ixd: daemon (PID {pid}) stopped.");
+            } else {
+                eprintln!(
+                    "ixd: warning: daemon (PID {pid}) did not exit within 5s; sending SIGKILL..."
+                );
+                let _ = kill(nix_pid, Some(Signal::SIGKILL));
+                println!("ixd: daemon (PID {pid}) killed.");
+            }
+        }
+    }
 }

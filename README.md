@@ -85,13 +85,16 @@ fixture, then `ixd` spent ~11 s rebuilding the identical base; source:
 `ix --build` only for a one-shot, no-daemon index.
 
 ```bash
-# Foreground (debugging, or wrapped by systemd)
+# Foreground mode (for debugging or supervisor units)
 ixd /path/to/repo
 
-# Detach into the background and return immediately (v0.13.0+)
+# Detach and run in the background (native double-fork)
 ixd --daemon /path/to/repo
 
-# Watch multiple directories (v0.9+)
+# Stop the running daemon
+ixd --stop /path/to/repo
+
+# Watch multiple directories in one process
 ixd /project-a /project-b /project-c
 ```
 
@@ -108,21 +111,29 @@ Each directory runs on its own thread with independent index, watcher,
 beacon, and Unix domain socket. Signal handling and memory monitoring
 are shared.
 
-### Service Management (Linux / systemd)
+### Service Management
+
+The `ix service` CLI provides convenient daemon control across all Unix platforms
+without requiring systemd:
 
 ```bash
-# Install as a user-level systemd service
-ix service install /path/to/repo
+# Start background daemon (defaults to CWD or specified path)
+ix service start /path/to/repo
 
-# Start / stop / restart / status the service
-ix service start
-ix service stop
-ix service restart
-ix service status
+# Check status
+ix service status /path/to/repo
+
+# Stop running daemon
+ix service stop /path/to/repo
+
+# Restart daemon
+ix service restart /path/to/repo
+
+# (Optional on Linux) Install as a user-level systemd service
+ix service install /path/to/repo
 ```
 
-The service auto-starts on login and survives reboots. See
-[docs/DAEMON-RUNBOOK.md](docs/DAEMON-RUNBOOK.md) for full operation guide.
+See [docs/DAEMON-RUNBOOK.md](docs/DAEMON-RUNBOOK.md) for full operation guide.
 
 ### Daemon Socket
 

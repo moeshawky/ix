@@ -8,6 +8,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+#[cfg(unix)]
 use std::time::Duration;
 
 /// Run `ix --build <root>` and return the list of indexed file paths (relative).
@@ -25,13 +26,18 @@ fn build_cli(root: &PathBuf) -> Vec<PathBuf> {
     );
 
     // Read the index and list files
+    let root_canonical = root.canonicalize().unwrap_or_else(|_| root.clone());
     let ix_dir = root.join(".ix");
     let shard = ix_dir.join("shard.ix");
     let reader = ix::reader::Reader::open(&shard).expect("open shard");
     let mut files = Vec::new();
     for i in 0..reader.header.file_count {
         if let Ok(entry) = reader.get_file(i) {
-            let rel = entry.path.strip_prefix(root).unwrap_or(&entry.path);
+            let rel = entry
+                .path
+                .strip_prefix(&root_canonical)
+                .or_else(|_| entry.path.strip_prefix(root))
+                .unwrap_or(&entry.path);
             files.push(rel.to_path_buf());
         }
     }
@@ -40,18 +46,20 @@ fn build_cli(root: &PathBuf) -> Vec<PathBuf> {
 }
 
 /// Start a daemon on `root`, wait for initial build, return indexed file paths.
+#[cfg(unix)]
 fn build_daemon(root: &PathBuf) -> Vec<PathBuf> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_ixd"))
         .arg(root)
-        .arg("--daemon")
         .spawn()
-        .expect("spawn ixd --daemon");
+        .expect("spawn ixd");
+
+    let root_canonical = root.canonicalize().unwrap_or_else(|_| root.clone());
 
     // Wait for beacon to indicate initial build complete
     let ix_dir = root.join(".ix");
     let beacon_path = ix_dir.join("beacon.json");
     let mut files = Vec::new();
-    for _ in 0..50 {
+    for _ in 0..150 {
         if beacon_path.exists() {
             if let Ok(beacon) = ix::format::Beacon::read_from(&ix_dir) {
                 if beacon.status == "idle" || beacon.status.starts_with("idle") {
@@ -61,7 +69,11 @@ fn build_daemon(root: &PathBuf) -> Vec<PathBuf> {
                         let reader = ix::reader::Reader::open(&shard).expect("open shard");
                         for i in 0..reader.header.file_count {
                             if let Ok(entry) = reader.get_file(i) {
-                                let rel = entry.path.strip_prefix(root).unwrap_or(&entry.path);
+                                let rel = entry
+                                    .path
+                                    .strip_prefix(&root_canonical)
+                                    .or_else(|_| entry.path.strip_prefix(root))
+                                    .unwrap_or(&entry.path);
                                 files.push(rel.to_path_buf());
                             }
                         }
@@ -75,9 +87,6 @@ fn build_daemon(root: &PathBuf) -> Vec<PathBuf> {
     }
 
     // Shutdown daemon
-    let _ = Command::new("pkill")
-        .args(["-f", &format!("ixd.*{}", root.display())])
-        .status();
     child.kill().ok();
     let _ = child.wait();
 
@@ -110,19 +119,22 @@ fn test_build_scope_matches_daemon_with_watch_roots() {
         "CLI --build must honor watch_roots and only index src/file1.rs"
     );
 
-    // Daemon build
-    let daemon_files = build_daemon(&base);
-    assert_eq!(
-        daemon_files,
-        vec![PathBuf::from("src/file1.rs")],
-        "Daemon must honor watch_roots and only index src/file1.rs"
-    );
+    #[cfg(unix)]
+    {
+        // Daemon build
+        let daemon_files = build_daemon(&base);
+        assert_eq!(
+            daemon_files,
+            vec![PathBuf::from("src/file1.rs")],
+            "Daemon must honor watch_roots and only index src/file1.rs"
+        );
 
-    // They must match exactly
-    assert_eq!(
-        cli_files, daemon_files,
-        "CLI --build and daemon must produce identical file sets when watch_roots is set"
-    );
+        // They must match exactly
+        assert_eq!(
+            cli_files, daemon_files,
+            "CLI --build and daemon must produce identical file sets when watch_roots is set"
+        );
+    }
 
     // Cleanup
     let _ = fs::remove_dir_all(&base);

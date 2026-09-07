@@ -356,14 +356,17 @@ impl Beacon {
                 return false;
             }
 
-            let comm_path = format!("/proc/{}/comm", self.pid);
-            if let Ok(comm) = std::fs::read_to_string(&comm_path) {
-                let comm = comm.trim();
-                if comm != "ixd" {
+            #[cfg(target_os = "linux")]
+            {
+                let comm_path = format!("/proc/{}/comm", self.pid);
+                if let Ok(comm) = std::fs::read_to_string(&comm_path) {
+                    let comm = comm.trim();
+                    if comm != "ixd" {
+                        return false;
+                    }
+                } else {
                     return false;
                 }
-            } else {
-                return false;
             }
 
             self.root.exists()

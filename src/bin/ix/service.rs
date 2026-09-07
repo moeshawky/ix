@@ -24,34 +24,105 @@ pub(crate) fn find_systemctl() -> std::ffi::OsString {
     std::ffi::OsString::from("systemctl")
 }
 
-#[cfg(feature = "notify")]
-#[allow(clippy::unnecessary_wraps)]
-pub(crate) fn handle_service(action: &ServiceAction) -> ix::error::Result<()> {
-    if let ServiceAction::Status { path, json } = &action {
-        handle_service_status(path.as_deref(), *json);
-        return Ok(());
-    }
-
-    #[cfg(target_os = "linux")]
+fn find_ixd() -> std::path::PathBuf {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(parent) = exe.parent()
     {
-        use std::path::PathBuf;
+        let candidate = parent.join("ixd");
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    std::path::PathBuf::from("ixd")
+}
 
-        let home =
-            std::env::var("HOME").map_err(|_| ix::error::Error::Config("HOME not set".into()))?;
-        let service_dir = PathBuf::from(&home).join(".config/systemd/user");
-        let service_file = service_dir.join("ixd.service");
+#[cfg(feature = "notify")]
+pub(crate) fn handle_service(action: &ServiceAction) -> ix::error::Result<()> {
+    match action {
+        ServiceAction::Status { path, json } => {
+            handle_service_status(path.as_deref(), *json);
+            Ok(())
+        }
+        ServiceAction::Start { path } => {
+            let ixd = find_ixd();
+            let watch_path = path
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            let status = std::process::Command::new(&ixd)
+                .arg("--daemon")
+                .arg(&watch_path)
+                .status()
+                .map_err(|e| {
+                    ix::error::Error::Config(format!("failed to execute {}: {e}", ixd.display()))
+                })?;
+            if !status.success() {
+                return Err(ix::error::Error::Config(
+                    "failed to start ixd daemon".into(),
+                ));
+            }
+            println!("ixd daemon started for {}.", watch_path.display());
+            println!("Run 'ix service status' to verify.");
+            Ok(())
+        }
+        ServiceAction::Stop { path } => {
+            let ixd = find_ixd();
+            let stop_path = path
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            let status = std::process::Command::new(&ixd)
+                .arg("--stop")
+                .arg(&stop_path)
+                .status()
+                .map_err(|e| {
+                    ix::error::Error::Config(format!("failed to execute {}: {e}", ixd.display()))
+                })?;
+            if !status.success() {
+                return Err(ix::error::Error::Config("failed to stop ixd daemon".into()));
+            }
+            Ok(())
+        }
+        ServiceAction::Restart { path } => {
+            let ixd = find_ixd();
+            let target_path = path
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            let _ = std::process::Command::new(&ixd)
+                .arg("--stop")
+                .arg(&target_path)
+                .status();
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let status = std::process::Command::new(&ixd)
+                .arg("--daemon")
+                .arg(&target_path)
+                .status()
+                .map_err(|e| {
+                    ix::error::Error::Config(format!("failed to execute {}: {e}", ixd.display()))
+                })?;
+            if !status.success() {
+                return Err(ix::error::Error::Config(
+                    "failed to restart ixd daemon".into(),
+                ));
+            }
+            println!("ixd daemon restarted for {}.", target_path.display());
+            Ok(())
+        }
+        ServiceAction::Install { path } => {
+            #[cfg(target_os = "linux")]
+            {
+                let home = std::env::var("HOME")
+                    .map_err(|_| ix::error::Error::Config("HOME not set".into()))?;
+                let service_dir = std::path::PathBuf::from(&home).join(".config/systemd/user");
+                let service_file = service_dir.join("ixd.service");
 
-        match action {
-            ServiceAction::Install { path } => {
                 let watch_path = path.clone().unwrap_or_else(|| {
-                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from(&home))
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(&home))
                 });
                 let watch_path_abs = watch_path.canonicalize().unwrap_or(watch_path);
 
-                std::fs::create_dir_all(&service_dir)?;
+                let ixd_path = find_ixd();
+                let ixd_abs = ixd_path.canonicalize().unwrap_or(ixd_path);
 
-                let ix_path = std::env::current_exe()?;
-                let daemon_cmd = format!("{} --daemon", ix_path.display());
+                std::fs::create_dir_all(&service_dir)?;
 
                 let service_content = format!(
                     r"[Unit]
@@ -68,67 +139,41 @@ StartLimitIntervalSec=60
 [Install]
 WantedBy=default.target
 ",
-                    daemon_cmd,
+                    ixd_abs.display(),
                     watch_path_abs.display()
                 );
 
                 std::fs::write(&service_file, service_content)?;
 
-                // Reload systemd
                 let status = std::process::Command::new(find_systemctl())
                     .args(["--user", "daemon-reload"])
-                    .status()?;
-                if !status.success() {
-                    return Err(ix::error::Error::Config(
-                        "systemctl daemon-reload failed".into(),
-                    ));
+                    .status();
+                match status {
+                    Ok(s) if s.success() => {
+                        println!("ixd service installed at {}", service_file.display());
+                        println!("Watch path: {}", watch_path_abs.display());
+                        println!("Run 'ix service start' to start the daemon.");
+                    }
+                    _ => {
+                        println!("ixd service file written to {}", service_file.display());
+                        println!(
+                            "Note: systemd daemon-reload was not run or systemd is not active on this system."
+                        );
+                        println!("You can run 'ix service start' directly to run ixd natively.");
+                    }
                 }
-
-                println!("ixd service installed at {}", service_file.display());
-                println!("Watch path: {}", watch_path_abs.display());
-                println!("Run 'ix service start' to start the daemon.");
+                Ok(())
             }
-            ServiceAction::Start => {
-                let status = std::process::Command::new(find_systemctl())
-                    .args(["--user", "enable", "--now", "ixd"])
-                    .status()?;
-                if !status.success() {
-                    return Err(ix::error::Error::Config(
-                        "Failed to start ixd service".into(),
-                    ));
-                }
-                println!("ixd service started.");
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = path;
+                println!("Systemd installation is only applicable to Linux.");
+                println!(
+                    "On this platform, run 'ix service start' directly to launch ixd in background."
+                );
+                Ok(())
             }
-            ServiceAction::Stop => {
-                let status = std::process::Command::new(find_systemctl())
-                    .args(["--user", "stop", "ixd"])
-                    .status()?;
-                if !status.success() {
-                    return Err(ix::error::Error::Config(
-                        "Failed to stop ixd service".into(),
-                    ));
-                }
-                println!("ixd service stopped.");
-            }
-            ServiceAction::Restart => {
-                let status = std::process::Command::new(find_systemctl())
-                    .args(["--user", "restart", "ixd"])
-                    .status()?;
-                if !status.success() {
-                    return Err(ix::error::Error::Config(
-                        "Failed to restart ixd service".into(),
-                    ));
-                }
-                println!("ixd service restarted.");
-            }
-            ServiceAction::Status { .. } => unreachable!(),
         }
-        Ok(())
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        eprintln!("ix service commands are currently only supported on Linux (systemd).");
-        Ok(())
     }
 }
 

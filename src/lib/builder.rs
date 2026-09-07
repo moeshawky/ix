@@ -169,6 +169,7 @@ pub(crate) fn default_filter_entry(
         && (name == "lost+found"
             || name == ".git"
             || name == ".ix"
+            || name == ".codegraph"
             || exclude_patterns.iter().any(|p| p == name))
     {
         return false;

@@ -127,7 +127,7 @@ pub fn run_many(roots: &[PathBuf]) -> crate::error::Result<()> {
     SHUTDOWN.store(false, Ordering::SeqCst);
     install_signal_handlers()?;
 
-    let guard = ResourceGuard::auto(0.6);
+    let guard = crate::cache_policy::resource_guard_auto(0.6);
     let instance_id = format::instance_id_now();
 
     let mut handles = Vec::new();
@@ -209,7 +209,7 @@ fn run_single_root(
         };
 
     // Cache policy for memory-pressure-driven cache management
-    let ceiling_bytes = (ResourceGuard::system_memory_bytes().saturating_mul(3)) / 5;
+    let ceiling_bytes = (crate::cache_policy::system_memory_bytes().saturating_mul(3)) / 5;
     let cache_policy = AdaptiveCachePolicy::new_with_guard(guard.clone(), ceiling_bytes);
 
     // Cache layers managed by the adaptive cache policy. PostingCache
@@ -396,7 +396,7 @@ fn install_signal_handlers() -> crate::error::Result<()> {
 }
 
 fn wait_for_memory(guard: &ResourceGuard, log_prefix: &str) {
-    const MAX_WAIT: u32 = 30;
+    const MAX_WAIT: u32 = 5;
     for attempt in 0..=MAX_WAIT {
         match guard.check_blocking() {
             Ok(_) => return,
@@ -411,7 +411,7 @@ fn wait_for_memory(guard: &ResourceGuard, log_prefix: &str) {
                     "ixd [{log_prefix}]: memory pressure before initial build (attempt {}/{MAX_WAIT}): {e:?}",
                     attempt + 1
                 );
-                std::thread::sleep(Duration::from_secs(2));
+                std::thread::sleep(Duration::from_millis(500));
             }
         }
     }

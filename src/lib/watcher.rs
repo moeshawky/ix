@@ -2,7 +2,6 @@
 
 use crate::error::Result;
 use crossbeam_channel::Receiver;
-use llmosafe::ResourceGuard;
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher as _};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -99,6 +98,7 @@ impl Watcher {
                             || name == ".venv"
                             || name == "venv"
                             || name == ".ix"
+                            || name == ".codegraph"
                             || exclude_patterns.iter().any(|p| p == name))
                     {
                         return false;
@@ -143,7 +143,7 @@ impl Watcher {
                 })
                 .build();
 
-            let guard = ResourceGuard::auto(0.5);
+            let guard = crate::cache_policy::resource_guard_auto(0.5);
             let mut file_count: u64 = 0;
 
             for result in walker {
