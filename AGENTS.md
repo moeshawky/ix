@@ -141,6 +141,31 @@ VIOLATE → BROKEN BUILD / SECURITY REGRESSION / WRONG LENS
 - Pipeline-promoted to DNA
 - Regenerated each commit via staleness pipeline
 
+## Cross-Platform & Release Invariants (The Pitfall Playbook)
+
+Hard-won rules from release triage (v0.14.0 postmortem). Never repeat these regressions:
+
+### 1. Cross-Platform Imports & Unix-Only Binaries
+- **Never import Unix-only modules unconditionally**: `std::os::fd::*`, `std::os::unix::*`, and `nix::*` do not exist on Windows. Scope them inside `#[cfg(unix)]` functions or modules.
+- **Gate daemon test suites**: `ixd` is Unix-only (`#[cfg(unix)]`). Any test that spawns `ixd` or asserts daemon behavior (`tests/build_scope.rs`) must be gated with `#[cfg(unix)]`. Gated tests must not leak unused imports (e.g. `Duration`) into non-Unix targets.
+
+### 2. Hardware & Memory Introspection (`llmosafe` / `ResourceGuard`)
+- **Never call `ResourceGuard::auto()` or `ResourceGuard::system_memory_bytes()` directly**: `/proc/meminfo` and `/proc/stat` exist only on Linux. On macOS and Windows, `system_memory_bytes()` returns `0`, causing `ResourceGuard::auto()` to configure a `0`-byte ceiling and fail-closed into perpetual 100% memory pressure (`ResourceExhaustion`).
+- **Always route through `cache_policy`**: Use `crate::cache_policy::resource_guard_auto()` and `crate::cache_policy::system_memory_bytes()`, which fall back to POSIX `libc::sysconf(libc::_SC_PHYS_PAGES)` on macOS/BSD with a 2 `GiB` safe floor.
+- **Never check `/proc/{pid}/comm` on macOS**: Check live processes via `#[cfg(target_os = "linux")]` for `/proc` or cross-platform signal checks (`kill(pid, 0)`).
+
+### 3. Path Separators & Symlinks
+- **Never assert paths with literal slash strings**: String checks like `.ends_with("lib/needle.rs")` break on Windows backslashes (`lib\needle.rs`). Use `Path::new("lib").join("needle.rs")` or path component inspection.
+- **Account for macOS `/var` symlinks**: On macOS, `std::env::temp_dir()` is `/var/folders/...`, which symlinks to `/private/var/folders/...`. Daemon canonicalization produces `/private/var/` paths. When stripping root prefixes in tests, always try canonical root before raw root: `path.strip_prefix(&root_canonical).or_else(|_| path.strip_prefix(root))`.
+
+### 4. Integration Test Daemon Management
+- **Never use `--daemon` in integration tests**: Double-fork + `setsid` triggers macOS libSystem safety traps and orphans background processes in test runners. Spawn test daemons in the foreground and terminate them directly via `child.kill()`.
+- **Set realistic polling windows**: Fast machines finish initial builds in 200 ms, but busy CI runners take several seconds. Poll loops must allow at least 30 s (e.g., 150 iterations × 200 ms) before declaring a timeout.
+
+### 5. GitHub Release & cargo-dist Discipline
+- **Pre-existing release tags fail cargo-dist**: `dist host` calls `gh release create "<tag>"`. If a release already exists on GitHub for that tag (from an earlier run or manual creation), it fails with code 1. Delete the remote release (`gh release delete <tag> -y`) before re-running a release on an updated tag.
+- **Upstream sync before tag**: Always fetch `origin/main` and verify fast-forward before creating release tags to prevent divergence.
+
 ## BANNED
 
 - Modifying source files directly for annotations (use `.annotations/` RNA)
@@ -155,6 +180,10 @@ VIOLATE → BROKEN BUILD / SECURITY REGRESSION / WRONG LENS
 - Committing without verification (cargo clippy --workspace -- -D warnings)
 - Touching unsafe blocks without security-auditor review
 - Ignoring ResourceGuard in parallel loops (use pressure(), not check())
+- Unconditional `std::os::unix` or `std::os::fd` imports (must be `#[cfg(unix)]`)
+- Calling `ResourceGuard::auto()` directly (use `crate::cache_policy::resource_guard_auto()`)
+- Hardcoding forward-slash path strings in assertions (use `Path::join` or path components)
+- Using `--daemon` inside automated tests (foreground execution only)
 
 ## Performance Budget
 
