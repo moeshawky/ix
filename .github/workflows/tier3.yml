@@ -25,7 +25,7 @@ jobs:
 
       - name: Install cargo tools
         run: |
-          cargo install cargo-llvm-cov cargo-semver-checks cargo-udeps cargo-outdated cargo-deny@0.16.4
+          cargo install cargo-llvm-cov cargo-semver-checks cargo-udeps cargo-outdated cargo-deny@0.16.3
 
       - name: Check formatting
         run: cargo fmt --check --all
