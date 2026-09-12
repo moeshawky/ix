@@ -37,8 +37,9 @@ impl Watcher {
     /// receiving events.
     #[must_use]
     pub fn new(root: &Path, watch_roots: &[PathBuf], exclude_patterns: &[String]) -> Self {
+        let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         Self {
-            root: root.to_owned(),
+            root: canonical_root,
             watch_roots: watch_roots.to_vec(),
             // Watcher receives exclude_patterns from its caller — the daemon
             // (daemon.rs:226) passes Config's patterns here. Hardcoded
