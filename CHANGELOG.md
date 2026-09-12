@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.1] - 2026-09-12
+
+### Changed
+- **Docs corrected to runtime admission truth.** `.ixd.toml.md`, `DAEMON-RUNBOOK.md`, `README.md`, `QUICKSTART.md`, and `DELTA-FORMAT.md` updated to reflect the actual four-layer exclusion policy in `is_path_admission` (`src/lib/builder.rs:152`): `watch_roots` → hardcoded dirs (`lost+found`, `.git`, `.ix`, `.codegraph`) + `exclude_patterns` exact-name match → `shard.ix*` → binary extensions incl `*.tar.gz`. Default `exclude_patterns` corrected to `[.codegraph, .git, node_modules, target]` (`src/lib/config.rs:81`). `.ixignore` documented as walk-time only, not affecting incremental updates.
+- **Incremental watcher/update honor admission consistently with full indexing.** `Builder::update` and `Watcher::collect_paths` both route through `is_path_admission`; changed files failing admission are silently skipped (not tombstoned).
+
 ## [0.14.0] - 2026-09-07
 
 ### Added

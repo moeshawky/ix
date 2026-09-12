@@ -170,7 +170,7 @@ Scope what `ixd` watches and `ix --build` indexes with `.ixd.toml`:
 ```toml
 # .ixd.toml
 watch_roots = ["src", "lib"]
-exclude_patterns = [".git", "node_modules", "target", "vendor"]
+exclude_patterns = [".codegraph", ".git", "node_modules", "target"]
 ```
 
 See [docs/.ixd.toml.md](docs/.ixd.toml.md) for full schema and examples.
