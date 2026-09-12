@@ -133,10 +133,9 @@ impl Ord for MergeItem {
     }
 }
 
-/// Default directory-entry filter shared across the builder walker, the
-/// watcher fallback walk, and the scanner.
+/// Core path admission policy shared across full builds and incremental updates.
 ///
-/// Returns `true` if the entry should be **included** in the index/walk.
+/// Evaluates an entire path from root to leaf against the active exclusion rules.
 ///
 /// # Filtering rules (in order)
 ///
@@ -150,51 +149,95 @@ impl Ord for MergeItem {
 ///    `.pyc`, `.jpg`, `.png`, `.gif`, `.mp4`, `.mp3`, `.pdf`, `.zip`, `.7z`,
 ///    `.rar`, `.sqlite`, `.db`, `.bin`, `*.tar.gz`.
 #[must_use]
-pub(crate) fn default_filter_entry(
-    entry: &ignore::DirEntry,
+pub(crate) fn is_path_admitted(
+    path: &Path,
+    is_dir: bool,
+    root: Option<&Path>,
     exclude_patterns: &[String],
     watch_roots: &[PathBuf],
 ) -> bool {
-    let path = entry.path();
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
     if !watch_roots.is_empty() {
-        let is_file = entry.file_type().is_some_and(|t| t.is_file());
-        if is_file && !watch_roots.iter().any(|wr| path.starts_with(wr)) {
-            return false;
-        }
-    }
-
-    if entry.file_type().is_some_and(|t| t.is_dir())
-        && (name == "lost+found"
-            || name == ".git"
-            || name == ".ix"
-            || name == ".codegraph"
-            || exclude_patterns.iter().any(|p| p == name))
-    {
-        return false;
-    }
-
-    if entry.file_type().is_some_and(|t| t.is_file())
-        && (name == "shard.ix" || name == "shard.ix.tmp" || name.starts_with("shard.ix."))
-    {
-        return false;
-    }
-
-    if entry.file_type().is_some_and(|t| t.is_file()) {
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        match ext {
-            "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" | "jpg" | "png" | "gif" | "mp4"
-            | "mp3" | "pdf" | "zip" | "7z" | "rar" | "sqlite" | "db" | "bin" => {
-                return false;
+        let mut in_scope = false;
+        for wr in watch_roots {
+            if path.starts_with(wr) || wr.starts_with(path) {
+                in_scope = true;
+                break;
             }
-            _ => {}
         }
-        if name.ends_with(".tar.gz") {
+        if !in_scope {
             return false;
         }
     }
+
+    let rel_path = if let Some(r) = root {
+        match path.strip_prefix(r) {
+            Ok(p) => p,
+            Err(_) => return false, // Path outside root is excluded
+        }
+    } else {
+        path
+    };
+    let components: Vec<_> = rel_path.components().collect();
+
+    for (i, component) in components.iter().enumerate() {
+        if let std::path::Component::Normal(os_str) = component {
+            let name = os_str.to_string_lossy();
+            let is_component_dir = i < components.len() - 1 || is_dir;
+
+            if is_component_dir {
+                if name == "lost+found"
+                    || name == ".git"
+                    || name == ".ix"
+                    || name == ".codegraph"
+                    || exclude_patterns.iter().any(|p| p == &name)
+                {
+                    return false;
+                }
+            } else {
+                if name == "shard.ix" || name == "shard.ix.tmp" || name.starts_with("shard.ix.") {
+                    return false;
+                }
+
+                let ext = Path::new(name.as_ref())
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("");
+                match ext {
+                    "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" | "jpg" | "png" | "gif"
+                    | "mp4" | "mp3" | "pdf" | "zip" | "7z" | "rar" | "sqlite" | "db" | "bin" => {
+                        return false;
+                    }
+                    _ => {}
+                }
+                if name.ends_with(".tar.gz") {
+                    return false;
+                }
+            }
+        }
+    }
+
     true
+}
+
+/// Default directory-entry filter shared across the builder walker and the
+/// watcher fallback walk.
+///
+/// Returns `true` if the entry should be **included** in the index/walk.
+#[must_use]
+pub(crate) fn default_filter_entry(
+    entry: &ignore::DirEntry,
+    root: &Path,
+    exclude_patterns: &[String],
+    watch_roots: &[PathBuf],
+) -> bool {
+    let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
+    is_path_admitted(
+        entry.path(),
+        is_dir,
+        Some(root),
+        exclude_patterns,
+        watch_roots,
+    )
 }
 
 #[allow(clippy::as_conversions)] // binary format: usize→u32/u16 for index encoding
@@ -488,7 +531,7 @@ impl Builder {
             .filter_entry({
                 let exclude_patterns = self.exclude_patterns.clone();
                 let watch_roots = self.watch_roots.clone();
-                move |entry| default_filter_entry(entry, &exclude_patterns, &watch_roots)
+                let root_clone = root.clone(); move |entry| default_filter_entry(entry, &root_clone, &exclude_patterns, &watch_roots)
             })
             .build();
 
@@ -620,9 +663,16 @@ impl Builder {
         }
 
         for path in changed_files {
-            if !self.watch_roots.is_empty()
-                && !self.watch_roots.iter().any(|wr| path.starts_with(wr))
-            {
+            // For incremental updates, we might not know if a deleted path is a dir.
+            // We assume it's a file if metadata fails.
+            let is_dir = std::fs::metadata(path).is_ok_and(|m| m.is_dir());
+            if !crate::builder::is_path_admitted(
+                path,
+                is_dir,
+                Some(&self.root),
+                &self.exclude_patterns,
+                &self.watch_roots,
+            ) {
                 continue;
             }
 

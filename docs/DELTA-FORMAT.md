@@ -241,7 +241,7 @@ for path in changed_files {
         delta_out.write_all(&[DELTA_TOMBSTONE])?;
         delta_out.write_all(&old_id.to_le_bytes())?;
     }
-    
+
     // If file still exists, add new entry
     if path.exists() && self.process_file_delta(path, next_file_id, &mut delta_out)? {
         next_file_id += 1;
