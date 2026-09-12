@@ -85,8 +85,9 @@ impl Watcher {
                 .filter_entry({
                     let exclude_patterns = self.exclude_patterns.clone();
                     let self_watch_roots = self.watch_roots.clone();
+                    let root_clone = self.root.clone();
                     move |entry| {
-                        crate::builder::default_filter_entry(entry, &exclude_patterns, &self_watch_roots)
+                        crate::builder::default_filter_entry(entry, &root_clone, &exclude_patterns, &self_watch_roots)
                     }
                 })
                 .build();
@@ -127,6 +128,7 @@ impl Watcher {
 
         self.inner = Some(watcher);
 
+        let root_clone = self.root.clone();
         let watch_roots = self.watch_roots.clone();
         let exclude_patterns = self.exclude_patterns.clone();
         let debounce_dur = Duration::from_millis(self.debounce_ms);
@@ -139,6 +141,7 @@ impl Watcher {
                         Self::collect_paths(
                             &mut changed_paths,
                             event,
+                            &root_clone,
                             &watch_roots,
                             &exclude_patterns,
                         );
@@ -150,6 +153,7 @@ impl Watcher {
                                     Self::collect_paths(
                                         &mut changed_paths,
                                         event,
+                                        &root_clone,
                                         &watch_roots,
                                         &exclude_patterns,
                                     );
@@ -194,16 +198,25 @@ impl Watcher {
         self.inner.is_some()
     }
 
-    fn collect_paths(
+    /// Collects paths from notify events that pass the admission policy.
+    pub fn collect_paths(
         map: &mut HashMap<PathBuf, notify::EventKind>,
         event: Event,
+        root: &Path,
         watch_roots: &[PathBuf],
         exclude_patterns: &[String],
     ) {
         let kind = event.kind;
         if kind.is_modify() || kind.is_create() || kind.is_remove() {
             for path in event.paths {
-                if !crate::builder::is_path_admitted(&path, exclude_patterns, watch_roots) {
+                let is_dir = std::fs::metadata(&path).is_ok_and(|m| m.is_dir());
+                if !crate::builder::is_path_admitted(
+                    &path,
+                    is_dir,
+                    Some(root),
+                    exclude_patterns,
+                    watch_roots,
+                ) {
                     continue;
                 }
                 let prev = map.get(&path);

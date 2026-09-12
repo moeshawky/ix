@@ -151,6 +151,8 @@ impl Ord for MergeItem {
 #[must_use]
 pub(crate) fn is_path_admitted(
     path: &Path,
+    is_dir: bool,
+    root: Option<&Path>,
     exclude_patterns: &[String],
     watch_roots: &[PathBuf],
 ) -> bool {
@@ -167,37 +169,43 @@ pub(crate) fn is_path_admitted(
         }
     }
 
-    // Check each component for directory exclusions
-    for component in path.components() {
+    let rel_path = root.and_then(|r| path.strip_prefix(r).ok()).unwrap_or(path);
+    let components: Vec<_> = rel_path.components().collect();
+
+    for (i, component) in components.iter().enumerate() {
         if let std::path::Component::Normal(os_str) = component {
             let name = os_str.to_string_lossy();
-            if name == "lost+found"
-                || name == ".git"
-                || name == ".ix"
-                || name == ".codegraph"
-                || exclude_patterns.iter().any(|p| p == &name)
-            {
-                return false;
-            }
-        }
-    }
+            let is_component_dir = i < components.len() - 1 || is_dir;
 
-    if let Some(file_name_os) = path.file_name() {
-        let name = file_name_os.to_string_lossy();
-        if name == "shard.ix" || name == "shard.ix.tmp" || name.starts_with("shard.ix.") {
-            return false;
-        }
+            if is_component_dir {
+                if name == "lost+found"
+                    || name == ".git"
+                    || name == ".ix"
+                    || name == ".codegraph"
+                    || exclude_patterns.iter().any(|p| p == &name)
+                {
+                    return false;
+                }
+            } else {
+                if name == "shard.ix" || name == "shard.ix.tmp" || name.starts_with("shard.ix.") {
+                    return false;
+                }
 
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        match ext {
-            "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" | "jpg" | "png" | "gif" | "mp4"
-            | "mp3" | "pdf" | "zip" | "7z" | "rar" | "sqlite" | "db" | "bin" => {
-                return false;
+                let ext = Path::new(name.as_ref())
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("");
+                match ext {
+                    "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" | "jpg" | "png" | "gif"
+                    | "mp4" | "mp3" | "pdf" | "zip" | "7z" | "rar" | "sqlite" | "db" | "bin" => {
+                        return false;
+                    }
+                    _ => {}
+                }
+                if name.ends_with(".tar.gz") {
+                    return false;
+                }
             }
-            _ => {}
-        }
-        if name.ends_with(".tar.gz") {
-            return false;
         }
     }
 
@@ -211,10 +219,18 @@ pub(crate) fn is_path_admitted(
 #[must_use]
 pub(crate) fn default_filter_entry(
     entry: &ignore::DirEntry,
+    root: &Path,
     exclude_patterns: &[String],
     watch_roots: &[PathBuf],
 ) -> bool {
-    is_path_admitted(entry.path(), exclude_patterns, watch_roots)
+    let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
+    is_path_admitted(
+        entry.path(),
+        is_dir,
+        Some(root),
+        exclude_patterns,
+        watch_roots,
+    )
 }
 
 #[allow(clippy::as_conversions)] // binary format: usize→u32/u16 for index encoding
@@ -508,7 +524,7 @@ impl Builder {
             .filter_entry({
                 let exclude_patterns = self.exclude_patterns.clone();
                 let watch_roots = self.watch_roots.clone();
-                move |entry| default_filter_entry(entry, &exclude_patterns, &watch_roots)
+                let root_clone = root.clone(); move |entry| default_filter_entry(entry, &root_clone, &exclude_patterns, &watch_roots)
             })
             .build();
 
@@ -640,7 +656,16 @@ impl Builder {
         }
 
         for path in changed_files {
-            if !crate::builder::is_path_admitted(path, &self.exclude_patterns, &self.watch_roots) {
+            // For incremental updates, we might not know if a deleted path is a dir.
+            // We assume it's a file if metadata fails.
+            let is_dir = std::fs::metadata(path).is_ok_and(|m| m.is_dir());
+            if !crate::builder::is_path_admitted(
+                path,
+                is_dir,
+                Some(&self.root),
+                &self.exclude_patterns,
+                &self.watch_roots,
+            ) {
                 continue;
             }
 

@@ -13,6 +13,25 @@ use ix::reader::Reader;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+fn search_trigram(shard_path: &Path, query_str: &str) -> bool {
+    let reader = Reader::open(shard_path).unwrap();
+    let planner_opts = ix::planner::QueryOptions::default();
+    let exec_opts = ix::executor::QueryOptions {
+        max_results: 10,
+        ..Default::default()
+    };
+
+    let delta_path = shard_path.parent().unwrap().join("shard.ix.delta");
+    let dp = if delta_path.exists() {
+        Some(delta_path.as_path())
+    } else {
+        None
+    };
+
+    let res = ix::api::execute(&reader, query_str, planner_opts, &exec_opts, dp).unwrap();
+    !res.0.is_empty()
+}
+
 /// Helper to get all indexed file paths from the current shard.
 fn get_indexed_files(shard_path: &Path, root: &Path) -> Vec<PathBuf> {
     let reader = Reader::open(shard_path).expect("failed to open shard");
@@ -95,7 +114,7 @@ fn test_config_exclusion_parity() {
     );
 
     // 4. Non-excluded sibling file is indexed incrementally
-    fs::write(&valid_txt, "hello valid changed\n").unwrap();
+    fs::write(&valid_txt, "hello valid changed unique_string_123\n").unwrap();
     let shard_path = builder
         .update(std::slice::from_ref(&valid_txt))
         .expect("update failed");
@@ -104,6 +123,10 @@ fn test_config_exclusion_parity() {
         files,
         vec![PathBuf::from("foo/valid.txt")],
         "Incremental update must include valid.txt"
+    );
+    assert!(
+        search_trigram(&shard_path, "unique_string_123"),
+        "Incremental update must actually index new content"
     );
 
     let _ = fs::remove_dir_all(&base);
@@ -173,12 +196,16 @@ fn test_watch_roots_parity() {
     assert_eq!(files, vec![PathBuf::from("src/main.rs")]);
 
     // File inside watch root updates
-    fs::write(&src_txt, "fn main() { println!(); }\n").unwrap();
+    fs::write(&src_txt, "fn main() { println!(\"unique_string_456\"); }\n").unwrap();
     let shard_path = builder
         .update(std::slice::from_ref(&src_txt))
         .expect("update failed");
     let files = get_indexed_files(&shard_path, &base);
     assert_eq!(files, vec![PathBuf::from("src/main.rs")]);
+    assert!(
+        search_trigram(&shard_path, "unique_string_456"),
+        "Incremental update must actually index new content"
+    );
 
     // File outside watch root does not
     fs::write(&out_txt, "more notes\n").unwrap();
@@ -189,4 +216,95 @@ fn test_watch_roots_parity() {
     assert_eq!(files, vec![PathBuf::from("src/main.rs")]);
 
     let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn test_ancestor_dir_exclusion() {
+    // e.g. /tmp/target/my-repo/... where `target` is excluded.
+    // The repo should still be indexed.
+    let base = std::env::temp_dir().join(format!(
+        "ix_path_admission_target_{}/target/my-repo",
+        std::process::id()
+    ));
+    fs::create_dir_all(&base).unwrap();
+
+    let valid_txt = base.join("valid.txt");
+    fs::write(&valid_txt, "hello valid\n").unwrap();
+
+    let config = Config {
+        watch_roots: vec![],
+        exclude_patterns: vec!["target".to_string()],
+        debounce_ms: None,
+        watch: None,
+        build: None,
+    };
+
+    let mut builder = config.apply_to_builder(Builder::new(&base).unwrap());
+    let shard_path = builder.build().expect("build failed");
+    let files = get_indexed_files(&shard_path, &base);
+    assert_eq!(
+        files,
+        vec![PathBuf::from("valid.txt")],
+        "Ancestor dir 'target' should not exclude repo"
+    );
+
+    // Incremental update should also work
+    fs::write(&valid_txt, "hello valid unique_string_789\n").unwrap();
+    let shard_path = builder
+        .update(std::slice::from_ref(&valid_txt))
+        .expect("update failed");
+    assert!(
+        search_trigram(&shard_path, "unique_string_789"),
+        "Incremental update must actually index new content despite ancestor name"
+    );
+
+    let _ = fs::remove_dir_all(base.parent().unwrap().parent().unwrap());
+}
+
+#[test]
+fn test_watcher_collect_paths_admission() {
+    let mut map = std::collections::HashMap::new();
+    let root = PathBuf::from("/repo");
+    let watch_roots = vec![PathBuf::from("/repo/src")];
+    let exclude_patterns = vec!["node_modules".to_string(), "target".to_string()];
+
+    // Create event inside watch root
+    let event = notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::File))
+        .add_path(PathBuf::from("/repo/src/main.rs"));
+    ix::watcher::Watcher::collect_paths(&mut map, event, &root, &watch_roots, &exclude_patterns);
+    assert!(
+        map.contains_key(&PathBuf::from("/repo/src/main.rs")),
+        "Should admit valid path inside watch root"
+    );
+
+    // Modify event inside excluded directory
+    let event = notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Data(
+        notify::event::DataChange::Any,
+    )))
+    .add_path(PathBuf::from("/repo/src/node_modules/pkg/index.js"));
+    ix::watcher::Watcher::collect_paths(&mut map, event, &root, &watch_roots, &exclude_patterns);
+    assert!(
+        !map.contains_key(&PathBuf::from("/repo/src/node_modules/pkg/index.js")),
+        "Should reject excluded directory"
+    );
+
+    // Create event for binary file
+    let event = notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::File))
+        .add_path(PathBuf::from("/repo/src/lib.so"));
+    ix::watcher::Watcher::collect_paths(&mut map, event, &root, &watch_roots, &exclude_patterns);
+    assert!(
+        !map.contains_key(&PathBuf::from("/repo/src/lib.so")),
+        "Should reject binary extension"
+    );
+
+    // Rename event into valid path
+    let event = notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Name(
+        notify::event::RenameMode::To,
+    )))
+    .add_path(PathBuf::from("/repo/src/new_file.rs"));
+    ix::watcher::Watcher::collect_paths(&mut map, event, &root, &watch_roots, &exclude_patterns);
+    assert!(
+        map.contains_key(&PathBuf::from("/repo/src/new_file.rs")),
+        "Should admit rename to valid path"
+    );
 }
