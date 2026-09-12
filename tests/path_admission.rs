@@ -40,6 +40,9 @@ fn get_indexed_files(shard_path: &Path, root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for i in 0..reader.header.file_count {
         if let Ok(entry) = reader.get_file(i) {
+            if entry.status == ix::format::FileStatus::Deleted {
+                continue;
+            }
             let rel = entry
                 .path
                 .strip_prefix(&root_canonical)
@@ -307,4 +310,180 @@ fn test_watcher_collect_paths_admission() {
         map.contains_key(&PathBuf::from("/repo/src/new_file.rs")),
         "Should admit rename to valid path"
     );
+}
+
+#[test]
+fn test_outside_root_admission() {
+    let base =
+        std::env::temp_dir().join(format!("ix_path_admission_outside_{}", std::process::id()));
+    fs::create_dir_all(&base).unwrap();
+    let root = base.join("repo");
+    fs::create_dir_all(&root).unwrap();
+    let outside = base.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+
+    let valid_txt = root.join("valid.txt");
+    fs::write(&valid_txt, "hello valid\n").unwrap();
+    let outside_txt = outside.join("outside.txt");
+    fs::write(&outside_txt, "hello outside\n").unwrap();
+
+    let mut builder = Builder::new(&root).unwrap();
+    let shard_path = builder.build().expect("build failed");
+
+    let files = get_indexed_files(&shard_path, &root);
+    assert_eq!(files, vec![PathBuf::from("valid.txt")]);
+
+    // incremental update on outside file
+    fs::write(&outside_txt, "hello outside changed unique_string_999\n").unwrap();
+    let shard_path = builder
+        .update(std::slice::from_ref(&outside_txt))
+        .expect("update failed");
+    let files = get_indexed_files(&shard_path, &root);
+    assert_eq!(
+        files,
+        vec![PathBuf::from("valid.txt")],
+        "Incremental update must ignore files outside root"
+    );
+    assert!(
+        !search_trigram(&shard_path, "unique_string_999"),
+        "Outside file content must not be indexed"
+    );
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn test_file_named_like_excluded_dir() {
+    let base = std::env::temp_dir().join(format!(
+        "ix_path_admission_file_named_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&base).unwrap();
+
+    // `excluded_dir` is a file
+    let excluded_dir_file = base.join("excluded_dir");
+    fs::write(&excluded_dir_file, "I am a file unique_string_abc\n").unwrap();
+
+    let config = Config {
+        watch_roots: vec![],
+        exclude_patterns: vec!["excluded_dir".to_string()],
+        debounce_ms: None,
+        watch: None,
+        build: None,
+    };
+
+    let mut builder = config.apply_to_builder(Builder::new(&base).unwrap());
+    let shard_path = builder.build().expect("build failed");
+
+    let files = get_indexed_files(&shard_path, &base);
+    assert_eq!(
+        files,
+        vec![PathBuf::from("excluded_dir")],
+        "File named like excluded directory should be indexed"
+    );
+    assert!(search_trigram(&shard_path, "unique_string_abc"));
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn test_dir_named_like_excluded_file_extension() {
+    let base = std::env::temp_dir().join(format!(
+        "ix_path_admission_dir_named_{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&base).unwrap();
+
+    let cache_so_dir = base.join("cache.so");
+    fs::create_dir_all(&cache_so_dir).unwrap();
+
+    let inside_rs = cache_so_dir.join("inside.rs");
+    fs::write(&inside_rs, "hello cache.so inside unique_string_def\n").unwrap();
+
+    let mut builder = Builder::new(&base).unwrap();
+    let shard_path = builder.build().expect("build failed");
+
+    let files = get_indexed_files(&shard_path, &base);
+    assert_eq!(
+        files,
+        vec![PathBuf::from("cache.so/inside.rs")],
+        "Directory named like binary extension should be traversed"
+    );
+    assert!(search_trigram(&shard_path, "unique_string_def"));
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn test_removal_event_coverage() {
+    let base =
+        std::env::temp_dir().join(format!("ix_path_admission_removal_{}", std::process::id()));
+    fs::create_dir_all(&base).unwrap();
+
+    let valid_txt = base.join("valid.txt");
+    fs::write(
+        &valid_txt,
+        "hello valid unique_string_ghi
+",
+    )
+    .unwrap();
+
+    let config = Config {
+        watch_roots: vec![],
+        exclude_patterns: vec!["excluded_dir".to_string()],
+        debounce_ms: None,
+        watch: None,
+        build: None,
+    };
+
+    let mut builder = config.apply_to_builder(Builder::new(&base).unwrap());
+    let shard_path = builder.build().expect("build failed");
+
+    assert!(search_trigram(&shard_path, "unique_string_ghi"));
+
+    // Remove valid.txt and run update
+    fs::remove_file(&valid_txt).unwrap();
+    let shard_path = builder
+        .update(std::slice::from_ref(&valid_txt))
+        .expect("update failed");
+    assert!(
+        !search_trigram(&shard_path, "unique_string_ghi"),
+        "Removed file should be tombstoned in delta and not found"
+    );
+
+    // Removed file underneath excluded dir
+    let excluded_dir = base.join("excluded_dir");
+    let nested_txt = excluded_dir.join("file.txt");
+    // it was never indexed, but let's say an event comes for it
+    let _shard_path = builder
+        .update(std::slice::from_ref(&nested_txt))
+        .expect("update failed");
+    // we just want to ensure it doesn't crash or index it.
+
+    // Removed leaf file whose filename equals an excluded-directory pattern
+    let excluded_dir_file = base.join("excluded_dir");
+    fs::write(
+        &excluded_dir_file,
+        "I am a file unique_string_jkl
+",
+    )
+    .unwrap();
+    let shard_path = builder
+        .update(std::slice::from_ref(&excluded_dir_file))
+        .expect("update failed");
+    assert!(
+        search_trigram(&shard_path, "unique_string_jkl"),
+        "Added file named like excluded dir should be indexed"
+    );
+
+    fs::remove_file(&excluded_dir_file).unwrap();
+    let shard_path = builder
+        .update(std::slice::from_ref(&excluded_dir_file))
+        .expect("update failed");
+    assert!(
+        !search_trigram(&shard_path, "unique_string_jkl"),
+        "Removed file named like excluded dir should be tombstoned"
+    );
+
+    let _ = fs::remove_dir_all(&base);
 }

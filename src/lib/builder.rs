@@ -169,7 +169,14 @@ pub(crate) fn is_path_admitted(
         }
     }
 
-    let rel_path = root.and_then(|r| path.strip_prefix(r).ok()).unwrap_or(path);
+    let rel_path = if let Some(r) = root {
+        match path.strip_prefix(r) {
+            Ok(p) => p,
+            Err(_) => return false, // Path outside root is excluded
+        }
+    } else {
+        path
+    };
     let components: Vec<_> = rel_path.components().collect();
 
     for (i, component) in components.iter().enumerate() {
