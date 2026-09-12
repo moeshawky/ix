@@ -136,7 +136,12 @@ impl Watcher {
                 // Wait for the first event
                 match event_rx.recv() {
                     Ok(Ok(event)) => {
-                        Self::collect_paths(&mut changed_paths, event, &watch_roots, &exclude_patterns);
+                        Self::collect_paths(
+                            &mut changed_paths,
+                            event,
+                            &watch_roots,
+                            &exclude_patterns,
+                        );
 
                         // Debounce loop: keep collecting for debounce_ms after the last event
                         loop {

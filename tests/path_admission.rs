@@ -35,7 +35,8 @@ fn get_indexed_files(shard_path: &Path, root: &Path) -> Vec<PathBuf> {
 
 #[test]
 fn test_config_exclusion_parity() {
-    let base = std::env::temp_dir().join(format!("ix_path_admission_exclude_{}", std::process::id()));
+    let base =
+        std::env::temp_dir().join(format!("ix_path_admission_exclude_{}", std::process::id()));
     fs::create_dir_all(&base).unwrap();
 
     let excluded_dir = base.join("excluded_dir");
@@ -71,28 +72,47 @@ fn test_config_exclusion_parity() {
 
     // 2. Incremental update to `excluded_dir/file.txt` is ignored
     fs::write(&file_txt, "hello excluded changed\n").unwrap();
-    let shard_path = builder.update(std::slice::from_ref(&file_txt)).expect("update failed");
+    let shard_path = builder
+        .update(std::slice::from_ref(&file_txt))
+        .expect("update failed");
     let files = get_indexed_files(&shard_path, &base);
-    assert_eq!(files, vec![PathBuf::from("foo/valid.txt")], "Incremental update must ignore excluded_dir/file.txt");
+    assert_eq!(
+        files,
+        vec![PathBuf::from("foo/valid.txt")],
+        "Incremental update must ignore excluded_dir/file.txt"
+    );
 
     // 3. Nested `foo/excluded_dir/file.txt` is ignored
     fs::write(&nested_txt, "hello nested excluded changed\n").unwrap();
-    let shard_path = builder.update(std::slice::from_ref(&nested_txt)).expect("update failed");
+    let shard_path = builder
+        .update(std::slice::from_ref(&nested_txt))
+        .expect("update failed");
     let files = get_indexed_files(&shard_path, &base);
-    assert_eq!(files, vec![PathBuf::from("foo/valid.txt")], "Incremental update must ignore nested excluded_dir");
+    assert_eq!(
+        files,
+        vec![PathBuf::from("foo/valid.txt")],
+        "Incremental update must ignore nested excluded_dir"
+    );
 
     // 4. Non-excluded sibling file is indexed incrementally
     fs::write(&valid_txt, "hello valid changed\n").unwrap();
-    let shard_path = builder.update(std::slice::from_ref(&valid_txt)).expect("update failed");
+    let shard_path = builder
+        .update(std::slice::from_ref(&valid_txt))
+        .expect("update failed");
     let files = get_indexed_files(&shard_path, &base);
-    assert_eq!(files, vec![PathBuf::from("foo/valid.txt")], "Incremental update must include valid.txt");
+    assert_eq!(
+        files,
+        vec![PathBuf::from("foo/valid.txt")],
+        "Incremental update must include valid.txt"
+    );
 
     let _ = fs::remove_dir_all(&base);
 }
 
 #[test]
 fn test_internal_state_parity() {
-    let base = std::env::temp_dir().join(format!("ix_path_admission_internal_{}", std::process::id()));
+    let base =
+        std::env::temp_dir().join(format!("ix_path_admission_internal_{}", std::process::id()));
     fs::create_dir_all(&base).unwrap();
 
     let valid_txt = base.join("valid.txt");
@@ -106,10 +126,16 @@ fn test_internal_state_parity() {
     let ix_file = ix_dir.join("some_internal_file.txt");
     fs::write(&ix_file, "internal\n").unwrap();
 
-    let shard_path = builder.update(std::slice::from_ref(&ix_file)).expect("update failed");
+    let shard_path = builder
+        .update(std::slice::from_ref(&ix_file))
+        .expect("update failed");
     let files = get_indexed_files(&shard_path, &base);
 
-    assert_eq!(files, vec![PathBuf::from("valid.txt")], ".ix files must be ignored incrementally");
+    assert_eq!(
+        files,
+        vec![PathBuf::from("valid.txt")],
+        ".ix files must be ignored incrementally"
+    );
 
     let _ = fs::remove_dir_all(&base);
 }
@@ -148,13 +174,17 @@ fn test_watch_roots_parity() {
 
     // File inside watch root updates
     fs::write(&src_txt, "fn main() { println!(); }\n").unwrap();
-    let shard_path = builder.update(std::slice::from_ref(&src_txt)).expect("update failed");
+    let shard_path = builder
+        .update(std::slice::from_ref(&src_txt))
+        .expect("update failed");
     let files = get_indexed_files(&shard_path, &base);
     assert_eq!(files, vec![PathBuf::from("src/main.rs")]);
 
     // File outside watch root does not
     fs::write(&out_txt, "more notes\n").unwrap();
-    let shard_path = builder.update(std::slice::from_ref(&out_txt)).expect("update failed");
+    let shard_path = builder
+        .update(std::slice::from_ref(&out_txt))
+        .expect("update failed");
     let files = get_indexed_files(&shard_path, &base);
     assert_eq!(files, vec![PathBuf::from("src/main.rs")]);
 
