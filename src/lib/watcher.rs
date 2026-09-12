@@ -77,69 +77,17 @@ impl Watcher {
         if let Err(err) = watcher.watch(&self.root, RecursiveMode::Recursive) {
             eprintln!("ix: warning: recursive watch failed: {err}. Falling back to manual walk.");
 
-            let exclude_patterns = self.exclude_patterns.clone();
             let walker = ignore::WalkBuilder::new(&self.root)
                 .hidden(false)
                 .git_ignore(true)
                 .require_git(true) // within-repo .gitignore only; never ancestor ~/.gitignore (audit D4)
                 .add_custom_ignore_filename(".ixignore")
-                .filter_entry(move |entry| {
-                    let path = entry.path();
-                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-                    // Built-in directory defaults
-                    if entry.file_type().is_some_and(|t| t.is_dir())
-                        && (name == "lost+found"
-                            || name == ".git"
-                            || name == "node_modules"
-                            || name == "target"
-                            || name == "__pycache__"
-                            || name == ".tox"
-                            || name == ".venv"
-                            || name == "venv"
-                            || name == ".ix"
-                            || name == ".codegraph"
-                            || exclude_patterns.iter().any(|p| p == name))
-                    {
-                        return false;
+                .filter_entry({
+                    let exclude_patterns = self.exclude_patterns.clone();
+                    let self_watch_roots = self.watch_roots.clone();
+                    move |entry| {
+                        crate::builder::default_filter_entry(entry, &exclude_patterns, &self_watch_roots)
                     }
-
-                    // Built-in file noise defaults
-                    if entry.file_type().is_some_and(|t| t.is_file()) {
-                        if let Ok(metadata) = entry.metadata()
-                            && metadata.len() > 10 * 1024 * 1024
-                        {
-                            return false;
-                        }
-                        if name == "Cargo.lock"
-                            || name == "package-lock.json"
-                            || name == "pnpm-lock.yaml"
-                            || name == "shard.ix"
-                            || name == "shard.ix.tmp"
-                        {
-                            return false;
-                        }
-                    }
-
-                    // Built-in file extension defaults
-                    if entry.file_type().is_some_and(|t| t.is_file()) {
-                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                        match ext {
-                            // Binary extensions
-                            "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" |
-                            // Media
-                            "jpg" | "png" | "gif" | "mp4" | "mp3" | "pdf" |
-                            // Archives
-                            "zip" | "7z" | "rar" |
-                            // Data
-                            "sqlite" | "db" | "bin" => return false,
-                            _ => {}
-                        }
-                        if name.ends_with(".tar.gz") {
-                            return false;
-                        }
-                    }
-                    true
                 })
                 .build();
 
@@ -180,7 +128,7 @@ impl Watcher {
         self.inner = Some(watcher);
 
         let watch_roots = self.watch_roots.clone();
-        let ix_dir = self.root.join(".ix");
+        let exclude_patterns = self.exclude_patterns.clone();
         let debounce_dur = Duration::from_millis(self.debounce_ms);
         let handle = thread::spawn(move || {
             let mut changed_paths: HashMap<PathBuf, notify::EventKind> = HashMap::new();
@@ -188,7 +136,7 @@ impl Watcher {
                 // Wait for the first event
                 match event_rx.recv() {
                     Ok(Ok(event)) => {
-                        Self::collect_paths(&mut changed_paths, event, &watch_roots, &ix_dir);
+                        Self::collect_paths(&mut changed_paths, event, &watch_roots, &exclude_patterns);
 
                         // Debounce loop: keep collecting for debounce_ms after the last event
                         loop {
@@ -198,7 +146,7 @@ impl Watcher {
                                         &mut changed_paths,
                                         event,
                                         &watch_roots,
-                                        &ix_dir,
+                                        &exclude_patterns,
                                     );
                                 }
                                 Ok(Err(_)) => {} // notify error, skip
@@ -245,19 +193,12 @@ impl Watcher {
         map: &mut HashMap<PathBuf, notify::EventKind>,
         event: Event,
         watch_roots: &[PathBuf],
-        ix_dir: &Path,
+        exclude_patterns: &[String],
     ) {
         let kind = event.kind;
         if kind.is_modify() || kind.is_create() || kind.is_remove() {
             for path in event.paths {
-                if path.starts_with(ix_dir) {
-                    continue;
-                }
-                if !watch_roots.is_empty()
-                    && !watch_roots.iter().any(|wr| {
-                        path.starts_with(wr) || path.parent().is_some_and(|p| p.starts_with(wr))
-                    })
-                {
+                if !crate::builder::is_path_admitted(&path, exclude_patterns, watch_roots) {
                     continue;
                 }
                 let prev = map.get(&path);
