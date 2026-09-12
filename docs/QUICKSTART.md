@@ -132,7 +132,7 @@ Before starting, optionally create an `.ixd.toml` to scope what the daemon watch
 ```bash
 cat > /path/to/repo/.ixd.toml << 'EOF'
 watch_roots = ["src", "lib"]
-exclude_patterns = [".codegraph", ".git", "node_modules", "target"]
+exclude_patterns = [".git", "node_modules", "target", "vendor"]
 debounce_ms = 500
 EOF
 ```

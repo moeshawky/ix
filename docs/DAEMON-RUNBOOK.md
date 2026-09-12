@@ -115,13 +115,12 @@ watch_roots = ["src", "lib", "tests"]
 
 # Directory names to exclude from indexing.
 # Defaults shown below — add or override as needed.
-# Hardcoded dirs (lost+found, .git, .ix, .codegraph) are always
-# excluded by is_path_admission and cannot be removed.
 exclude_patterns = [
-    ".codegraph",
     ".git",
     "node_modules",
     "target",
+    "vendor",
+    "build",
 ]
 
 # Debounce interval in milliseconds for file-watch event batching (optional).
@@ -134,7 +133,7 @@ debounce_ms = 500
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `watch_roots` | `[String]` | `[]` | Subdirectories to scope indexing to. Empty = entire root. |
-| `exclude_patterns` | `[String]` | `.codegraph`, `.git`, `node_modules`, `target` | Directory names skipped during file walk. Hardcoded dirs (`lost+found`, `.git`, `.ix`, `.codegraph`) in `is_path_admission` (`src/lib/builder.rs:188-191`) cannot be overridden; `exclude_patterns` are exact-name matches, not globs. |
+| `exclude_patterns` | `[String]` | `.git`, `node_modules`, `target` | Directory names skipped during file walk. |
 | `debounce_ms` | `u64` or `null` | `null` (500 ms) | File-watch batching window in ms. Range: 50–10 000. Clamped to range. |
 
 #### Examples
@@ -150,7 +149,6 @@ Only `src/`, `lib/`, and `include/` will be indexed. All other directories under
 ```toml
 exclude_patterns = [".git", "node_modules", "target", "vendor", "build"]
 ```
-`vendor/` and `build/` are custom additions beyond the defaults (`.codegraph`, `.git`, `node_modules`, `target`). Hardcoded dirs (`lost+found`, `.git`, `.ix`, `.codegraph`) in `is_path_admission` (`src/lib/builder.rs:188-191`) cannot be removed by config. `exclude_patterns` are exact directory-name matches, not globs.
 
 **Tune debounce for faster or quieter change pickup:**
 ```toml
