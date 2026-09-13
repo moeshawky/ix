@@ -473,7 +473,7 @@ pub fn is_binary(data: &[u8]) -> bool {
 
 #[inline]
 #[allow(clippy::indexing_slicing)]
-fn is_valid_utf8_sequence(seq: &[u8]) -> bool {
+const fn is_valid_utf8_sequence(seq: &[u8]) -> bool {
     match seq.len() {
         2 => seq[0] >= 0xC2 && (seq[1] & 0xC0) == 0x80,
         3 => {

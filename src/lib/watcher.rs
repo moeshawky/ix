@@ -37,8 +37,9 @@ impl Watcher {
     /// receiving events.
     #[must_use]
     pub fn new(root: &Path, watch_roots: &[PathBuf], exclude_patterns: &[String]) -> Self {
+        let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         Self {
-            root: root.to_owned(),
+            root: canonical_root,
             watch_roots: watch_roots.to_vec(),
             // Watcher receives exclude_patterns from its caller — the daemon
             // (daemon.rs:226) passes Config's patterns here. Hardcoded
@@ -77,69 +78,18 @@ impl Watcher {
         if let Err(err) = watcher.watch(&self.root, RecursiveMode::Recursive) {
             eprintln!("ix: warning: recursive watch failed: {err}. Falling back to manual walk.");
 
-            let exclude_patterns = self.exclude_patterns.clone();
             let walker = ignore::WalkBuilder::new(&self.root)
                 .hidden(false)
                 .git_ignore(true)
                 .require_git(true) // within-repo .gitignore only; never ancestor ~/.gitignore (audit D4)
                 .add_custom_ignore_filename(".ixignore")
-                .filter_entry(move |entry| {
-                    let path = entry.path();
-                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-                    // Built-in directory defaults
-                    if entry.file_type().is_some_and(|t| t.is_dir())
-                        && (name == "lost+found"
-                            || name == ".git"
-                            || name == "node_modules"
-                            || name == "target"
-                            || name == "__pycache__"
-                            || name == ".tox"
-                            || name == ".venv"
-                            || name == "venv"
-                            || name == ".ix"
-                            || name == ".codegraph"
-                            || exclude_patterns.iter().any(|p| p == name))
-                    {
-                        return false;
+                .filter_entry({
+                    let exclude_patterns = self.exclude_patterns.clone();
+                    let self_watch_roots = self.watch_roots.clone();
+                    let root_clone = self.root.clone();
+                    move |entry| {
+                        crate::builder::default_filter_entry(entry, &root_clone, &exclude_patterns, &self_watch_roots)
                     }
-
-                    // Built-in file noise defaults
-                    if entry.file_type().is_some_and(|t| t.is_file()) {
-                        if let Ok(metadata) = entry.metadata()
-                            && metadata.len() > 10 * 1024 * 1024
-                        {
-                            return false;
-                        }
-                        if name == "Cargo.lock"
-                            || name == "package-lock.json"
-                            || name == "pnpm-lock.yaml"
-                            || name == "shard.ix"
-                            || name == "shard.ix.tmp"
-                        {
-                            return false;
-                        }
-                    }
-
-                    // Built-in file extension defaults
-                    if entry.file_type().is_some_and(|t| t.is_file()) {
-                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                        match ext {
-                            // Binary extensions
-                            "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" |
-                            // Media
-                            "jpg" | "png" | "gif" | "mp4" | "mp3" | "pdf" |
-                            // Archives
-                            "zip" | "7z" | "rar" |
-                            // Data
-                            "sqlite" | "db" | "bin" => return false,
-                            _ => {}
-                        }
-                        if name.ends_with(".tar.gz") {
-                            return false;
-                        }
-                    }
-                    true
                 })
                 .build();
 
@@ -179,8 +129,9 @@ impl Watcher {
 
         self.inner = Some(watcher);
 
+        let root_clone = self.root.clone();
         let watch_roots = self.watch_roots.clone();
-        let ix_dir = self.root.join(".ix");
+        let exclude_patterns = self.exclude_patterns.clone();
         let debounce_dur = Duration::from_millis(self.debounce_ms);
         let handle = thread::spawn(move || {
             let mut changed_paths: HashMap<PathBuf, notify::EventKind> = HashMap::new();
@@ -188,7 +139,13 @@ impl Watcher {
                 // Wait for the first event
                 match event_rx.recv() {
                     Ok(Ok(event)) => {
-                        Self::collect_paths(&mut changed_paths, event, &watch_roots, &ix_dir);
+                        Self::collect_paths(
+                            &mut changed_paths,
+                            event,
+                            &root_clone,
+                            &watch_roots,
+                            &exclude_patterns,
+                        );
 
                         // Debounce loop: keep collecting for debounce_ms after the last event
                         loop {
@@ -197,8 +154,9 @@ impl Watcher {
                                     Self::collect_paths(
                                         &mut changed_paths,
                                         event,
+                                        &root_clone,
                                         &watch_roots,
-                                        &ix_dir,
+                                        &exclude_patterns,
                                     );
                                 }
                                 Ok(Err(_)) => {} // notify error, skip
@@ -241,23 +199,25 @@ impl Watcher {
         self.inner.is_some()
     }
 
-    fn collect_paths(
+    /// Collects paths from notify events that pass the admission policy.
+    pub fn collect_paths(
         map: &mut HashMap<PathBuf, notify::EventKind>,
         event: Event,
+        root: &Path,
         watch_roots: &[PathBuf],
-        ix_dir: &Path,
+        exclude_patterns: &[String],
     ) {
         let kind = event.kind;
         if kind.is_modify() || kind.is_create() || kind.is_remove() {
             for path in event.paths {
-                if path.starts_with(ix_dir) {
-                    continue;
-                }
-                if !watch_roots.is_empty()
-                    && !watch_roots.iter().any(|wr| {
-                        path.starts_with(wr) || path.parent().is_some_and(|p| p.starts_with(wr))
-                    })
-                {
+                let is_dir = std::fs::metadata(&path).is_ok_and(|m| m.is_dir());
+                if !crate::builder::is_path_admitted(
+                    &path,
+                    is_dir,
+                    Some(root),
+                    exclude_patterns,
+                    watch_roots,
+                ) {
                     continue;
                 }
                 let prev = map.get(&path);

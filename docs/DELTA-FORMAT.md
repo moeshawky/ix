@@ -241,8 +241,11 @@ for path in changed_files {
         delta_out.write_all(&[DELTA_TOMBSTONE])?;
         delta_out.write_all(&old_id.to_le_bytes())?;
     }
-    
-    // If file still exists, add new entry
+
+    // If file still exists, add new entry.
+    // Files that fail is_path_admission (e.g. under .git, .ix,
+    // .codegraph, or a binary extension) are silently skipped —
+    // they are neither tombstoned nor indexed (src/lib/builder.rs:152).
     if path.exists() && self.process_file_delta(path, next_file_id, &mut delta_out)? {
         next_file_id += 1;
     }

@@ -446,7 +446,7 @@ impl PyIndex {
             .store(true, std::sync::atomic::Ordering::Release);
     }
 
-    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+    const fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
 
@@ -461,19 +461,19 @@ impl PyIndex {
 
     /// Number of files in the index header.
     #[getter]
-    pub fn file_count(&self) -> u32 {
+    pub const fn file_count(&self) -> u32 {
         self.reader.header.file_count
     }
 
     /// Number of unique trigrams in the index header.
     #[getter]
-    pub fn trigram_count(&self) -> u32 {
+    pub const fn trigram_count(&self) -> u32 {
         self.reader.header.trigram_count
     }
 
     /// Unix timestamp (microseconds) when the index was created.
     #[getter]
-    pub fn created_at(&self) -> u64 {
+    pub const fn created_at(&self) -> u64 {
         self.reader.header.created_at
     }
 
