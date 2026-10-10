@@ -1,7 +1,7 @@
 # ix
 
-[![crates.io](https://img.shields.io/crates/v/moeix.svg)](https://crates.io/crates/moeix)
-[![docs.rs](https://docs.rs/moeix/badge.svg)](https://docs.rs/moeix)
+[![crates.io](https://img.shields.io/crates/v/ix.svg)](https://crates.io/crates/ix)
+[![docs.rs](https://docs.rs/ix/badge.svg)](https://docs.rs/ix)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![CI](https://github.com/moeshawky/ix/actions/workflows/build.yml/badge.svg)](https://github.com/moeshawky/ix/actions/workflows/build.yml)
 
@@ -37,7 +37,7 @@ codebases. Target hardware floor: 2015 CPU, 8 GB RAM.
 ## Install
 
 ```bash
-cargo install moeix
+cargo install ix
 ```
 
 Installs two binaries:
@@ -271,11 +271,11 @@ like ripgrep are faster.
 
 ## Library
 
-`ix` is also a library (`moeix` on crates.io, `ix` as the crate name):
+`ix` is also a library (crate name `ix`):
 
 ```toml
 [dependencies]
-moeix = "0.12"
+ix = "0.14.1"
 ```
 
 ```rust
@@ -289,7 +289,7 @@ let mut executor = Executor::new(&reader);
 let (matches, stats) = executor.execute(&plan, &QueryOptions::default())?;
 ```
 
-See [docs.rs/moeix](https://docs.rs/moeix) for the full API reference.
+See [docs.rs/ix](https://docs.rs/ix) for the full API reference.
 
 ## Building
 

@@ -8,7 +8,7 @@
 //! # Installation
 //!
 //! ```bash
-//! cargo install moeix
+//! cargo install ix
 //! ```
 //!
 //! # Quick Start

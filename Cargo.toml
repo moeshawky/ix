@@ -1,10 +1,10 @@
 [package]
-name = "moeix"
+name = "ix"
 version = "0.14.1"
 edition = "2024"
 description = "Sub-millisecond code search via sparse trigram indexing."
 homepage = "https://github.com/moeshawky/ix"
-documentation = "https://docs.rs/moeix"
+documentation = "https://docs.rs/ix"
 license = "MIT"
 repository = "https://github.com/moeshawky/ix"
 readme = "README.md"

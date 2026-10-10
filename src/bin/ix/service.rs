@@ -185,7 +185,7 @@ pub(crate) fn handle_service(action: &ServiceAction) -> ix::error::Result<()> {
         return Ok(());
     }
     eprintln!("Error: ix service commands require the 'notify' feature.");
-    eprintln!("Install with: cargo install moeix --features notify");
+    eprintln!("Install with: cargo install ix --features notify");
     std::process::exit(1);
 }
 

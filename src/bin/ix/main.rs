@@ -70,7 +70,7 @@ fn main() {
     {
         if cli.daemon {
             eprintln!(
-                "Error: daemon mode requires the 'notify' feature. Install with: cargo install moeix --features notify"
+                "Error: daemon mode requires the 'notify' feature. Install with: cargo install ix --features notify"
             );
             std::process::exit(1);
         }
@@ -88,7 +88,7 @@ fn main() {
     {
         if cli.archive {
             eprintln!(
-                "ix: error: --archive requires installing with `cargo install moeix --features archive`"
+                "ix: error: --archive requires installing with `cargo install ix --features archive`"
             );
             std::process::exit(1);
         }
@@ -98,7 +98,7 @@ fn main() {
     {
         if cli.decompress {
             eprintln!(
-                "ix: error: --decompress requires installing with `cargo install moeix --features decompress`"
+                "ix: error: --decompress requires installing with `cargo install ix --features decompress`"
             );
             std::process::exit(1);
         }
