@@ -59,7 +59,6 @@ struct DaemonCtx<'a> {
     /// Negative-result cache skipping re-verification of non-matching files.
     neg_cache: &'a Arc<NegCache>,
     daemon_sock: Option<&'a DaemonServer>,
-    running: &'a Arc<AtomicBool>,
     log_prefix: &'a str,
 }
 
@@ -172,8 +171,6 @@ fn run_single_root(
     let name = root_name(&root);
 
     println!("ixd [{name}]: watching ...");
-
-    let running = Arc::new(AtomicBool::new(true));
 
     // Concurrent instance guard — refuse another watcher for the same root.
     let ix_dir_early = root.join(".ix");
@@ -297,7 +294,6 @@ fn run_single_root(
         &cache_policy,
         &posting_cache,
         &neg_cache,
-        &running,
         daemon_sock.as_ref(),
         &name,
     );
@@ -436,7 +432,6 @@ fn wait_for_memory(guard: &ResourceGuard, log_prefix: &str) {
 /// * `guard` — resource guard for memory-pressure decisions.
 /// * `cache_policy` — adaptive cache policy driven by pressure.
 /// * `posting_cache` / `neg_cache` — cache layers managed by the policy.
-/// * `running` — set to `false` on graceful shutdown.
 /// * `daemon_sock` — optional IPC socket for broadcasting status.
 /// * `log_prefix` — human-readable root name for log messages.
 // All parameters are independently sourced config values.
@@ -454,16 +449,9 @@ fn run_main_loop(
     cache_policy: &AdaptiveCachePolicy,
     posting_cache: &Arc<PostingCache>,
     neg_cache: &Arc<NegCache>,
-    running: &Arc<AtomicBool>,
     daemon_sock: Option<&DaemonServer>,
     log_prefix: &str,
 ) {
-    let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
-    SHUTDOWN_HANDLER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .replace(shutdown_tx);
-
     loop {
         let mut had_events = false;
         // 30 × 1s timeouts = ~30s idle detection; shutdown checked each second.
@@ -481,15 +469,13 @@ fn run_main_loop(
                         posting_cache,
                         neg_cache,
                         daemon_sock,
-                        running,
                         log_prefix,
                     };
                     handle_changes(&mut ctx, &changed_files, rx);
                     break;
                 }
                 Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                    if shutdown_rx.try_recv().is_ok() || SHUTDOWN.load(Ordering::SeqCst) {
-                        running.store(false, Ordering::SeqCst);
+                    if SHUTDOWN.load(Ordering::SeqCst) {
                         if let Some(sock) = daemon_sock {
                             sock.shutdown_notify("signal", 1000);
                         }
@@ -534,8 +520,7 @@ fn run_main_loop(
             }
             // Shutdown check after compaction (also catches shutdown during
             // extended idle with empty delta).
-            if shutdown_rx.try_recv().is_ok() || SHUTDOWN.load(Ordering::SeqCst) {
-                running.store(false, Ordering::SeqCst);
+            if SHUTDOWN.load(Ordering::SeqCst) {
                 if let Some(sock) = daemon_sock {
                     sock.shutdown_notify("signal", 1000);
                 }
@@ -596,7 +581,6 @@ fn handle_changes(
                 ctx,
                 &beacon_status_msg(&exit_status, ctx.builder.files_len()),
             );
-            ctx.running.store(false, Ordering::SeqCst);
             return;
         }
         SafetyDecision::Escalate {
@@ -935,9 +919,6 @@ fn root_name(root: &Path) -> String {
         .and_then(|n| n.to_str())
         .map_or_else(|| root.display().to_string(), String::from)
 }
-
-static SHUTDOWN_HANDLER: std::sync::Mutex<Option<crossbeam_channel::Sender<()>>> =
-    std::sync::Mutex::new(None);
 
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 

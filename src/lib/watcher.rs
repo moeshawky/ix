@@ -220,11 +220,12 @@ impl Watcher {
                 ) {
                     continue;
                 }
-                let prev = map.get(&path);
-                let should_insert = !matches!(prev, Some(notify::EventKind::Remove(_)));
-                if should_insert {
-                    map.insert(path, kind);
-                }
+                // Treat the latest event as authoritative: a file deleted then
+                // recreated within one debounce window must end up indexed as
+                // its final (created/modified) state, not as a deletion.
+                // Previously a `Remove` "stuck" and dropped any later
+                // Create/Modify for the same path (C G-EDGE-2).
+                map.insert(path, kind);
             }
         }
     }

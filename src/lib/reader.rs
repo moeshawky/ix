@@ -120,11 +120,28 @@ impl Reader {
         // INVARIANT: No mutable access to mmap occurs after construction.
         // INVARIANT: StringPoolReader<'static> cannot outlive Reader (it's a field).
         // This is the standard pattern for self-referential mmap structs in Rust.
-        let string_pool_data: &'static [u8] = unsafe {
-            let start = header.string_pool_offset as usize;
-            let end = (header.string_pool_offset + header.string_pool_size) as usize;
-            std::mem::transmute::<&[u8], &'static [u8]>(&mmap[start..end])
-        };
+        // Bounds-check before the self-referential transmute so a corrupt
+        // header (overflowing or out-of-range offset/size) yields a typed
+        // error instead of panicking on an out-of-bounds slice. Mirrors the
+        // safe CDX path below (mmap.get(...).ok_or(SectionOutOfBounds)).
+        let start = usize::try_from(header.string_pool_offset).unwrap_or(usize::MAX);
+        let size = usize::try_from(header.string_pool_size).unwrap_or(usize::MAX);
+        let end = start.checked_add(size).ok_or(Error::SectionOutOfBounds {
+            section: "string_pool",
+            offset: header.string_pool_offset,
+            size: header.string_pool_size,
+            file_len: mmap.len() as u64,
+        })?;
+        if start > mmap.len() || end > mmap.len() {
+            return Err(Error::SectionOutOfBounds {
+                section: "string_pool",
+                offset: header.string_pool_offset,
+                size: header.string_pool_size,
+                file_len: mmap.len() as u64,
+            });
+        }
+        let string_pool_data: &'static [u8] =
+            unsafe { std::mem::transmute::<&[u8], &'static [u8]>(&mmap[start..end]) };
         let string_pool = StringPoolReader::new(string_pool_data)?;
 
         let cdx_blocks = if header.has_cdx() && header.cdx_block_index_size > 0 {
@@ -650,6 +667,8 @@ impl DeltaReader {
     ///
     /// Returns an error if the file exists but cannot be read.
     pub fn open(path: &std::path::Path) -> crate::error::Result<Self> {
+        // Cap for corrupt delta offsets_len to avoid OOM (defense-in-depth).
+        const MAX_DELTA_OFFSETS: usize = 1 << 24;
         use std::io::Read;
         let mut file = match std::fs::File::open(path) {
             Ok(f) => f,
@@ -722,8 +741,10 @@ impl DeltaReader {
                     file.read_exact(&mut buf32)?;
                     let offsets_len = u32::from_le_bytes(buf32) as usize;
 
-                    let mut offsets = Vec::with_capacity(offsets_len);
-                    for _ in 0..offsets_len {
+                    // Cap pre-allocation against a corrupt count to avoid OOM
+                    // on a crafted delta (defense-in-depth).
+                    let mut offsets = Vec::with_capacity(offsets_len.min(MAX_DELTA_OFFSETS));
+                    for _ in 0..offsets_len.min(MAX_DELTA_OFFSETS) {
                         file.read_exact(&mut buf32)?;
                         offsets.push(u32::from_le_bytes(buf32));
                     }

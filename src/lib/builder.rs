@@ -590,7 +590,7 @@ impl Builder {
                         // Fallback to proportional RSS limit if no formal guard provided.
                         // Use 80% of system RAM — higher than ResourceGuard's 60%, so the
                         // smart governor always fires first when present.
-                        let sys_mem = ResourceGuard::system_memory_bytes();
+                        let sys_mem = crate::cache_policy::system_memory_bytes();
                         let rss_threshold: u64 = if sys_mem > 0 {
                             (sys_mem.saturating_mul(4) / 5) as u64
                         } else {

@@ -804,12 +804,49 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "ix"
+version = "0.14.1"
+dependencies = [
+ "bzip2",
+ "chrono",
+ "clap 4.6.1",
+ "crc32c",
+ "criterion",
+ "crossbeam-channel",
+ "ctrlc",
+ "flate2",
+ "ignore",
+ "libc",
+ "llmosafe",
+ "memmap2",
+ "nix 0.29.0",
+ "notify",
+ "proptest",
+ "rand 0.8.6",
+ "rayon",
+ "regex",
+ "regex-syntax",
+ "serde",
+ "serde_json",
+ "tar",
+ "tempfile",
+ "thiserror",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+ "xxhash-rust",
+ "xz2",
+ "zip",
+ "zstd",
+]
+
+[[package]]
 name = "ix-py"
 version = "0.14.1"
 dependencies = [
+ "ix",
  "llmosafe",
  "memmap2",
- "moeix",
  "pyo3",
  "rayon",
 ]
@@ -977,43 +1014,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "moeix"
-version = "0.14.1"
-dependencies = [
- "bzip2",
- "chrono",
- "clap 4.6.1",
- "crc32c",
- "criterion",
- "crossbeam-channel",
- "ctrlc",
- "flate2",
- "ignore",
- "libc",
- "llmosafe",
- "memmap2",
- "nix 0.29.0",
- "notify",
- "proptest",
- "rand 0.8.6",
- "rayon",
- "regex",
- "regex-syntax",
- "serde",
- "serde_json",
- "tar",
- "tempfile",
- "thiserror",
- "toml 0.8.23",
- "tracing",
- "tracing-subscriber",
- "xxhash-rust",
- "xz2",
- "zip",
- "zstd",
 ]
 
 [[package]]

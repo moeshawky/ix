@@ -1,4 +1,4 @@
-# moeix Project Roadmap
+# ix Project Roadmap
 *The living plan that gates scope creep and guides controlled evolution.*
 
 ## 1. Intent Statement

@@ -91,7 +91,7 @@ EXAMPLES:
 NOTES:
  - Index stored in .ix/shard.ix relative to search path.
  - Word-boundary (-w) uses regex internally but enforces whole-word semantics.
- - --decompress and --archive require: cargo install moeix --features full
+ - --decompress and --archive require: cargo install ix --features full
  - --json schema: {file, line, col, content, byte_offset, context_before, context_after}"#
 )]
 pub(crate) struct Cli {

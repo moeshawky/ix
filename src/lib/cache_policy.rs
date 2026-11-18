@@ -89,21 +89,33 @@ pub fn resource_guard_fraction(numerator: usize, denominator: usize) -> Resource
 ///
 /// Uses standard rational buckets to avoid float-to-int cast clippy lints while providing
 /// accurate ceilings for standard ratios (e.g. 0.6 → 3/5, 0.5 → 1/2).
+/// Returns the rational bucket (numerator, denominator) used by
+/// [`resource_guard_auto`] for a given float fraction, so callers can derive
+/// a ceiling that exactly matches the guard's internal ceiling.
+fn resource_guard_bucket(ceiling_fraction: f64) -> (usize, usize) {
+    if ceiling_fraction >= 0.75 {
+        (4, 5)
+    } else if ceiling_fraction >= 0.55 {
+        (3, 5)
+    } else if ceiling_fraction >= 0.45 {
+        (1, 2)
+    } else if ceiling_fraction >= 0.3 {
+        (1, 3)
+    } else if ceiling_fraction >= 0.2 {
+        (1, 5)
+    } else {
+        (1, 10)
+    }
+}
+
+/// Creates a `ResourceGuard` with a ceiling based on a float fraction of system memory.
+///
+/// Uses standard rational buckets to avoid float-to-int cast clippy lints while providing
+/// accurate ceilings for standard ratios (e.g. 0.6 → 3/5, 0.5 → 1/2).
 #[must_use]
 pub fn resource_guard_auto(ceiling_fraction: f64) -> ResourceGuard {
-    if ceiling_fraction >= 0.75 {
-        resource_guard_fraction(4, 5)
-    } else if ceiling_fraction >= 0.55 {
-        resource_guard_fraction(3, 5)
-    } else if ceiling_fraction >= 0.45 {
-        resource_guard_fraction(1, 2)
-    } else if ceiling_fraction >= 0.3 {
-        resource_guard_fraction(1, 3)
-    } else if ceiling_fraction >= 0.2 {
-        resource_guard_fraction(1, 5)
-    } else {
-        resource_guard_fraction(1, 10)
-    }
+    let (n, d) = resource_guard_bucket(ceiling_fraction);
+    resource_guard_fraction(n, d)
 }
 
 impl AdaptiveCachePolicy {
@@ -112,15 +124,14 @@ impl AdaptiveCachePolicy {
     /// For example, `0.6` means use 60 % of system memory as the ceiling.
     /// Internally delegates to [`resource_guard_auto`].
     #[must_use]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_sign_loss,
-        clippy::cast_possible_truncation,
-        clippy::as_conversions
-    )]
     pub fn new(ceiling_fraction: f64) -> Self {
         let guard = resource_guard_auto(ceiling_fraction);
-        let ceiling = (system_memory_bytes() as f64 * ceiling_fraction) as usize;
+        // Derive the ceiling from the SAME rational bucket the guard uses,
+        // so ceiling_bytes() agrees with the guard's internal ceiling (C
+        // G-SEM-1). Previously this used the raw float, causing a divergence
+        // (e.g. 0.75 → guard 0.8*sysmem but ceiling_bytes() 0.75*sysmem).
+        let (n, d) = resource_guard_bucket(ceiling_fraction);
+        let ceiling = (system_memory_bytes().saturating_mul(n) / d.max(1)).max(256 * 1024 * 1024);
         Self { guard, ceiling }
     }
 
@@ -360,13 +371,14 @@ mod tests {
             "ceiling_bytes should equal system_memory * 0.5"
         );
 
-        // 0.75 = 3/4
-        let expected_75 = sys_mem.saturating_mul(3) / 4;
+        // 0.75 buckets to 4/5 (matching resource_guard_auto), so the
+        // ceiling must agree with the guard's internal ceiling (G-SEM-1 fix).
+        let expected_75 = sys_mem.saturating_mul(4) / 5;
         let policy_75 = AdaptiveCachePolicy::new(0.75_f64);
         assert_eq!(
             policy_75.ceiling_bytes(),
             expected_75,
-            "ceiling_bytes with 0.75 fraction"
+            "ceiling_bytes with 0.75 fraction (bucketed to 4/5 to match guard)"
         );
     }
 

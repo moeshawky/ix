@@ -8,7 +8,7 @@
 //! # Installation
 //!
 //! ```bash
-//! cargo install moeix
+//! cargo install ix
 //! ```
 //!
 //! # Quick Start
@@ -79,8 +79,6 @@
 #![warn(clippy::use_self)]
 #![warn(clippy::string_slice)]
 #![warn(clippy::clone_on_ref_ptr)]
-
-extern crate llmosafe;
 
 /// HTTP API surface for programmatic index access.
 pub mod api;

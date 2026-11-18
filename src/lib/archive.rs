@@ -104,6 +104,11 @@ fn match_content_stream<R: Read>(
     regex: &Regex,
     options: &QueryOptions,
 ) -> Result<Vec<Match>> {
+    // Bound decompressed output to defend against zip/tar bombs (parity
+    // with decompress.rs CountingReader). Per-entry and per-line caps.
+    const MAX_ENTRY_BYTES: usize = 100 * 1024 * 1024; // 100 MiB per entry
+    const MAX_LINE_BYTES: usize = 1024 * 1024; // 1 MiB per line
+
     let mut buf_reader = BufReader::new(reader);
     let mut matches = Vec::new();
     let mut line_number = 0u32;
@@ -120,11 +125,29 @@ fn match_content_stream<R: Read>(
         }
     }
 
+    let mut total_bytes: usize = 0;
     let mut line = String::new();
     let mut context_before = std::collections::VecDeque::new();
     let mut pending_matches: Vec<Match> = Vec::new();
 
-    while buf_reader.read_line(&mut line)? > 0 {
+    while {
+        // Bound each line read so a newline-free giant line cannot
+        // allocate unbounded memory before the per-line cap fires (D-2).
+        let n = (&mut buf_reader)
+            .take((MAX_LINE_BYTES as u64) + 1)
+            .read_line(&mut line)?;
+        if n == 0 {
+            false
+        } else {
+            total_bytes = total_bytes.saturating_add(n);
+            if n > MAX_LINE_BYTES || total_bytes > MAX_ENTRY_BYTES {
+                return Err(crate::error::Error::Config(format!(
+                    "archive entry exceeds size limit ({MAX_ENTRY_BYTES} bytes)"
+                )));
+            }
+            true
+        }
+    } {
         line_number += 1;
         let line_len = u64::try_from(line.len()).unwrap_or(0);
         let trimmed_line_str = line.trim_end();

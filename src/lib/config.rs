@@ -181,29 +181,37 @@ impl Config {
                 let sub_path = entry.path();
                 if sub_path.is_dir() {
                     let config_path = sub_path.join(".ixd.toml");
-                    if config_path.exists()
-                        && let Ok(mut sub_config) = Self::load(&config_path)
-                    {
-                        if !sub_config.watch_roots.is_empty() {
-                            // Resolve subdir `watch_roots` against the subdir (not
-                            // the root) so they survive the absolute-path match
-                            // in Builder/Watcher (audit D1).
-                            sub_config.watch_roots = sub_config
-                                .watch_roots
-                                .into_iter()
-                                .map(|wr| {
-                                    if wr.is_absolute() {
-                                        wr
-                                    } else {
-                                        sub_path.join(wr)
-                                    }
-                                })
-                                .collect();
-                            merged.watch_roots.extend(sub_config.watch_roots);
+                    if config_path.exists() {
+                        match Self::load(&config_path) {
+                            Ok(mut sub_config) => {
+                                if !sub_config.watch_roots.is_empty() {
+                                    // Resolve subdir `watch_roots` against the subdir (not
+                                    // the root) so they survive the absolute-path match
+                                    // in Builder/Watcher (audit D1).
+                                    sub_config.watch_roots = sub_config
+                                        .watch_roots
+                                        .into_iter()
+                                        .map(|wr| {
+                                            if wr.is_absolute() {
+                                                wr
+                                            } else {
+                                                sub_path.join(wr)
+                                            }
+                                        })
+                                        .collect();
+                                    merged.watch_roots.extend(sub_config.watch_roots);
+                                }
+                                merged
+                                    .exclude_patterns
+                                    .extend(sub_config.exclude_patterns.clone());
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "ixd: failed to parse sub-config {}: {e}",
+                                    config_path.display()
+                                );
+                            }
                         }
-                        merged
-                            .exclude_patterns
-                            .extend(sub_config.exclude_patterns.clone());
                     }
                 }
             }

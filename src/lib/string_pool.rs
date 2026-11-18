@@ -146,14 +146,17 @@ impl<'a> StringPoolReader<'a> {
     #[allow(clippy::as_conversions)] // binary format: usize quantities within u16 range
     #[allow(clippy::indexing_slicing)] // length checks guarantee valid range
     pub fn new(data: &'a [u8]) -> Result<Self> {
+        // Cap for corrupt prefix_count to avoid OOM (defense-in-depth).
+        const MAX_STRING_POOL_PREFIXES: usize = 1 << 20;
+
         if data.len() < 4 {
             return Err(Error::StringPoolOutOfBounds);
         }
         let prefix_count = data[0..4].try_into().ok().map_or(0, u32::from_le_bytes) as usize;
-        let mut prefixes = Vec::with_capacity(prefix_count);
+        let mut prefixes = Vec::with_capacity(prefix_count.min(MAX_STRING_POOL_PREFIXES));
         let mut pos = 4;
 
-        for _ in 0..prefix_count {
+        for _ in 0..prefix_count.min(MAX_STRING_POOL_PREFIXES) {
             if pos + 4 > data.len() {
                 return Err(Error::StringPoolOutOfBounds);
             }

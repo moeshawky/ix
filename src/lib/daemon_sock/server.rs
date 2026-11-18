@@ -414,6 +414,8 @@ fn client_read_loop(
                                         "ixd: too many concurrent progressive searches, rejecting"
                                     );
                                     // Send error response so the client knows.
+                                    // (shared lock already held by `s` above, so
+                                    // this write is serialized with broadcast().)
                                     if let Ok(mut ws) = stream.try_clone() {
                                         if let Ok(mut line) = serde_json::to_string(
                                             &ServerMessage::SearchResults(SearchResults {
@@ -470,6 +472,9 @@ fn client_read_loop(
                                 });
                             // Write each batch as a separate NDJSON line.
                             while let Ok(batch) = result_receiver.recv() {
+                                // Serialize with broadcast() (shared lock) to
+                                // prevent NDJSON interleaving (RC-2).
+                                let _wguard = shared.lock().ok();
                                 if let Ok(mut write_stream) = stream.try_clone() {
                                     match serde_json::to_string(&ServerMessage::SearchResults(
                                         batch,
@@ -525,6 +530,9 @@ fn client_read_loop(
                     }
                 };
 
+                // Serialize with broadcast() (shared lock) to prevent NDJSON
+                // interleaving (RC-2).
+                let _wguard = shared.lock().ok();
                 if let Ok(mut write_stream) = stream.try_clone() {
                     match serde_json::to_string(&response) {
                         Ok(mut line) => {

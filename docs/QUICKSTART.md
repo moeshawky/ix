@@ -21,10 +21,10 @@
 
 ```bash
 # Install from crates.io (standard — search + daemon)
-cargo install moeix
+cargo install ix
 
 # Or with all features (adds archive + compressed file support)
-cargo install moeix --features full
+cargo install ix --features full
 
 # Expected output:
 # Finished release [optimized] target(s) in 45s

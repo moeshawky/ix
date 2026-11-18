@@ -76,7 +76,8 @@ pub(crate) fn print_results(
                 .iter()
                 .map(|p| p.display().to_string())
                 .collect();
-            println!("{{\"files\": {paths:?}}}");
+            let obj = serde_json::json!({"files": paths});
+            println!("{obj}");
         } else {
             for f in sorted_files {
                 println!("{}", f.display());
@@ -142,24 +143,21 @@ fn print_match(
         let context_before: Vec<String> = m.context_before.iter().map(|s| truncate(s)).collect();
         let context_after: Vec<String> = m.context_after.iter().map(|s| truncate(s)).collect();
 
-        println!(
-            "{{\"file\":\"{}\",\"line\":{},\"col\":{},\"content\":\"{}\",\"byte_offset\":{},\"context_before\":{:?},\"context_after\":{:?},\"is_binary\":{}}}",
-            m.file_path
-                .display()
-                .to_string()
-                .replace('\\', "\\\\")
-                .replace('"', "\\\""),
-            m.line_number,
-            m.col,
-            line_content
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', "\\n"),
-            m.byte_offset,
-            context_before,
-            context_after,
-            m.is_binary
-        );
+        // Build the JSON object with serde_json so ALL string fields
+        // (file, content, context_*) are correctly escaped for control
+        // chars, tabs, CR, etc. (G-SEM-1: manual .replace() missed \\r/\\t
+        // and other control chars, producing invalid JSON).
+        let obj = serde_json::json!({
+            "file": m.file_path.display().to_string(),
+            "line": m.line_number,
+            "col": m.col,
+            "content": line_content,
+            "byte_offset": m.byte_offset,
+            "context_before": context_before,
+            "context_after": context_after,
+            "is_binary": m.is_binary,
+        });
+        println!("{obj}");
     } else {
         if context > 0 {
             for (i, line) in m.context_before.iter().enumerate() {

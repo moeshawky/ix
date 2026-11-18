@@ -143,6 +143,11 @@ fn stream_file_multiline<R: Read>(
     is_compressed: bool,
     stats: &mut StreamStats,
 ) -> Result<Vec<Match>> {
+    // Bound the read to avoid OOM on huge inputs (decompression/zip-bomb
+    // parity with decompress.rs CountingReader). read_to_string on an
+    // unbounded reader is a DoS vector for --multiline.
+    const MAX_MULTILINE_BYTES: u64 = 100 * 1024 * 1024; // 100 MiB
+
     let mut buf_reader = BufReader::new(reader);
 
     if !is_compressed {
@@ -154,7 +159,14 @@ fn stream_file_multiline<R: Read>(
     }
 
     let mut content = String::new();
-    buf_reader.read_to_string(&mut content)?;
+    let bytes_read = buf_reader
+        .take(MAX_MULTILINE_BYTES + 1)
+        .read_to_string(&mut content)?;
+    if bytes_read as u64 > MAX_MULTILINE_BYTES {
+        return Err(crate::error::Error::Config(format!(
+            "multiline input exceeds {MAX_MULTILINE_BYTES} bytes"
+        )));
+    }
 
     let mut matches = Vec::new();
     let line_offsets: Vec<usize> = content.lines().fold(Vec::new(), |mut acc, line| {
@@ -356,6 +368,14 @@ pub fn stream_file_chunked(
     } else {
         DEFAULT_CHUNK_OVERLAP
     };
+    // Guard against an infinite loop: if overlap >= chunk_size, every
+    // iteration re-starts at or before its previous start and never
+    // advances. Clamp overlap to chunk_size-1 so progress is guaranteed.
+    let chunk_overlap = if chunk_size == 0 {
+        0
+    } else {
+        chunk_overlap.min(chunk_size.saturating_sub(1))
+    };
 
     let mut matches = Vec::new();
     let mut seen_offsets: HashSet<u64> = HashSet::new();
@@ -480,4 +500,36 @@ fn collect_context_after(
         ctx.push(String::from_utf8_lossy(line_bytes).to_string());
     }
     ctx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::executor::QueryOptions;
+    use regex::Regex;
+
+    #[test]
+    fn chunked_overlap_no_infinite_loop() {
+        // Regression: chunk_overlap >= chunk_size used to infinite-loop.
+        // With the clamp, this must terminate quickly.
+        let data = vec![b'a'; 10_000];
+        let regex = Regex::new("a").unwrap();
+        let opts = QueryOptions {
+            chunk_size_bytes: 50,
+            chunk_overlap_bytes: 50, // overlap == size (was infinite loop)
+            ..QueryOptions::default()
+        };
+        // stream_file_chunked is pub; exercise the clamp path through a
+        // temp file.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.txt");
+        std::fs::write(&path, &data).unwrap();
+        // Use the public streaming entry that takes a path? stream_file_chunked
+        // takes mmap_data; replicate via reading the file into a Vec and
+        // calling the function directly (it's pub).
+        let mmap_data = std::fs::read(&path).unwrap();
+        let res = stream_file_chunked(&mmap_data, &path, &regex, &opts);
+        assert!(res.is_ok(), "chunked search should succeed: {res:?}");
+        // If we reach here, no infinite loop.
+    }
 }

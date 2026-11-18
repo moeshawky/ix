@@ -64,22 +64,26 @@ impl PostingList {
     /// Returns an error if the ZSTD data is corrupted (checksum mismatch) or if
     /// the varint-decoded structure is invalid.
     pub fn decode(data: &[u8]) -> Result<Self> {
+        // Caps for corrupt counts to avoid OOM (defense-in-depth).
+        const MAX_POSTING_FILES: usize = 1 << 20;
+        const MAX_OFFSETS_PER_FILE: usize = 1 << 24;
+
         let payload = zstd::decode_all(data).map_err(|_| Error::PostingCorrupted)?;
 
         let mut pos = 0;
         let num_files = usize::try_from(varint::decode(&payload, &mut pos)?).unwrap_or(0);
-        let mut entries = Vec::with_capacity(num_files);
+        let mut entries = Vec::with_capacity(num_files.min(MAX_POSTING_FILES));
 
         let mut last_file_id = 0u32;
-        for _ in 0..num_files {
+        for _ in 0..num_files.min(MAX_POSTING_FILES) {
             let file_id_delta = u32::try_from(varint::decode(&payload, &mut pos)?).unwrap_or(0);
             let file_id = last_file_id + file_id_delta;
             last_file_id = file_id;
 
             let num_offsets = usize::try_from(varint::decode(&payload, &mut pos)?).unwrap_or(0);
-            let mut offsets = Vec::with_capacity(num_offsets);
+            let mut offsets = Vec::with_capacity(num_offsets.min(MAX_OFFSETS_PER_FILE));
             let mut last_offset = 0u32;
-            for _ in 0..num_offsets {
+            for _ in 0..num_offsets.min(MAX_OFFSETS_PER_FILE) {
                 let offset_delta = u32::try_from(varint::decode(&payload, &mut pos)?).unwrap_or(0);
                 let offset = last_offset + offset_delta;
                 last_offset = offset;

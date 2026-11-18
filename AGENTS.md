@@ -111,7 +111,7 @@ VIOLATE → BROKEN BUILD / SECURITY REGRESSION / WRONG LENS
 ├── AGENTS.md              — this entry gate
 ├── SUBAGENT_ROLES.md      — subagent dispatch protocol
 ├── src/
-│   ├── lib/               — moeix library
+│   ├── lib/               — ix library
 │   │   ├── trigram.rs     — trigram extraction
 │   │   ├── posting.rs     — posting list decode
 │   │   ├── executor.rs    — search execution

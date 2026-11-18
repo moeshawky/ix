@@ -94,7 +94,16 @@ pub(crate) fn try_ipc_search(
         chunk_overlap_bytes: params.chunk_overlap,
     };
 
-    let results = client.search(query).ok()?;
+    let results = match client.search(query) {
+        Ok(r) => r,
+        Err(e) => {
+            // Surface the IPC failure instead of silently degrading (D
+            // G-SEM-2): the user must be able to tell that results came
+            // from the slower local path.
+            eprintln!("ix: daemon search failed, falling back to local: {e}");
+            return None;
+        }
+    };
     Some((results.matches, results.stats))
 }
 

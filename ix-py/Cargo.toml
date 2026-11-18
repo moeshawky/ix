@@ -12,7 +12,7 @@ name = "_ix"
 crate-type = ["cdylib"]
 
 [dependencies]
-moeix = { version = "0.14.1", path = "..", default-features = false, features = ["notify"] }
+ix = { version = "0.14.1", path = "..", default-features = false, features = ["notify"] }
 pyo3 = { version = "0.25", features = ["extension-module"] }
 memmap2 = "0.9"
 rayon = "1"
@@ -20,7 +20,7 @@ llmosafe = "0.7.5"
 
 [features]
 default = ["notify"]
-notify = ["moeix/notify"]
-archive = ["moeix/archive"]
-decompress = ["moeix/decompress"]
+notify = ["ix/notify"]
+archive = ["ix/archive"]
+decompress = ["ix/decompress"]
 full = ["notify", "archive", "decompress"]

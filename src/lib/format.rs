@@ -226,7 +226,18 @@ impl Header {
     /// Returns an error if any section extends beyond the file length.
     pub fn validate_bounds(&self, file_len: u64) -> crate::error::Result<()> {
         let check = |name: &'static str, off: u64, sz: u64| -> crate::error::Result<()> {
-            if off + sz > file_len {
+            // Use checked arithmetic so a corrupt header with overflowing
+            // offset+size cannot wrap past this guard (defense-in-depth;
+            // downstream reads also use .get()).
+            let end = off
+                .checked_add(sz)
+                .ok_or(crate::error::Error::SectionOutOfBounds {
+                    section: name,
+                    offset: off,
+                    size: sz,
+                    file_len,
+                })?;
+            if end > file_len {
                 Err(crate::error::Error::SectionOutOfBounds {
                     section: name,
                     offset: off,
