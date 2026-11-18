@@ -10,6 +10,7 @@ use super::types::{
     ClientMessage, DaemonSockError, DaemonStatus, FileChange, Result, SearchResults, ServerMessage,
     ShutdownNotice, now_secs,
 };
+use crate::idle::IdleTracker;
 
 /// Maximum number of change batches retained for history queries.
 const HISTORY_CAPACITY: usize = 1024;
@@ -55,6 +56,9 @@ struct Shared {
     search_slots: Arc<SearchSlots>,
     /// Cache handles shared across all daemon-mode search queries.
     search_caches: Option<SearchCaches>,
+    /// Shared idle tracker — reset on every search query so the daemon
+    /// stays Active during query traffic.
+    idle_tracker: Option<Arc<Mutex<IdleTracker>>>,
 }
 
 /// Simple permit counter for limiting concurrent progressive searches.
@@ -163,6 +167,7 @@ impl DaemonServer {
             root: root.to_path_buf(),
             search_slots: Arc::new(SearchSlots::new(4)),
             search_caches: None,
+            idle_tracker: None,
         }));
         let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
 
@@ -189,6 +194,19 @@ impl DaemonServer {
     pub(crate) fn set_caches(&mut self, caches: SearchCaches) {
         if let Ok(mut s) = self.shared.lock() {
             s.search_caches = Some(caches);
+        }
+    }
+
+    /// Set the idle tracker used to reset the daemon's activity state from
+    /// query activity arriving over the socket.
+    ///
+    /// Must be called before search queries arrive. A search query received
+    /// before this is set does not reset the idle timer, so the daemon may
+    /// report itself as `Idle` or `Dormant` (and run idle cleanup) while it
+    /// is still actively serving queries.
+    pub(crate) fn set_idle_tracker(&mut self, tracker: Arc<Mutex<IdleTracker>>) {
+        if let Ok(mut s) = self.shared.lock() {
+            s.idle_tracker = Some(tracker);
         }
     }
 
@@ -387,13 +405,25 @@ fn client_read_loop(
                         }
                     }
                     ClientMessage::SearchQuery(query) => {
-                        let (root, caches) = {
+                        let (root, caches, idle) = {
                             let Ok(s) = shared.lock() else {
                                 tracing::warn!("ixd: shared lock poisoned in search query");
                                 continue;
                             };
-                            (s.root.clone(), s.search_caches.clone())
+                            (
+                                s.root.clone(),
+                                s.search_caches.clone(),
+                                s.idle_tracker.clone(),
+                            )
                         };
+                        // Reset idle timer on query activity (cross-thread bridge).
+                        if let Some(tracker) = idle {
+                            if let Ok(mut t) = tracker.lock() {
+                                t.record_query();
+                            } else {
+                                tracing::warn!("ixd: idle tracker lock poisoned in search query");
+                            }
+                        }
 
                         if query.progressive {
                             // Progressive mode: stream results as they arrive.

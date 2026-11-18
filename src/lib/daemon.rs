@@ -40,6 +40,7 @@ use llmosafe::{
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -51,7 +52,7 @@ struct DaemonCtx<'a> {
     builder: &'a mut Builder,
     ix_dir: &'a Path,
     beacon: &'a mut Beacon,
-    idle: &'a mut IdleTracker,
+    idle: Arc<Mutex<IdleTracker>>,
     guard: &'a ResourceGuard,
     cache_policy: &'a AdaptiveCachePolicy,
     /// LRU cache for decoded posting lists, keyed by trigram.
@@ -256,7 +257,7 @@ fn run_single_root(
     }
     beacon.write_to(&ix_dir)?;
 
-    let mut idle = IdleTracker::new();
+    let idle = Arc::new(Mutex::new(IdleTracker::new()));
 
     let mut daemon_sock = match DaemonServer::new(&root) {
         Ok(s) => {
@@ -272,16 +273,20 @@ fn run_single_root(
             None
         }
     };
+    // Wire the cache pipeline and idle tracker before the accept loop starts,
+    // so no search query can arrive before the socket server is fully wired.
+    // SearchCaches are shared across all daemon search queries via the socket
+    // server's shared state.
+    if let Some(ref mut s) = daemon_sock {
+        s.set_caches(caches.clone());
+    }
+    if let Some(ref mut s) = daemon_sock {
+        s.set_idle_tracker(Arc::clone(&idle));
+    }
     if let Some(ref mut s) = daemon_sock
         && let Err(e) = s.start()
     {
         eprintln!("ixd [{name}]: failed to start socket server: {e}");
-    }
-
-    // Wire the cache pipeline: SearchCaches are shared across all daemon
-    // search queries via the socket server's shared state.
-    if let Some(ref mut s) = daemon_sock {
-        s.set_caches(caches.clone());
     }
 
     run_main_loop(
@@ -289,7 +294,7 @@ fn run_single_root(
         &rx,
         &ix_dir,
         &mut beacon,
-        &mut idle,
+        &idle,
         guard,
         &cache_policy,
         &posting_cache,
@@ -444,7 +449,7 @@ fn run_main_loop(
     rx: &crossbeam_channel::Receiver<Vec<PathBuf>>,
     ix_dir: &Path,
     beacon: &mut Beacon,
-    idle: &mut IdleTracker,
+    idle: &Arc<Mutex<IdleTracker>>,
     guard: &ResourceGuard,
     cache_policy: &AdaptiveCachePolicy,
     posting_cache: &Arc<PostingCache>,
@@ -463,7 +468,7 @@ fn run_main_loop(
                         builder,
                         ix_dir,
                         beacon,
-                        idle,
+                        idle: Arc::clone(idle),
                         guard,
                         cache_policy,
                         posting_cache,
@@ -736,7 +741,13 @@ fn handle_changes(
         .flatten()
         .unwrap_or(0);
     if delta_size > 0
-        && (ctx.idle.state() == crate::idle::DaemonState::Dormant || delta_size > 50 * 1024 * 1024)
+        && (ctx
+            .idle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .state()
+            == crate::idle::DaemonState::Dormant
+            || delta_size > 50 * 1024 * 1024)
     {
         ctx.beacon.status = "compacting".to_string();
         if let Err(e) = ctx.beacon.write_to(ctx.ix_dir) {
@@ -785,7 +796,10 @@ fn handle_changes(
             sock.set_status(&idle_status, ctx.builder.files_len());
         }
     }
-    ctx.idle.record_change();
+    ctx.idle
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .record_change();
 }
 
 /// Rebuild the full index from the current state plus the accumulated delta.
