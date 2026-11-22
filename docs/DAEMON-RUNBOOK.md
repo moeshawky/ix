@@ -1,8 +1,8 @@
 # Daemon Operation Runbook
 
-**Purpose:** Operate and troubleshoot the `ixd` background indexing daemon  
-**Last Verified:** 2026-08-13  
-**Time to Complete:** 10 minutes
+- **Purpose:** Operate and troubleshoot the `ixd` background indexing daemon
+- **Last Verified:** 2026-11-22 (v0.14.2)
+- **Time to Complete:** 10 minutes
 
 ---
 
@@ -41,7 +41,7 @@ cargo build --release --features notify
 # ixd: socket at /run/user/1000/ixd/{hash}.sock
 ```
 
-`ixd` performs its own initial build on startup (`src/lib/daemon.rs:232`
+`ixd` performs its own initial build on startup (`src/lib/daemon.rs:354`
 unconditionally calls `builder.build()`), so there is no need to run
 `ix --build` first — running both rebuilds the same shard twice
 (measured 2026-08-13 on a 40-file / 240-trigram fixture: `ix --build`
@@ -116,7 +116,7 @@ watch_roots = ["src", "lib", "tests"]
 # Directory names to exclude from indexing.
 # Defaults shown below — add or override as needed.
 # Hardcoded dirs (lost+found, .git, .ix, .codegraph) are always
-# excluded by is_path_admission and cannot be removed.
+# excluded by is_path_admitted and cannot be removed.
 exclude_patterns = [
     ".codegraph",
     ".git",
@@ -134,7 +134,7 @@ debounce_ms = 500
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `watch_roots` | `[String]` | `[]` | Subdirectories to scope indexing to. Empty = entire root. |
-| `exclude_patterns` | `[String]` | `.codegraph`, `.git`, `node_modules`, `target` | Directory names skipped during file walk. Hardcoded dirs (`lost+found`, `.git`, `.ix`, `.codegraph`) in `is_path_admission` (`src/lib/builder.rs:188-191`) cannot be overridden; `exclude_patterns` are exact-name matches, not globs. |
+| `exclude_patterns` | `[String]` | `.codegraph`, `.git`, `node_modules`, `target` | Directory names skipped during file walk. Hardcoded dirs (`lost+found`, `.git`, `.ix`, `.codegraph`) in `is_path_admitted` (`src/lib/builder.rs:289-331`) cannot be overridden; `exclude_patterns` are exact-name matches, not globs. |
 | `debounce_ms` | `u64` or `null` | `null` (500 ms) | File-watch batching window in ms. Range: 50–10 000. Clamped to range. |
 
 #### Examples
@@ -150,7 +150,7 @@ Only `src/`, `lib/`, and `include/` will be indexed. All other directories under
 ```toml
 exclude_patterns = [".git", "node_modules", "target", "vendor", "build"]
 ```
-`vendor/` and `build/` are custom additions beyond the defaults (`.codegraph`, `.git`, `node_modules`, `target`). Hardcoded dirs (`lost+found`, `.git`, `.ix`, `.codegraph`) in `is_path_admission` (`src/lib/builder.rs:188-191`) cannot be removed by config. `exclude_patterns` are exact directory-name matches, not globs.
+`vendor/` and `build/` are custom additions beyond the defaults (`.codegraph`, `.git`, `node_modules`, `target`). Hardcoded dirs (`lost+found`, `.git`, `.ix`, `.codegraph`) in `is_path_admitted` (`src/lib/builder.rs:289-331`) cannot be removed by config. `exclude_patterns` are exact directory-name matches, not globs.
 
 **Tune debounce for faster or quieter change pickup:**
 ```toml
@@ -402,9 +402,9 @@ ixd /path/to/repo
 # Verify socket exists
 ls -la $XDG_RUNTIME_DIR/ixd/*.sock
 
-# Check socket permissions
+# Check socket permissions (0o600 socket file inside 0o700 dir; server.rs:231, resolve.rs:82)
 stat -c "%a %U:%G" /path/to/socket
-# Expected: 0755 or 0777
+# Expected: 600 <user>:<group>
 
 # Test connection
 echo '{"t":"status_query"}' | socat - UNIX-CONNECT:/path/to/socket
@@ -532,9 +532,9 @@ rm /path/to/repo/.ix/beacon.json
 
 ### Memory Limits
 
-The 60% system-memory ceiling is hardcoded in `ResourceGuard`
-(`src/bin/ixd.rs:31`); it is not configurable via an environment
-variable. To control memory pressure in practice, scope what the daemon
+The 60% system-memory ceiling is configured via `resource_guard_auto(0.6)`
+(`src/lib/daemon.rs:155`, `src/lib/cache_policy.rs:115`); it is not configurable
+via an environment variable. To control memory pressure in practice, scope what the daemon
 watches via `.ixd.toml` (see Configuration above) — smaller watch roots
 mean a smaller index and lower RSS.
 
@@ -567,7 +567,7 @@ sudo sysctl -p
 - `DAEMON-SOCKET-INTERNALS.md` — Socket protocol specification
 - `docs/DELTA-FORMAT.md` — Delta index format
 - `src/lib/daemon.rs` — Full daemon implementation
-- `src/lib/daemon_sock.rs` — Socket handling code
+- `src/lib/daemon_sock/` — Socket protocol, client, server, and path resolution modules
 
 ### Client Shutdown Protocol
 

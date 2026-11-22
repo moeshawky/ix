@@ -1,9 +1,9 @@
 # Daemon Socket API Reference
 
-**Purpose**: External tooling integration with ixd daemon via Unix domain socket  
-**Protocol**: NDJSON (newline-delimited JSON)  
-**Last Verified**: 2026-05-16  
-**Source**: `src/lib/daemon_sock.rs`  
+- **Purpose**: External tooling integration with ixd daemon via Unix domain socket
+- **Protocol**: NDJSON (newline-delimited JSON)
+- **Last Verified**: 2026-11-22 (v0.14.2)
+- **Source**: `src/lib/daemon_sock/{mod,client,resolve,search,server,types}.rs`
 
 ---
 
@@ -48,7 +48,7 @@ echo -n "/workspace/ix" | xxh64 | cut -c1-16
 # /run/user/1000/ixd/a1b2c3d4e5f67890.sock
 ```
 
-**Source**: `src/lib/daemon_sock.rs:284-305`
+**Source**: `src/lib/daemon_sock/resolve.rs:19-74`
 
 ---
 
@@ -57,6 +57,11 @@ echo -n "/workspace/ix" | xxh64 | cut -c1-16
 ### Format
 - **Encoding**: UTF-8
 - **Framing**: One JSON object per line, terminated by `\n`
+- **Frame Limits & Timeouts**:
+  - **Server requests**: `MAX_IPC_LINE_BYTES = 1 MiB` (`src/lib/daemon_sock/server.rs:24`); clients exceeding 1 MiB are disconnected (`server.rs:561-570`).
+  - **Client responses**: `MAX_IPC_LINE_BYTES = 64 MiB` (`src/lib/daemon_sock/client.rs:12`); `DaemonClient` sets `5 s` read/write timeouts (`client.rs:100-101`).
+  - **Serialized writes**: Server replies and watcher broadcast frames share a per-client `Arc<Mutex<UnixStream>>` write lock (`src/lib/daemon_sock/server.rs:29-48`).
+  - **Idle timer integration**: Incoming `SearchQuery` requests reset `IdleTracker` via `record_query()` (`src/lib/daemon_sock/server.rs:632-638`).
 - **Direction**: Bidirectional (full-duplex)
 
 ### Example Session
@@ -68,7 +73,7 @@ echo -n "/workspace/ix" | xxh64 | cut -c1-16
 {"t":"status","pid":12345,"status":"idle","files":1523,"daemon_status":{"state":"idle"}}
 ```
 
-**Source**: `src/lib/daemon_sock.rs:560-640`
+**Source**: `src/lib/daemon_sock/server.rs:541-664`
 
 ---
 
@@ -86,7 +91,7 @@ Request current daemon status.
 | `t` | string | Yes | Must be `"status_query"` |
 | `id` | u64 | No | Client-assigned ID (echoed in response) |
 
-**Source**: `src/lib/daemon_sock.rs:244-249`
+**Source**: `src/lib/daemon_sock/types.rs:278-282`
 
 ---
 
@@ -103,7 +108,7 @@ Request all changes since a given timestamp.
 | `since` | u64 | Yes | Unix timestamp (seconds) |
 | `id` | u64 | No | Client-assigned ID |
 
-**Source**: `src/lib/daemon_sock.rs:251-257`
+**Source**: `src/lib/daemon_sock/types.rs:284-289`
 
 ---
 
@@ -128,7 +133,9 @@ Execute a search query.
   "search_path":null,
   "progressive":false,
   "chunk_size_bytes":0,
-  "chunk_overlap_bytes":0
+  "chunk_overlap_bytes":0,
+  "count_only":false,
+  "files_only":false
 }
 ```
 
@@ -141,7 +148,7 @@ Execute a search query.
 | `word_boundary` | bool | No | false | Match whole words only |
 | `max_results` | u64 | No | 0 | 0 = unlimited |
 | `context_lines` | u64 | No | 0 | Lines of context |
-| `file_types` | array | No | [] | File extensions (e.g., `["rs","py"]`) |
+| `file_types` | array | No | [] | File extensions (e.g., `["rs","py"]`; `--type` aliases expanded via `file_types::expand()`) |
 | `decompress` | bool | No | false | Search inside compressed files |
 | `multiline` | bool | No | false | Dot matches newline (regex only) |
 | `archive` | bool | No | false | Search inside archives |
@@ -150,12 +157,14 @@ Execute a search query.
 | `progressive` | bool | No | false | Stream results in batches |
 | `chunk_size_bytes` | u64 | No | 0 | Large-file chunk size (0 = 16 MiB default) |
 | `chunk_overlap_bytes` | u64 | No | 0 | Overlap between chunks (0 = 1 MiB default) |
+| `count_only` | bool | No | false | Return match counts instead of full match lines (`v0.13.4+`) |
+| `files_only` | bool | No | false | Return distinct matching file paths (`v0.13.4+`) |
 
-**Source**: `src/lib/daemon_sock.rs:195-236`
+**Source**: `src/lib/daemon_sock/types.rs:205-262`
 
 ---
 
-### Shutdown (NEW)
+### Shutdown
 Client acknowledgment of shutdown notice (optional, fire-and-forget).
 
 ```json
@@ -172,7 +181,7 @@ Client acknowledgment of shutdown notice (optional, fire-and-forget).
 - No response sent
 - Does not affect shutdown sequence
 
-**Source**: `src/lib/daemon_sock.rs:264-269`
+**Source**: `src/lib/daemon_sock/types.rs:293-297`, `src/lib/daemon_sock/server.rs:665-670`
 
 ---
 
@@ -199,7 +208,7 @@ Periodic or on-change daemon status update.
 | `files` | u64 | Yes | Number of indexed files |
 | `daemon_status` | object | No | Typed status (see below) |
 
-**Source**: `src/lib/daemon_sock.rs:156-167`
+**Source**: `src/lib/daemon_sock/types.rs:156-166`
 
 ---
 
@@ -229,7 +238,7 @@ Batch of file changes detected by the watcher.
 | `m` | u64 | Modification time |
 | `o` | string | Operation: `"create"`, `"modify"`, `"delete"`, `"rename"` |
 
-**Source**: `src/lib/daemon_sock.rs:169-180`
+**Source**: `src/lib/daemon_sock/types.rs:89-99,168-174`
 
 ---
 
@@ -258,7 +267,7 @@ Response to a client query (status, history, search).
 | `daemon_status` | object | No | Typed status |
 | `last_rebuild_at` | u64 | No | Last successful rebuild timestamp |
 
-**Source**: `src/lib/daemon_sock.rs:182-193`
+**Source**: `src/lib/daemon_sock/types.rs:176-192`
 
 ---
 
@@ -363,7 +372,7 @@ Graceful shutdown notice sent to all clients before socket closes.
 4. Wait `delay_ms` milliseconds
 5. Reconnect after delay (if auto-reconnect enabled)
 
-**Source**: `src/lib/daemon_sock.rs:194-196, 570-579`
+**Source**: `src/lib/daemon_sock/types.rs:195-197,266-271`, `src/lib/daemon_sock/server.rs`
 
 ---
 
@@ -400,7 +409,7 @@ The `daemon_status` field provides structured status information:
 {"state":"build_failed","error":"permission denied reading src/secret.rs"}
 ```
 
-**Source**: `src/lib/daemon_sock.rs:80-121`
+**Source**: `src/lib/daemon_sock/types.rs:35-84`
 
 ---
 
@@ -473,7 +482,7 @@ def listen_for_shutdown(sock):
             break
 ```
 
-**Source**: `src/lib/daemon.rs:198-201`, `src/lib/daemon_sock.rs:570-579`
+**Source**: `src/lib/daemon.rs:646,834`, `src/lib/daemon_sock/server.rs:408-430`
 
 ---
 
@@ -502,7 +511,7 @@ kill -TERM $(pgrep -f "ixd /tmp/test-repo")
 # Expected: Client receives {"t":"shutdown","reason":"signal","delay_ms":1000}
 ```
 
-**Source**: `tests/daemon_sock.rs:test_shutdown_protocol`
+**Source**: `src/lib/daemon_sock/mod.rs:440` (`test_shutdown_protocol`)
 
 ---
 
@@ -512,15 +521,16 @@ kill -TERM $(pgrep -f "ixd /tmp/test-repo")
 |-------|-------|----------|
 | `ENOENT` (socket not found) | Daemon not running | Start daemon with `ixd /path` |
 | `ECONNREFUSED` | Socket exists but daemon dead | Remove socket file, restart daemon |
-| `ETIMEDOUT` | Daemon not responding | Check daemon logs, restart if needed |
+| `ETIMEDOUT` | Daemon not responding (`5 s` client I/O timeout) | Check daemon logs, restart if needed |
 | JSON parse error | Malformed message | Verify message format, check protocol version |
+| `UnexpectedEof` | Client frame exceeded `1 MiB` (`MAX_IPC_LINE_BYTES`) or daemon exited | Keep requests under `1 MiB`, reconnect if daemon restarted |
 
-**Source**: `src/lib/daemon_sock.rs:669-700`
+**Source**: `src/lib/daemon_sock/client.rs:9-12,100-170`, `src/lib/daemon_sock/server.rs:24,561-570`
 
 ---
 
 ## See Also
 - `DAEMON-RUNBOOK.md` — Operational procedures
 - `DELTA-FORMAT.md` — Index format specification
-- `src/lib/daemon_sock.rs` — Full implementation
-- `tests/daemon_sock.rs` — Test cases with examples
+- `src/lib/daemon_sock/` — Full socket module (`mod.rs`, `client.rs`, `resolve.rs`, `search.rs`, `server.rs`, `types.rs`)
+- `src/lib/daemon_sock/mod.rs` — Socket protocol and permission tests

@@ -1,9 +1,9 @@
 # Delta Index Format Specification
 
-**Version:** 1.3 (v0.6.2+)  
-**Source:** `src/lib/format.rs`, `src/lib/builder.rs`, `src/lib/reader.rs`  
-**Last Verified:** 2026-05-14  
-**Verification:** `cargo test --all-features -- delta`  
+- **Version:** 1.3 (v0.6.2+, verified at v0.14.2)
+- **Source:** `src/lib/format.rs`, `src/lib/builder.rs`, `src/lib/reader.rs`
+- **Last Verified:** 2026-11-22
+- **Verification:** `cargo test --all-features -- delta`
 
 ---
 
@@ -359,12 +359,13 @@ hexdump -C /tmp/test/.ix/shard.ix.delta | head -20
 |---------|------|---------|
 | 1.3 | 2026-05-03 | Initial implementation (v0.6.2) |
 | 1.3 | 2026-05-14 | Documentation added |
+| 1.3 | 2026-11-22 | Citations verified at v0.14.2 (`TempFileGuard` + `0o600` temp-file durability in `builder.rs` / `format.rs`) |
 
 ---
 
 ## See Also
 
 - `src/lib/format.rs` — Constants and magic bytes
-- `src/lib/builder.rs:816-876` — Delta writer implementation
-- `src/lib/reader.rs:549-677` — Delta reader implementation
+- `src/lib/builder.rs:289` (`is_path_admitted`), `src/lib/builder.rs:789` (`Builder::update`), `src/lib/builder.rs:1169` (`process_file_delta`) — Delta writer and admission checks
+- `src/lib/reader.rs:801-824` — `DeltaReader::open()` implementation and bounds checks
 - `src/lib/executor.rs` — Delta merging at query time

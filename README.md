@@ -19,6 +19,8 @@ blocks) for **sub-50μs random access** into compressed data.
 This eliminates the linear-scan bottleneck of traditional tools on large
 codebases. Target hardware floor: 2015 CPU, 8 GB RAM.
 
+**Last Verified:** 2026-11-22 (v0.14.2)
+
 ## Documentation
 
 | For | Read |
@@ -29,6 +31,7 @@ codebases. Target hardware floor: 2015 CPU, 8 GB RAM.
 | `.ixd.toml` config | [docs/.ixd.toml.md](docs/.ixd.toml.md) |
 | Socket API (tool builders) | [docs/SOCKET-API.md](docs/SOCKET-API.md) |
 | Index delta format | [docs/DELTA-FORMAT.md](docs/DELTA-FORMAT.md) |
+| Python bindings (`moeix` / `import ix`) | [ix-py/README.md](ix-py/README.md) |
 | Performance benchmarks | [docs/BENCHMARKS.md](docs/BENCHMARKS.md) |
 | Contributing | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) |
 | Release history | [CHANGELOG.md](CHANGELOG.md) |
@@ -81,7 +84,7 @@ updates the index. **It builds the base index on startup**, so you do not
 need to run `ix --build` before it — running both rebuilds the same shard
 twice (verified: `ix --build` ran in ~12 ms on a 40-file / 240-trigram
 fixture, then `ixd` spent ~11 s rebuilding the identical base; source:
-`src/lib/daemon.rs:232` unconditionally calls `builder.build()`). Use
+`src/lib/daemon.rs:354` unconditionally calls `builder.build()`). Use
 `ix --build` only for a one-shot, no-daemon index.
 
 ```bash
@@ -98,7 +101,7 @@ ixd --stop /path/to/repo
 ixd /project-a /project-b /project-c
 ```
 
-Expected startup output (v0.13.1, captured 2026-08-13):
+Expected startup output (v0.14.2, verified 2026-11-22):
 
 ```
 ixd [repo-name]: watching ...
@@ -144,9 +147,15 @@ tooling):
 $XDG_RUNTIME_DIR/ixd/{hash}.sock
 ```
 
-Protocol is NDJSON — one JSON object per newline-terminated line. See
-[docs/SOCKET-API.md](docs/SOCKET-API.md). The `ix` CLI reads the index
-file directly, not through the socket.
+Protocol is NDJSON — one JSON object per newline-terminated line (`1 MiB`
+server request frame limit at `src/lib/daemon_sock/server.rs:24`; `64 MiB`
+client response frame limit with `5 s` I/O timeouts at
+`src/lib/daemon_sock/client.rs:12,100-101`). See
+[docs/SOCKET-API.md](docs/SOCKET-API.md). When a live daemon is running for
+the target root, the `ix` CLI routes searches over this socket first
+(`src/bin/ix/commands.rs:89`, resetting the daemon's `IdleTracker` at
+`src/lib/daemon_sock/server.rs:632-638`) and falls back to reading
+`.ix/shard.ix` directly from disk if the socket is unavailable.
 
 ### Index Statistics
 
@@ -264,18 +273,18 @@ like ripgrep are faster.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `notify` | yes | File watcher + daemon (`ixd`) |
-| `decompress` | no | gz/zst/bz2/xz decompression |
-| `archive` | no | zip/tar archive support |
-| `full` | no | All optional features |
+| `notify` | yes | File watcher + daemon (`ixd`) + Unix domain socket IPC |
+| `decompress` | no | `.gz` / `.zst` / `.bz2` / `.xz` decompression (`flate2`, `bzip2`, `xz2`) |
+| `archive` | no | `.zip` / `.tar` / `.tar.gz` archive indexing (`zip`, `tar`, `flate2`) |
+| `full` | no | All optional features (`decompress`, `notify`, `archive`) |
 
 ## Library
 
-`ix` is also a library (`ix` on crates.io):
+`ix` is also a Rust library (`ix` on crates.io):
 
 ```toml
 [dependencies]
-ix = "0.12"
+ix = "0.14.2"
 ```
 
 ```rust
@@ -284,12 +293,38 @@ use ix::executor::{Executor, QueryOptions};
 use ix::planner::Planner;
 
 let reader = Reader::open(".ix/shard.ix")?;
-let plan = Planner::plan("struct Config", false);
+let plan = Planner::plan("struct Config", false)?;
 let mut executor = Executor::new(&reader);
 let (matches, stats) = executor.execute(&plan, &QueryOptions::default())?;
 ```
 
 See [docs.rs/ix](https://docs.rs/ix) for the full API reference.
+
+## Python Bindings (`moeix` / `import ix`)
+
+Pre-built Python wheels (CPython 3.10+, PEP 561 typed via `ix/_ix.pyi`) are
+published to PyPI under the package name **`moeix`** and imported as **`ix`**:
+
+```bash
+pip install moeix
+```
+
+```python
+import ix
+
+# Build an index and run a search (releases the Python GIL)
+build_stats = ix.build("/path/to/repo")
+result = ix.search("struct Config", "/path/to/repo", type_filter=["rs"])
+for m in result.matches:
+    print(f"{m.file_path}:{m.line_number}: {m.line_content}")
+
+# Reuse an open memory-mapped Index across queries
+with ix.Index("/path/to/repo", cache_mb=64) as idx:
+    res = idx.search(r"fn\s+\w+", regex=True, max_results=20)
+    info = idx.stats()
+```
+
+See [ix-py/README.md](ix-py/README.md) for the complete Python API reference.
 
 ## Building
 

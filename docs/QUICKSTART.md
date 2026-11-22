@@ -1,8 +1,8 @@
 # Quick Start Guide
 
-**Purpose**: Get started with ix code search in under 10 minutes  
-**Last Verified**: 2026-08-13  
-**Verification Command**: `./scripts/verify-docs.sh`  
+- **Purpose**: Get started with ix code search in under 10 minutes
+- **Last Verified**: 2026-11-22 (v0.14.2)
+- **Verification Command**: `./scripts/verify-docs.sh`
 
 ---
 
@@ -35,19 +35,19 @@ cargo install ix --features full
 **Feature flags:**
 | Feature | What it adds | Increases binary by |
 |---------|-------------|---------------------|
-| `notify` (default) | File watching for daemon | ~2 MB |
+| `notify` (default) | File watching for daemon (`ixd`) + Unix domain socket IPC | ~2 MB |
 | `decompress` | `.gz` `.zst` `.bz2` `.xz` support | ~3 MB |
-| `archive` | `.zip` `.tar.gz` support | ~2 MB |
+| `archive` | `.zip` `.tar` `.tar.gz` support (`zip`, `tar`, `flate2`) | ~2 MB |
 | `full` | All of the above | ~7 MB |
 
-**Source**: `Cargo.toml:49-54`
+**Source**: `Cargo.toml:69-74`
 
 ### Step 2: Build Index (30 seconds)
 
 > **Daemon users:** skip this step — `ixd` builds its own base index on
 > startup, so running `ix --build` first rebuilds the same shard twice
 > (verified: `ix --build` 12 ms + `ixd` ~11 s rebuilding the identical
-> base on a 40-file fixture; source: `src/lib/daemon.rs:232`). Use
+> base on a 40-file fixture; source: `src/lib/daemon.rs:354`). Use
 > `ix --build` only for a **one-shot, no-daemon** index. Jump to
 > [Daemon Quick Start](#daemon-quick-start) if you want continuous
 > indexing.
@@ -61,7 +61,7 @@ ix --build
 # ix: 1234 files, 56789 trigrams in 2.3s
 ```
 
-**Source**: `src/bin/ix.rs:280-310`
+**Source**: `src/bin/ix/commands.rs:244-300`
 
 ### Step 3: Search (30 seconds)
 
@@ -81,7 +81,7 @@ ix --regex "fn\s+\w+_handler"
 # src/handlers.rs:58:fn handle_response() {
 ```
 
-**Source**: `src/bin/ix.rs:320-420`
+**Source**: `src/bin/ix/commands.rs:89-135,562-685`
 
 ### Step 4: Verify (30 seconds)
 
@@ -89,7 +89,7 @@ ix --regex "fn\s+\w+_handler"
 # Check version
 ix --version
 
-# Expected: ix 0.13.1
+# Expected: ix 0.14.2
 
 # Check help
 ix --help
@@ -123,7 +123,7 @@ cargo build --release --features full
 # Finished release [optimized] target(s) in 45s
 ```
 
-**Source**: `Cargo.toml:85-95`
+**Source**: `Cargo.toml:53-61,69-74`
 
 ### Step 2: Start Daemon (1 minute)
 
@@ -145,8 +145,14 @@ This scopes indexing to `src/` and `lib/`, excludes common build directories, an
 
 # Detach into the background and return immediately (v0.13.0+)
 ./target/release/ixd --daemon /path/to/repo
+
+# Or use the cross-platform service wrapper / stop command
+ix service start /path/to/repo
+ix service status /path/to/repo
+ixd --stop /path/to/repo
 ```
 
+```
 # Expected output:
 # ixd [repo-name]: watching /path/to/repo...
 # ixd [repo-name]: initial build complete (1234 files, 56789 trigrams)
@@ -155,9 +161,9 @@ This scopes indexing to `src/` and `lib/`, excludes common build directories, an
 
 > `ixd` builds the base index on startup, so there's no need to run
 > `ix --build` first — that would build the same shard twice
-> (`src/lib/daemon.rs:232`).
+> (`src/lib/daemon.rs:354`).
 
-**Source**: `src/lib/daemon.rs:54-120`
+**Source**: `src/lib/daemon.rs:117-225`
 
 ### Step 3: Verify Daemon (1 minute)
 
@@ -178,7 +184,7 @@ echo '{"t":"status_query"}' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/ixd/*.sock
 # Expected: {"pid":12345,"status":"idle","files":1234,"daemon_status":{"state":"idle"}}
 ```
 
-**Source**: `src/lib/daemon_sock.rs:669-700`
+**Source**: `src/lib/daemon_sock/server.rs:541-664`
 
 ### Step 4: Test Live Indexing (1 minute)
 
@@ -235,7 +241,7 @@ sock.connect(get_socket_path("/path/to/repo"))
 print("Connected to daemon!")
 ```
 
-**Source**: `src/lib/daemon_sock.rs:284-305`
+**Source**: `src/lib/daemon_sock/resolve.rs:19-74`
 
 ### Step 2: Query Status (1 minute)
 
@@ -251,7 +257,7 @@ print(json.loads(response))
 # Expected: {"t":"status","pid":12345,"status":"idle","files":1234,...}
 ```
 
-**Source**: `src/lib/daemon_sock.rs:560-580`
+**Source**: `src/lib/daemon_sock/server.rs:590-621`
 
 ### Step 3: Search (1 minute)
 
@@ -274,7 +280,7 @@ print(f"Found {len(data.get('matches', []))} matches")
 # Expected: {"t":"search_results","id":2,"matches":[...],"stats":{...}}
 ```
 
-**Source**: `src/lib/daemon_sock.rs:600-640`
+**Source**: `src/lib/daemon_sock/server.rs:622-664`
 
 **✅ Socket API is working if you get search results!**
 

@@ -1,13 +1,16 @@
 # Daemon Socket Internals Report
 
-**Source:** `/workspace/ix`
-**Generated:** 2026-05-03
+- **Source:** `/home/ubuntu/ix`
+- **Last Verified:** 2026-11-22 (v0.14.2)
+- **Historical Generation Date:** 2026-05-03
+
+> **v0.14.2 Layout Note:** The former single-file `src/lib/daemon_sock.rs` was split into `src/lib/daemon_sock/{mod,client,resolve,search,server,types}.rs`, and `src/bin/ixd.rs` delegates watch loops to `src/lib/daemon.rs`. See the updated symbol table at the bottom and inline notes below.
 
 ---
 
-## 1. ClientMessage Handling in ixd.rs
+## 1. ClientMessage Handling in ixd / daemon.rs
 
-The daemon does not directly handle `ClientMessage` variants in `src/bin/ixd.rs`. The handling is delegated to `client_read_loop()` in `src/lib/daemon_sock.rs` (lines 419-493), which runs in a background thread per connected client.
+The daemon does not handle `ClientMessage` variants in `src/bin/ixd.rs`. Request parsing runs in `client_read_loop()` in `src/lib/daemon_sock/server.rs:541`, which runs in a background thread per connected client, caps inbound frames with `read_bounded_line` at `MAX_IPC_LINE_BYTES` (`1 MiB` at `server.rs:24`), serializes replies via a per-client `Arc<Mutex<UnixStream>>`, and resets `IdleTracker::record_query()` on `SearchQuery` (`server.rs:632-638`).
 
 ### StatusQuery
 
@@ -329,19 +332,21 @@ pub fn notify_changes(&self, changes: Vec<FileChange>, files_count: usize) {
 
 ---
 
-## Summary Table
+## Summary Table (`v0.14.2` Paths)
 
 | Item | File | Line(s) |
 |------|------|---------|
-| ClientMessage enum | `src/lib/daemon_sock.rs` | 131-141 |
-| StatusQuery handling | `src/lib/daemon_sock.rs` | 444-455 |
-| HistoryQuery handling | `src/lib/daemon_sock.rs` | 457-469 |
-| recv() impl | `src/lib/daemon_sock.rs` | 521-546 |
-| send() impl | `src/lib/daemon_sock.rs` | 553-560 |
-| FileChange struct | `src/lib/daemon_sock.rs` | 79-91 |
-| FileOp enum | `src/lib/daemon_sock.rs` | 53-77 |
-| History struct | `src/lib/daemon_sock.rs` | 198-223 |
-| HISTORY_CAPACITY | `src/lib/daemon_sock.rs` | 50-51 |
-| notify_changes() | `src/lib/daemon_sock.rs` | 406-416 |
-| FilesChanged push in ixd | `src/bin/ixd.rs` | 350-363 |
-| Status strings in ixd | `src/bin/ixd.rs` | 230, 237, 249, 260, 273, 289, 305 |
+| ClientMessage enum | `src/lib/daemon_sock/types.rs` | 276-298 |
+| ServerMessage enum | `src/lib/daemon_sock/types.rs` | 154-197 |
+| SearchQuery struct | `src/lib/daemon_sock/types.rs` | 205-262 |
+| FileChange struct | `src/lib/daemon_sock/types.rs` | 89-99 |
+| FileOp enum | `src/lib/daemon_sock/types.rs` | 8-17 |
+| `client_read_loop()` | `src/lib/daemon_sock/server.rs` | 541-590 |
+| `IdleTracker` reset on `SearchQuery` | `src/lib/daemon_sock/server.rs` | 632-638 |
+| `MAX_IPC_LINE_BYTES` (1 MiB server / 64 MiB client) | `src/lib/daemon_sock/server.rs`, `client.rs` | 24 / 12 |
+| `HISTORY_CAPACITY` (1024 batches) | `src/lib/daemon_sock/server.rs` | 21 |
+| `notify_changes()` | `src/lib/daemon_sock/server.rs` | 374-390 |
+| `recv()` impl | `src/lib/daemon_sock/client.rs` | 118-170 |
+| `send()` impl | `src/lib/daemon_sock/client.rs` | 172-182 |
+| `socket_path()` impl | `src/lib/daemon_sock/resolve.rs` | 19-74 |
+| `run_many()` / initial build | `src/lib/daemon.rs` | 117, 354 |
