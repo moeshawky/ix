@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.2] - 2026-11-22
+
+### Changed
+- **Cargo crate renamed `moeix` → `ix`.** Updated Cargo package name, docs URLs, install commands, `ix-py` and `fuzz` path dependency keys (`ix`), while keeping the PyPI package name `moeix` (`import ix`).
+- **Python bindings (`ix-py`) hardening and PEP 561 typing.** Added `_ix.pyi` type stub, released the Python GIL during heavy index/search/pipeline operations, made the `notify` feature optional in `ix-py`, and gated PyPI publication on `ruff`, `mypy`, and `pytest` verification in `wheels.yml`.
+
+### Fixed
+- **Security, IPC, and index durability hardening.** Added bounded IPC frame reading, client timeout symmetry, `CacheRoot` validation, serialized NDJSON socket writes, `IdleTracker` socket-query activity bridge, atomic temp-file permissions with `TempFileGuard` cleanup, archive entry/line size caps, bounds-checked reader/posting capacities, and `zstd` security advisory upgrades (`0.13.5` / `zstd-sys 2.1.3`).
+
 ## [0.14.1] - 2026-09-12
 
 ### Changed

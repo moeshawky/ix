@@ -117,17 +117,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install Python QA tools
-        run: python -m pip install --upgrade pip maturin ruff mypy pytest
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip maturin patchelf ruff mypy pytest
 
       - name: Lint and typecheck Python package
         run: |
-          ruff check --config ${{ env.PROJECT }}-py/pyproject.toml ${{ env.PROJECT }}-py/
-          mypy --config-file ${{ env.PROJECT }}-py/pyproject.toml ${{ env.PROJECT }}-py/python/${{ env.PROJECT }}
+          .venv/bin/ruff check --config ${{ env.PROJECT }}-py/pyproject.toml ${{ env.PROJECT }}-py/
+          .venv/bin/mypy --config-file ${{ env.PROJECT }}-py/pyproject.toml ${{ env.PROJECT }}-py/python/${{ env.PROJECT }}
 
       - name: Build native extension and run pytest
         run: |
-          maturin develop --manifest-path ${{ env.PROJECT }}-py/Cargo.toml --release
-          pytest ${{ env.PROJECT }}-py/tests/
+          VIRTUAL_ENV="$PWD/.venv" PATH="$PWD/.venv/bin:$PATH" maturin develop --manifest-path ${{ env.PROJECT }}-py/Cargo.toml --release
+          .venv/bin/pytest ${{ env.PROJECT }}-py/tests/
 
   # ═══════════════════════════════════════════════════════════════════════════
   # Publish to PyPI — on tag push only (not manual dispatch by default)
