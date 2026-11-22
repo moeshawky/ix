@@ -93,6 +93,18 @@ pub enum Error {
     /// Configuration error.
     #[error("config: {0}")]
     Config(String),
+
+    /// Delta index file is corrupted.
+    #[error("delta index corrupted: {0}")]
+    DeltaCorrupted(String),
+
+    /// Index file was not found at the expected path.
+    #[error("index not found: {0}")]
+    MissingIndex(std::path::PathBuf),
+
+    /// External subprocess invocation failed.
+    #[error("subprocess error: {0}")]
+    Subprocess(String),
 }
 
 /// Convenience type alias for `Result<T, Error>`.

@@ -65,7 +65,6 @@ impl IdleTracker {
 }
 
 #[cfg(test)]
-#[allow(clippy::as_conversions, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use std::time::Duration;
@@ -80,17 +79,36 @@ mod tests {
         assert_eq!(tracker.state(), DaemonState::Active);
 
         // Simulate 6 minutes of inactivity
-        tracker.last_query = Instant::now().checked_sub(Duration::from_mins(6)).unwrap();
-        tracker.last_change = Instant::now().checked_sub(Duration::from_mins(6)).unwrap();
+        tracker.last_query = Instant::now()
+            .checked_sub(Duration::from_secs(6 * 60))
+            .expect("6-minute instant subtraction should not underflow");
+        tracker.last_change = Instant::now()
+            .checked_sub(Duration::from_secs(6 * 60))
+            .expect("6-minute instant subtraction should not underflow");
         assert_eq!(tracker.state(), DaemonState::Idle);
 
         // Simulate 31 minutes of inactivity
-        tracker.last_query = Instant::now().checked_sub(Duration::from_mins(31)).unwrap();
-        tracker.last_change = Instant::now().checked_sub(Duration::from_mins(31)).unwrap();
+        tracker.last_query = Instant::now()
+            .checked_sub(Duration::from_secs(31 * 60))
+            .expect("31-minute instant subtraction should not underflow");
+        tracker.last_change = Instant::now()
+            .checked_sub(Duration::from_secs(31 * 60))
+            .expect("31-minute instant subtraction should not underflow");
         assert_eq!(tracker.state(), DaemonState::Dormant);
 
         // Record activity and check if it's Active again
         tracker.record_query();
+        assert_eq!(tracker.state(), DaemonState::Active);
+
+        tracker.last_query = Instant::now()
+            .checked_sub(Duration::from_secs(31 * 60))
+            .expect("31-minute instant subtraction should not underflow");
+        tracker.last_change = Instant::now()
+            .checked_sub(Duration::from_secs(31 * 60))
+            .expect("31-minute instant subtraction should not underflow");
+        assert_eq!(tracker.state(), DaemonState::Dormant);
+
+        tracker.record_change();
         assert_eq!(tracker.state(), DaemonState::Active);
     }
 }

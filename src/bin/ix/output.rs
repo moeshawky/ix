@@ -18,14 +18,19 @@ pub(crate) fn format_uptime(secs: u64) -> String {
     }
 }
 
-#[allow(clippy::cast_precision_loss)]
+pub(crate) fn u64_to_f64(n: u64) -> f64 {
+    let hi = u32::try_from(n >> 32).unwrap_or(u32::MAX);
+    let lo = u32::try_from(n & 0xFFFF_FFFF).unwrap_or(u32::MAX);
+    f64::from(hi) * 4_294_967_296.0 + f64::from(lo)
+}
+
 pub(crate) fn format_bytes(bytes: u64) -> String {
     if bytes >= 1_073_741_824 {
-        format!("{:.2} GB", bytes as f64 / 1_073_741_824.0)
+        format!("{:.2} GB", u64_to_f64(bytes) / 1_073_741_824.0)
     } else if bytes >= 1_048_576 {
-        format!("{:.2} MB", bytes as f64 / 1_048_576.0)
+        format!("{:.2} MB", u64_to_f64(bytes) / 1_048_576.0)
     } else if bytes >= 1024 {
-        format!("{:.2} KB", bytes as f64 / 1024.0)
+        format!("{:.2} KB", u64_to_f64(bytes) / 1024.0)
     } else {
         format!("{bytes} B")
     }
@@ -86,6 +91,8 @@ pub(crate) fn print_results(
     } else {
         let mut last_file = PathBuf::new();
         let mut printed_lines = std::collections::HashSet::new();
+        let mut printed_matches = std::collections::HashSet::new();
+        let mut binary_notified = false;
 
         for m in matches {
             if m.file_path != last_file {
@@ -93,24 +100,51 @@ pub(crate) fn print_results(
                     println!("--");
                 }
                 printed_lines.clear();
+                printed_matches.clear();
+                binary_notified = false;
                 last_file.clone_from(&m.file_path);
             } else if options.context_lines > 0 && !json {
-                let match_start = (m.line_number as usize).saturating_sub(options.context_lines);
-                let prev_end = printed_lines.iter().max().copied().unwrap_or(0) as usize;
+                let match_start = usize::try_from(m.line_number)
+                    .unwrap_or(usize::MAX)
+                    .saturating_sub(options.context_lines);
+                let prev_end = usize::try_from(printed_lines.iter().max().copied().unwrap_or(0))
+                    .unwrap_or(usize::MAX);
                 if match_start > prev_end + 1 && prev_end > 0 {
                     println!("--");
                 }
             }
 
-            print_match(m, json, options.context_lines, &mut printed_lines);
+            print_match(
+                m,
+                json,
+                options.context_lines,
+                &mut printed_lines,
+                &mut printed_matches,
+                &mut binary_notified,
+            );
         }
 
-        if options.max_results > 0 && stats.total_matches >= options.max_results as u32 {
+        let capped_count = u64::from(stats.total_available.max(stats.total_matches));
+        let max_results_u64 = u64::try_from(options.max_results).unwrap_or(u64::MAX);
+        if options.max_results > 0 && capped_count >= max_results_u64 {
             eprintln!(
                 "ix: output capped at {} results (use -n 0 for all)",
                 options.max_results
             );
         }
+    }
+
+    if stats.files_failed_verify > 0 {
+        eprintln!(
+            "[WARNING] {} file(s) could not be verified (I/O error) — results may be incomplete",
+            stats.files_failed_verify
+        );
+    }
+    if stats.files_skipped_pressure > 0 {
+        eprintln!(
+            "[WARNING] {} file(s) skipped due to high memory pressure — results may be incomplete",
+            stats.files_skipped_pressure
+        );
     }
 
     if show_stats {
@@ -123,9 +157,14 @@ fn print_match(
     json: bool,
     context: usize,
     printed_lines: &mut std::collections::HashSet<u32>,
+    printed_matches: &mut std::collections::HashSet<u32>,
+    binary_notified: &mut bool,
 ) {
     if !json && m.is_binary {
-        println!("Binary file {} matches", m.file_path.display());
+        if !*binary_notified {
+            println!("Binary file {} matches", m.file_path.display());
+            *binary_notified = true;
+        }
         return;
     }
 
@@ -159,9 +198,15 @@ fn print_match(
         });
         println!("{obj}");
     } else {
+        let base_line = usize::try_from(m.line_number).unwrap_or(usize::MAX);
         if context > 0 {
             for (i, line) in m.context_before.iter().enumerate() {
-                let line_num = (m.line_number as usize - m.context_before.len() + i) as u32;
+                let line_num = u32::try_from(
+                    base_line
+                        .saturating_sub(m.context_before.len())
+                        .saturating_add(i),
+                )
+                .unwrap_or(u32::MAX);
                 if printed_lines.insert(line_num) {
                     println!(
                         "{}:{}:- :{}",
@@ -173,7 +218,8 @@ fn print_match(
             }
         }
 
-        if printed_lines.insert(m.line_number) {
+        if printed_matches.insert(m.line_number) {
+            printed_lines.insert(m.line_number);
             println!(
                 "{}:{}: {}",
                 m.file_path.display(),
@@ -184,7 +230,8 @@ fn print_match(
 
         if context > 0 {
             for (i, line) in m.context_after.iter().enumerate() {
-                let line_num = (m.line_number as usize + 1 + i) as u32;
+                let line_num = u32::try_from(base_line.saturating_add(1).saturating_add(i))
+                    .unwrap_or(u32::MAX);
                 if printed_lines.insert(line_num) {
                     println!(
                         "{}:{}:- :{}",
@@ -208,6 +255,12 @@ fn print_stats(stats: &QueryStats, elapsed: std::time::Duration) {
         eprintln!(
             "[WARNING] {} file(s) could not be verified (I/O error) — results may be incomplete",
             stats.files_failed_verify
+        );
+    }
+    if stats.files_skipped_pressure > 0 {
+        eprintln!(
+            "[WARNING] {} file(s) skipped due to high memory pressure — results may be incomplete",
+            stats.files_skipped_pressure
         );
     }
     eprintln!("bytes_verified: {}", stats.bytes_verified);

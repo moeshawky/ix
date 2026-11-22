@@ -30,40 +30,57 @@ impl Extractor {
 
     /// Extract trigrams with byte offsets (for indexing).
     ///
-    /// Returns a slice of `(trigram, offset)` pairs, sorted by trigram then offset.
+    /// Caps extraction to the first `u32::MAX` bytes so every byte offset
+    /// fits in `u32` without truncation. Returns a slice of `(trigram, offset)`
+    /// pairs, sorted by trigram then offset.
     #[must_use]
-    #[allow(clippy::indexing_slicing)] // loop bound: data.len()-3 guarantees i+2 in range
-    #[allow(clippy::as_conversions)] // i < data.len() < u32::MAX for index files
     pub fn extract_with_offsets(&mut self, data: &[u8]) -> &[(Trigram, u32)] {
+        let max_len = usize::try_from(u32::MAX).unwrap_or(usize::MAX);
+        self.extract_with_offsets_capped(data, max_len)
+    }
+
+    fn extract_with_offsets_capped(&mut self, data: &[u8], max_len: usize) -> &[(Trigram, u32)] {
         const MAX_OFFSETS_PER_TRIGRAM: usize = 64;
         const SMALL_FILE_LIMIT: usize = 1_000_000;
 
         self.trigram_offsets.clear();
 
-        if data.len() < 3 {
+        if data.len() > max_len {
+            tracing::warn!(
+                "input length {} exceeds max offset capacity {}; truncating trigram extraction",
+                data.len(),
+                max_len
+            );
+        }
+        let bounded = data.get(..data.len().min(max_len)).unwrap_or(data);
+
+        if bounded.len() < 3 {
             return &self.trigram_offsets;
         }
 
-        if data.len() <= SMALL_FILE_LIMIT {
-            for i in 0..=(data.len() - 3) {
-                if data[i] == 0 || data[i + 1] == 0 || data[i + 2] == 0 {
-                    continue;
+        if bounded.len() <= SMALL_FILE_LIMIT {
+            for (i, window) in bounded.windows(3).enumerate() {
+                if let (Ok(offset), [a, b, c]) = (u32::try_from(i), window) {
+                    if *a == 0 || *b == 0 || *c == 0 {
+                        continue;
+                    }
+                    self.trigram_offsets.push((from_bytes(*a, *b, *c), offset));
                 }
-                let tri = from_bytes(data[i], data[i + 1], data[i + 2]);
-                self.trigram_offsets.push((tri, i as u32));
             }
         } else {
             let mut seen_counts: std::collections::HashMap<Trigram, usize> =
                 std::collections::HashMap::new();
-            for i in 0..=(data.len() - 3) {
-                if data[i] == 0 || data[i + 1] == 0 || data[i + 2] == 0 {
-                    continue;
-                }
-                let tri = from_bytes(data[i], data[i + 1], data[i + 2]);
-                let count = seen_counts.entry(tri).or_insert(0);
-                if *count < MAX_OFFSETS_PER_TRIGRAM {
-                    self.trigram_offsets.push((tri, i as u32));
-                    *count += 1;
+            for (i, window) in bounded.windows(3).enumerate() {
+                if let (Ok(offset), [a, b, c]) = (u32::try_from(i), window) {
+                    if *a == 0 || *b == 0 || *c == 0 {
+                        continue;
+                    }
+                    let tri = from_bytes(*a, *b, *c);
+                    let count = seen_counts.entry(tri).or_insert(0);
+                    if *count < MAX_OFFSETS_PER_TRIGRAM {
+                        self.trigram_offsets.push((tri, offset));
+                        *count += 1;
+                    }
                 }
             }
         }
@@ -75,15 +92,15 @@ impl Extractor {
 
     /// Extract unique trigram set from a query (no offsets needed).
     #[must_use]
-    #[allow(clippy::indexing_slicing)] // loop bound: query.len()-3 guarantees i+2 in range
     pub fn extract_set(query: &[u8]) -> Vec<Trigram> {
         if query.len() < 3 {
             return vec![];
         }
         let mut set = Vec::with_capacity(query.len() - 2);
-        for i in 0..=(query.len() - 3) {
-            let tri = from_bytes(query[i], query[i + 1], query[i + 2]);
-            set.push(tri);
+        for window in query.windows(3) {
+            if let [a, b, c] = window {
+                set.push(from_bytes(*a, *b, *c));
+            }
         }
         set.sort_unstable();
         set.dedup();
@@ -96,18 +113,18 @@ impl Extractor {
     /// case variants for that position (max 8 per group for 3 ASCII alpha bytes).
     /// The executor should UNION within each group and INTERSECT across groups.
     #[must_use]
-    #[allow(clippy::indexing_slicing)] // loop bound: query.len()-3 guarantees i+2 in range
     pub fn extract_groups_case_insensitive(query: &[u8]) -> Vec<Vec<Trigram>> {
         if query.len() < 3 {
             return vec![];
         }
         let mut groups = Vec::with_capacity(query.len() - 2);
-        for i in 0..=(query.len() - 3) {
-            let bytes = [query[i], query[i + 1], query[i + 2]];
-            let mut variants = case_variants(bytes);
-            variants.sort_unstable();
-            variants.dedup();
-            groups.push(variants);
+        for window in query.windows(3) {
+            if let [a, b, c] = window {
+                let mut variants = case_variants([*a, *b, *c]);
+                variants.sort_unstable();
+                variants.dedup();
+                groups.push(variants);
+            }
         }
         groups
     }
@@ -116,15 +133,14 @@ impl Extractor {
 /// Generate all case permutations of a 3-byte trigram.
 /// Only ASCII alpha bytes get toggled. Max 8 variants per trigram.
 fn case_variants(bytes: [u8; 3]) -> Vec<Trigram> {
-    let alts: [Vec<u8>; 3] = [
-        byte_cases(bytes[0]),
-        byte_cases(bytes[1]),
-        byte_cases(bytes[2]),
-    ];
-    let mut out = Vec::with_capacity(alts[0].len() * alts[1].len() * alts[2].len());
-    for &a in &alts[0] {
-        for &b in &alts[1] {
-            for &c in &alts[2] {
+    let [b0, b1, b2] = bytes;
+    let alts0 = byte_cases(b0);
+    let alts1 = byte_cases(b1);
+    let alts2 = byte_cases(b2);
+    let mut out = Vec::with_capacity(alts0.len() * alts1.len() * alts2.len());
+    for &a in &alts0 {
+        for &b in &alts1 {
+            for &c in &alts2 {
                 out.push(from_bytes(a, b, c));
             }
         }
@@ -151,7 +167,6 @@ impl Default for Extractor {
 }
 
 #[cfg(test)]
-#[allow(clippy::as_conversions, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 
@@ -213,5 +228,28 @@ mod tests {
         let set = Extractor::extract_set(b"errorerror");
         let unique_count = set.len();
         assert!(unique_count <= 8);
+    }
+
+    #[test]
+    fn extract_with_offsets_caps_at_bound() {
+        let mut e = Extractor::new();
+        let res = e.extract_with_offsets_capped(b"abcdef", 4);
+        assert_eq!(
+            res,
+            &[
+                (from_bytes(b'a', b'b', b'c'), 0),
+                (from_bytes(b'b', b'c', b'd'), 1),
+            ]
+        );
+        assert!(e.extract_with_offsets_capped(b"abcdef", 2).is_empty());
+    }
+
+    #[test]
+    fn extract_with_offsets_large_file_caps_per_trigram() {
+        let mut e = Extractor::new();
+        let data = vec![b'a'; 1_000_005];
+        let res = e.extract_with_offsets(&data);
+        assert_eq!(res.len(), 64);
+        assert_eq!(res[63].1, 63);
     }
 }

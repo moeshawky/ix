@@ -8,9 +8,12 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Generator
+from typing import TYPE_CHECKING, Any
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 
 def _build_ix_py() -> None:
@@ -39,7 +42,6 @@ def _build_ix_py() -> None:
 def ix_module() -> Any:
     """Ensure ix._ix is built and importable."""
     _build_ix_py()
-    import ix  # noqa: F401
     import ix._ix  # type: ignore[import-not-found]
 
     return ix._ix

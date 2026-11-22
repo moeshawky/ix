@@ -18,12 +18,7 @@ pub(crate) fn find_systemctl() -> std::ffi::OsString {
     std::ffi::OsString::from("systemctl")
 }
 
-#[cfg(all(feature = "notify", not(target_os = "linux")))]
-#[allow(dead_code)]
-pub(crate) fn find_systemctl() -> std::ffi::OsString {
-    std::ffi::OsString::from("systemctl")
-}
-
+#[cfg(feature = "notify")]
 fn find_ixd() -> std::path::PathBuf {
     if let Ok(exe) = std::env::current_exe()
         && let Some(parent) = exe.parent()
@@ -43,150 +38,239 @@ pub(crate) fn handle_service(action: &ServiceAction) -> ix::error::Result<()> {
             handle_service_status(path.as_deref(), *json);
             Ok(())
         }
-        ServiceAction::Start { path } => {
-            let ixd = find_ixd();
-            let watch_path = path
-                .clone()
-                .unwrap_or_else(|| std::path::PathBuf::from("."));
-            let status = std::process::Command::new(&ixd)
-                .arg("--daemon")
-                .arg(&watch_path)
-                .status()
-                .map_err(|e| {
-                    ix::error::Error::Config(format!("failed to execute {}: {e}", ixd.display()))
-                })?;
-            if !status.success() {
-                return Err(ix::error::Error::Config(
-                    "failed to start ixd daemon".into(),
-                ));
-            }
-            println!("ixd daemon started for {}.", watch_path.display());
-            println!("Run 'ix service status' to verify.");
-            Ok(())
+        ServiceAction::Start { path } => service_start(path.as_deref()),
+        ServiceAction::Stop { path } => service_stop(path.as_deref()),
+        ServiceAction::Restart { path } => service_restart(path.as_deref()),
+        ServiceAction::Install { path } => service_install(path.as_deref()),
+    }
+}
+
+#[cfg(feature = "notify")]
+fn default_ixd_log_path(root: &Path) -> std::path::PathBuf {
+    let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let hash = xxhash_rust::xxh64::xxh64(canonical.to_string_lossy().as_bytes(), 0);
+    if let Ok(state_home) = std::env::var("XDG_STATE_HOME")
+        && !state_home.is_empty()
+    {
+        return std::path::PathBuf::from(state_home)
+            .join("ixd")
+            .join(format!("{hash:016x}.log"));
+    }
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR")
+        && !runtime_dir.is_empty()
+    {
+        return std::path::PathBuf::from(runtime_dir)
+            .join("ixd")
+            .join(format!("{hash:016x}.log"));
+    }
+    #[cfg(unix)]
+    // SAFETY: libc::getuid() is a thread-safe POSIX syscall with no preconditions.
+    let uid = unsafe { libc::getuid() };
+    #[cfg(not(unix))]
+    let uid = 0u32;
+    std::env::temp_dir().join(format!("ixd-{uid}-{hash:016x}.log"))
+}
+
+#[cfg(feature = "notify")]
+fn service_start(path: Option<&Path>) -> ix::error::Result<()> {
+    let ixd = find_ixd();
+    let watch_path = path.unwrap_or(Path::new("."));
+    let log_path = default_ixd_log_path(watch_path);
+    let status = std::process::Command::new(&ixd)
+        .arg("--daemon")
+        .arg("--log-file")
+        .arg(&log_path)
+        .arg(watch_path)
+        .status()
+        .map_err(|e| {
+            ix::error::Error::Subprocess(format!("failed to execute {}: {e}", ixd.display()))
+        })?;
+    if !status.success() {
+        return Err(ix::error::Error::Subprocess(format!(
+            "failed to start ixd daemon (exit {:?}; see log: {})",
+            status.code(),
+            log_path.display()
+        )));
+    }
+    println!("ixd daemon started for {}.", watch_path.display());
+    println!("Log file: {}", log_path.display());
+    println!("Run 'ix service status' to verify.");
+    Ok(())
+}
+
+#[cfg(feature = "notify")]
+fn service_stop(path: Option<&Path>) -> ix::error::Result<()> {
+    let ixd = find_ixd();
+    let stop_path = path.unwrap_or(Path::new("."));
+    let status = std::process::Command::new(&ixd)
+        .arg("--stop")
+        .arg(stop_path)
+        .status()
+        .map_err(|e| {
+            ix::error::Error::Subprocess(format!("failed to execute {}: {e}", ixd.display()))
+        })?;
+    if !status.success() {
+        return Err(ix::error::Error::Subprocess(format!(
+            "failed to stop ixd daemon (exit {:?})",
+            status.code()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "notify")]
+fn service_restart(path: Option<&Path>) -> ix::error::Result<()> {
+    let ixd = find_ixd();
+    let target_path = path.unwrap_or(Path::new("."));
+    let log_path = default_ixd_log_path(target_path);
+    let stop_status = std::process::Command::new(&ixd)
+        .arg("--stop")
+        .arg(target_path)
+        .status()
+        .map_err(|e| {
+            ix::error::Error::Subprocess(format!("failed to execute {}: {e}", ixd.display()))
+        })?;
+    if !stop_status.success() {
+        return Err(ix::error::Error::Subprocess(format!(
+            "failed to stop running ixd daemon during restart (exit {:?})",
+            stop_status.code()
+        )));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let status = std::process::Command::new(&ixd)
+        .arg("--daemon")
+        .arg("--log-file")
+        .arg(&log_path)
+        .arg(target_path)
+        .status()
+        .map_err(|e| {
+            ix::error::Error::Subprocess(format!("failed to execute {}: {e}", ixd.display()))
+        })?;
+    if !status.success() {
+        return Err(ix::error::Error::Subprocess(format!(
+            "failed to restart ixd daemon (exit {:?}; see log: {})",
+            status.code(),
+            log_path.display()
+        )));
+    }
+    println!("ixd daemon restarted for {}.", target_path.display());
+    println!("Log file: {}", log_path.display());
+    Ok(())
+}
+
+#[cfg(all(feature = "notify", target_os = "linux"))]
+fn escape_systemd_arg(path: &Path) -> ix::error::Result<String> {
+    let raw = path.to_str().ok_or_else(|| {
+        ix::error::Error::Config(format!(
+            "path contains invalid UTF-8 and cannot be written to systemd unit: {}",
+            path.display()
+        ))
+    })?;
+    if raw.chars().any(|c| matches!(c, '\n' | '\r' | '\0')) {
+        return Err(ix::error::Error::Config(
+            "path contains forbidden control characters (newline, CR, or NUL)".into(),
+        ));
+    }
+    let mut escaped = String::with_capacity(raw.len() + 2);
+    escaped.push('"');
+    for ch in raw.chars() {
+        match ch {
+            '%' => escaped.push_str("%%"),
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            _ => escaped.push(ch),
         }
-        ServiceAction::Stop { path } => {
-            let ixd = find_ixd();
-            let stop_path = path
-                .clone()
-                .unwrap_or_else(|| std::path::PathBuf::from("."));
-            let status = std::process::Command::new(&ixd)
-                .arg("--stop")
-                .arg(&stop_path)
-                .status()
-                .map_err(|e| {
-                    ix::error::Error::Config(format!("failed to execute {}: {e}", ixd.display()))
-                })?;
-            if !status.success() {
-                return Err(ix::error::Error::Config("failed to stop ixd daemon".into()));
+    }
+    escaped.push('"');
+    Ok(escaped)
+}
+
+#[cfg(feature = "notify")]
+fn service_install(path: Option<&Path>) -> ix::error::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let home =
+            std::env::var("HOME").map_err(|_| ix::error::Error::Config("HOME not set".into()))?;
+        let service_dir = std::path::PathBuf::from(&home).join(".config/systemd/user");
+        let service_file = service_dir.join("ixd.service");
+
+        let watch_path = path.map_or_else(
+            || std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(&home)),
+            Path::to_path_buf,
+        );
+        let watch_path_abs = watch_path.canonicalize().unwrap_or(watch_path);
+
+        let ixd_path = find_ixd();
+        let ixd_abs = ixd_path.canonicalize().unwrap_or(ixd_path);
+
+        let ixd_quoted = escape_systemd_arg(&ixd_abs)?;
+        let watch_quoted = escape_systemd_arg(&watch_path_abs)?;
+
+        std::fs::create_dir_all(&service_dir)?;
+
+        let service_content = format!(
+            "[Unit]\n\
+Description=ix background daemon\n\
+After=network.target\n\
+\n\
+[Service]\n\
+ExecStart={ixd_quoted} {watch_quoted}\n\
+Restart=on-failure\n\
+RestartSec=10\n\
+StartLimitBurst=3\n\
+StartLimitIntervalSec=60\n\
+\n\
+[Install]\n\
+WantedBy=default.target\n"
+        );
+
+        std::fs::write(&service_file, service_content)?;
+
+        let output = std::process::Command::new(find_systemctl())
+            .args(["--user", "daemon-reload"])
+            .output();
+        match output {
+            Ok(out) if out.status.success() => {
+                println!("ixd service installed at {}", service_file.display());
+                println!("Watch path: {}", watch_path_abs.display());
+                println!("Run 'ix service start' to start the daemon.");
             }
-            Ok(())
-        }
-        ServiceAction::Restart { path } => {
-            let ixd = find_ixd();
-            let target_path = path
-                .clone()
-                .unwrap_or_else(|| std::path::PathBuf::from("."));
-            let _ = std::process::Command::new(&ixd)
-                .arg("--stop")
-                .arg(&target_path)
-                .status();
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            let status = std::process::Command::new(&ixd)
-                .arg("--daemon")
-                .arg(&target_path)
-                .status()
-                .map_err(|e| {
-                    ix::error::Error::Config(format!("failed to execute {}: {e}", ixd.display()))
-                })?;
-            if !status.success() {
-                return Err(ix::error::Error::Config(
-                    "failed to restart ixd daemon".into(),
-                ));
-            }
-            println!("ixd daemon restarted for {}.", target_path.display());
-            Ok(())
-        }
-        ServiceAction::Install { path } => {
-            #[cfg(target_os = "linux")]
-            {
-                let home = std::env::var("HOME")
-                    .map_err(|_| ix::error::Error::Config("HOME not set".into()))?;
-                let service_dir = std::path::PathBuf::from(&home).join(".config/systemd/user");
-                let service_file = service_dir.join("ixd.service");
-
-                let watch_path = path.clone().unwrap_or_else(|| {
-                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(&home))
-                });
-                let watch_path_abs = watch_path.canonicalize().unwrap_or(watch_path);
-
-                let ixd_path = find_ixd();
-                let ixd_abs = ixd_path.canonicalize().unwrap_or(ixd_path);
-
-                std::fs::create_dir_all(&service_dir)?;
-
-                let service_content = format!(
-                    r"[Unit]
-Description=ix background daemon
-After=network.target
-
-[Service]
-ExecStart={} {}
-Restart=on-failure
-RestartSec=10
-StartLimitBurst=3
-StartLimitIntervalSec=60
-
-[Install]
-WantedBy=default.target
-",
-                    ixd_abs.display(),
-                    watch_path_abs.display()
+            Ok(out) => {
+                let stderr_msg = String::from_utf8_lossy(&out.stderr);
+                println!("ixd service file written to {}", service_file.display());
+                eprintln!(
+                    "ix: warning: systemctl --user daemon-reload failed (exit {:?}): {}",
+                    out.status.code(),
+                    stderr_msg.trim()
                 );
-
-                std::fs::write(&service_file, service_content)?;
-
-                let status = std::process::Command::new(find_systemctl())
-                    .args(["--user", "daemon-reload"])
-                    .status();
-                match status {
-                    Ok(s) if s.success() => {
-                        println!("ixd service installed at {}", service_file.display());
-                        println!("Watch path: {}", watch_path_abs.display());
-                        println!("Run 'ix service start' to start the daemon.");
-                    }
-                    _ => {
-                        println!("ixd service file written to {}", service_file.display());
-                        println!(
-                            "Note: systemd daemon-reload was not run or systemd is not active on this system."
-                        );
-                        println!("You can run 'ix service start' directly to run ixd natively.");
-                    }
-                }
-                Ok(())
+                println!("You can run 'ix service start' directly to run ixd natively.");
             }
-            #[cfg(not(target_os = "linux"))]
-            {
-                let _ = path;
-                println!("Systemd installation is only applicable to Linux.");
-                println!(
-                    "On this platform, run 'ix service start' directly to launch ixd in background."
-                );
-                Ok(())
+            Err(e) => {
+                println!("ixd service file written to {}", service_file.display());
+                eprintln!("ix: warning: failed to execute systemctl --user daemon-reload: {e}");
+                println!("You can run 'ix service start' directly to run ixd natively.");
             }
         }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        println!("Systemd installation is only applicable to Linux.");
+        println!("On this platform, run 'ix service start' directly to launch ixd in background.");
+        Ok(())
     }
 }
 
 #[cfg(not(feature = "notify"))]
-#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn handle_service(action: &ServiceAction) -> ix::error::Result<()> {
-    if let ServiceAction::Status { path, json } = &action {
+    if let ServiceAction::Status { path, json } = action {
         handle_service_status(path.as_deref(), *json);
         return Ok(());
     }
-    eprintln!("Error: ix service commands require the 'notify' feature.");
-    eprintln!("Install with: cargo install ix --features notify");
-    std::process::exit(1);
+    Err(ix::error::Error::Config(
+        "ix service commands require the 'notify' feature (install with: cargo install ix --features notify)".into(),
+    ))
 }
 
 pub(crate) fn handle_service_status(path: Option<&Path>, json: bool) {
@@ -220,7 +304,7 @@ pub(crate) fn handle_service_status(path: Option<&Path>, json: bool) {
             let is_orphan = {
                 use nix::sys::signal::kill;
                 use nix::unistd::Pid;
-                kill(Pid::from_raw(beacon.pid), None).is_ok()
+                beacon.pid > 0 && kill(Pid::from_raw(beacon.pid), None).is_ok()
             };
             #[cfg(not(unix))]
             let is_orphan = false;
@@ -231,8 +315,9 @@ pub(crate) fn handle_service_status(path: Option<&Path>, json: bool) {
                         status: "orphan".to_string(),
                         stale_pid: Some(beacon.pid),
                     };
-                    if let Ok(s) = serde_json::to_string(&out) {
-                        println!("{s}");
+                    match serde_json::to_string(&out) {
+                        Ok(s) => println!("{s}"),
+                        Err(e) => eprintln!("ix: warning: JSON serialize error: {e}"),
                     }
                 } else {
                     println!("PID {} is not ixd (orphan beacon)", beacon.pid);
@@ -242,8 +327,9 @@ pub(crate) fn handle_service_status(path: Option<&Path>, json: bool) {
                     status: "dead".to_string(),
                     stale_pid: Some(beacon.pid),
                 };
-                if let Ok(s) = serde_json::to_string(&out) {
-                    println!("{s}");
+                match serde_json::to_string(&out) {
+                    Ok(s) => println!("{s}"),
+                    Err(e) => eprintln!("ix: warning: JSON serialize error: {e}"),
                 }
             } else {
                 println!(
@@ -258,8 +344,9 @@ pub(crate) fn handle_service_status(path: Option<&Path>, json: bool) {
                     status: "not_running".to_string(),
                     stale_pid: None,
                 };
-                if let Ok(s) = serde_json::to_string(&out) {
-                    println!("{s}");
+                match serde_json::to_string(&out) {
+                    Ok(s) => println!("{s}"),
+                    Err(e) => eprintln!("ix: warning: JSON serialize error: {e}"),
                 }
             } else {
                 println!("ixd daemon is not running");

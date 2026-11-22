@@ -55,6 +55,9 @@ line-length = 88
 select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF", "S", "C4", "RET", "PTH", "TC", "FA"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+"**/tests/*.py" = ["S101", "S603"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"

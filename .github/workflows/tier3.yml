@@ -31,7 +31,11 @@ jobs:
         run: cargo fmt --check --all
 
       - name: Lint (clippy)
-        run: cargo clippy --workspace --all-targets --all-features --exclude ix-py -- -D warnings
+        run: |
+          cargo clippy --workspace --all-targets --all-features --exclude ix-py -- -D warnings
+          cargo check --no-default-features
+          cargo check --no-default-features --features archive
+          cargo check --manifest-path ix-py/Cargo.toml --no-default-features
 
       - name: Tier 1 - Clippy lints
         run: |

@@ -11,7 +11,9 @@ after_help = r#"USAGE:
 Discovery: ix -l "pattern" → Unique file paths
 Existence:  ix -c "pattern" → Single integer (count)
 Contextual: ix -C 3 "pattern" → ±3 lines around match
-Structured: ix --json "pattern" → JSON Lines output (schema: {file, line, col, content, byte_offset, context_before, context_after})
+Structured: ix --json "pattern" → JSON Lines output (schema: {file, line, col, content, byte_offset, context_before, context_after, is_binary})
+            ix -c --json "pattern" → {"count": N}
+            ix -l --json "pattern" → {"files": [...] }
 Fresh:      ix --fresh "pattern" → Force rebuild + search
 Pipe:       cat file | ix --stdin "pattern" → Search stdin
 
@@ -92,7 +94,7 @@ NOTES:
  - Index stored in .ix/shard.ix relative to search path.
  - Word-boundary (-w) uses regex internally but enforces whole-word semantics.
  - --decompress and --archive require: cargo install ix --features full
- - --json schema: {file, line, col, content, byte_offset, context_before, context_after}"#
+ - --json schema: {file, line, col, content, byte_offset, context_before, context_after, is_binary}; -c --json: {"count": N}; -l --json: {"files": [...]}"#
 )]
 pub(crate) struct Cli {
     /// The pattern to search for (literal string by default).
@@ -102,49 +104,28 @@ pub(crate) struct Cli {
     /// The directory to search in (a single root; `-` for stdin).
     ///
     /// The parser accepts `0..` positional paths so a stray extra path fails
-    /// loudly (see main.rs) instead of being silently ignored.
+    /// loudly (see `main.rs`) instead of being silently ignored.
     #[arg(value_name = "PATH", num_args = 0..)]
     pub(crate) path: Vec<PathBuf>,
 
     /// Build or update the .ix index for the target directory.
     #[arg(
-  long,
-  value_name = "PATH",
-  num_args = 0..=1,
-  default_missing_value = ".",
-  help_heading = "Actions"
-)]
+        long,
+        value_name = "PATH",
+        num_args = 0..=1,
+        default_missing_value = ".",
+        help_heading = "Actions"
+    )]
     pub(crate) build: Option<PathBuf>,
 
-    /// Interpret the pattern as a regular expression (metacharacters active; a space
-    /// is a literal space, so a multi-word pattern matches contiguously unless you
-    /// use e.g. `.*` between the words).
-    #[arg(short, long)]
-    pub(crate) regex: bool,
+    #[command(flatten)]
+    pub(crate) mode: ModeArgs,
 
-    /// Perform a case-insensitive search.
-    #[arg(short, long)]
-    pub(crate) ignore_case: bool,
+    #[command(flatten)]
+    pub(crate) output: OutputArgs,
 
-    /// Match only word boundaries (e.g., "trigram" matches "the trigram is" but not "congratulations"). Requires literal mode.
-    #[arg(short = 'w', long)]
-    pub(crate) word: bool,
-
-    /// Output results as JSON Lines (Schema: {file, line, col, content, `byte_offset`, `context_before`, `context_after`}).
-    #[arg(long)]
-    pub(crate) json: bool,
-
-    /// Print search performance statistics to stderr.
-    #[arg(long)]
-    pub(crate) stats: bool,
-
-    /// Print only the total match count.
-    #[arg(short, long)]
-    pub(crate) count: bool,
-
-    /// Print only unique file paths of matching files.
-    #[arg(short = 'l', long)]
-    pub(crate) files_only: bool,
+    #[command(flatten)]
+    pub(crate) scan: ScanArgs,
 
     /// Show N lines of context around each match.
     #[arg(short = 'C', long, default_value = "0")]
@@ -158,45 +139,17 @@ pub(crate) struct Cli {
     #[arg(short = 't', long = "type")]
     pub(crate) file_types: Vec<String>,
 
-    /// Search inside compressed files (.gz, .zst, .bz2, .xz).
-    #[arg(short = 'z', long)]
-    pub(crate) decompress: bool,
-
     /// Number of search threads (0 = auto).
     #[arg(short = 'j', long, default_value = "0")]
     pub(crate) threads: usize,
-
-    /// Enable multiline mode (dot matches newline). Requires --regex.
-    #[arg(short = 'U', long)]
-    pub(crate) multiline: bool,
-
-    /// Search inside .zip and .tar.gz archives.
-    #[arg(long)]
-    pub(crate) archive: bool,
-
-    /// Search binary files (normally skipped).
-    #[arg(long)]
-    pub(crate) binary: bool,
 
     /// Maximum file size to index in MB (0 = unlimited). Default: 100.
     #[arg(long, default_value = "100")]
     pub(crate) max_file_size: u64,
 
-    /// Force full file-system scan, bypassing any existing .ix index.
-    #[arg(long)]
-    pub(crate) no_index: bool,
-
-    /// Rebuild index before searching (ensures data freshness).
-    #[arg(long)]
-    pub(crate) fresh: bool,
-
     /// Force operation even if the search root is managed by a daemon.
     #[arg(long)]
     pub(crate) force: bool,
-
-    /// Read pattern from stdin (pipe mode). Conflicts with --build.
-    #[arg(long, conflicts_with = "build")]
-    pub(crate) stdin: bool,
 
     /// Run as background daemon (ixd mode).
     #[arg(long, hide = true)]
@@ -213,6 +166,73 @@ pub(crate) struct Cli {
     /// Run a subcommand: service management or index statistics.
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ModeArgs {
+    /// Interpret the pattern as a regular expression (metacharacters active; a space
+    /// is a literal space, so a multi-word pattern matches contiguously unless you
+    /// use e.g. `.*` between the words).
+    #[arg(short, long)]
+    pub(crate) regex: bool,
+
+    /// Perform a case-insensitive search.
+    #[arg(short, long)]
+    pub(crate) ignore_case: bool,
+
+    /// Match only word boundaries (e.g., "trigram" matches "the trigram is" but not "congratulations"). Mutually exclusive with `--regex`.
+    #[arg(short = 'w', long, conflicts_with = "regex")]
+    pub(crate) word: bool,
+
+    /// Enable multiline mode (dot matches newline). Requires `--regex`.
+    #[arg(short = 'U', long)]
+    pub(crate) multiline: bool,
+
+    /// Read pattern from stdin (pipe mode). Conflicts with `--build`.
+    #[arg(long, conflicts_with = "build")]
+    pub(crate) stdin: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct OutputArgs {
+    /// Output results as JSON Lines (Schema: `{file, line, col, content, byte_offset, context_before, context_after, is_binary}`; `-c --json`: `{"count": N}`; `-l --json`: `{"files": [...]}`).
+    #[arg(long)]
+    pub(crate) json: bool,
+
+    /// Print search performance statistics to stderr.
+    #[arg(long)]
+    pub(crate) stats: bool,
+
+    /// Print only the total match count.
+    #[arg(short, long)]
+    pub(crate) count: bool,
+
+    /// Print only unique file paths of matching files.
+    #[arg(short = 'l', long)]
+    pub(crate) files_only: bool,
+
+    /// Search binary files (normally skipped).
+    #[arg(long)]
+    pub(crate) binary: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ScanArgs {
+    /// Search inside compressed files (.gz, .zst, .bz2, .xz).
+    #[arg(short = 'z', long)]
+    pub(crate) decompress: bool,
+
+    /// Search inside .zip and .tar.gz archives.
+    #[arg(long)]
+    pub(crate) archive: bool,
+
+    /// Force full file-system scan, bypassing any existing .ix index.
+    #[arg(long)]
+    pub(crate) no_index: bool,
+
+    /// Rebuild index before searching (ensures data freshness).
+    #[arg(long)]
+    pub(crate) fresh: bool,
 }
 
 #[derive(clap::Subcommand)]
@@ -240,7 +260,7 @@ pub(crate) enum Command {
 pub(crate) enum ServiceAction {
     /// Install ixd as a user-level systemd service.
     Install {
-        /// Directory to watch (defaults to $HOME).
+        /// Directory to watch (defaults to current directory).
         #[arg(value_name = "PATH")]
         path: Option<PathBuf>,
     },
@@ -274,21 +294,36 @@ pub(crate) enum ServiceAction {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct SearchFlags {
+pub(crate) struct MatchFlags {
     pub(crate) is_regex: bool,
     pub(crate) ignore_case: bool,
     pub(crate) word_boundary: bool,
+    pub(crate) multiline: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct IndexFlags {
     pub(crate) no_index: bool,
     pub(crate) fresh: bool,
     pub(crate) force: bool,
+    pub(crate) decompress: bool,
+    pub(crate) archive: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct OutputFlags {
     pub(crate) json: bool,
     pub(crate) stats: bool,
     pub(crate) count: bool,
     pub(crate) files_only: bool,
-    pub(crate) decompress: bool,
-    pub(crate) multiline: bool,
-    pub(crate) archive: bool,
     pub(crate) binary: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct SearchFlags {
+    pub(crate) matching: MatchFlags,
+    pub(crate) index: IndexFlags,
+    pub(crate) output: OutputFlags,
 }
 
 pub(crate) struct SearchParams<'a> {

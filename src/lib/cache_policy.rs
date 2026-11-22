@@ -41,7 +41,6 @@ pub struct CacheDirective {
 /// Use [`AdaptiveCachePolicy::new_with_guard`] when sharing a `ResourceGuard` with a builder or
 /// other subsystem (recommended). Use [`AdaptiveCachePolicy::new`] when the cache policy needs its
 /// own independent ceiling.
-#[allow(clippy::missing_fields_in_debug)]
 pub struct AdaptiveCachePolicy {
     guard: ResourceGuard,
     ceiling: usize,
@@ -118,6 +117,70 @@ pub fn resource_guard_auto(ceiling_fraction: f64) -> ResourceGuard {
     resource_guard_fraction(n, d)
 }
 
+/// Returns the byte ceiling used by [`resource_guard_auto`] for the given fraction.
+#[must_use]
+pub fn ceiling_bytes_for_fraction(ceiling_fraction: f64) -> usize {
+    let (n, d) = resource_guard_bucket(ceiling_fraction);
+    let total = system_memory_bytes();
+    (total.saturating_mul(n) / d.max(1)).max(256 * 1024 * 1024)
+}
+
+/// Computes memory pressure percentage (0..=100) using live process `VmRSS`
+/// against `ceiling_bytes` on Linux, falling back to `guard.pressure()` when
+/// live RSS is unavailable.
+#[must_use]
+pub fn live_pressure_or_guard(guard: &ResourceGuard, ceiling_bytes: usize) -> u8 {
+    live_pressure_from_rss(guard, ceiling_bytes, live_rss_bytes())
+}
+
+fn live_pressure_from_rss(
+    guard: &ResourceGuard,
+    ceiling_bytes: usize,
+    live_rss: Option<u64>,
+) -> u8 {
+    if ceiling_bytes == 0 {
+        return 100;
+    }
+    if let Some(rss) = live_rss {
+        let ceiling_u128 = u128::try_from(ceiling_bytes).unwrap_or(u128::MAX);
+        let pct = (u128::from(rss).saturating_mul(100) / ceiling_u128).min(100);
+        return u8::try_from(pct).unwrap_or(100);
+    }
+    guard.pressure()
+}
+
+/// Return the current resident set size (live RSS) in bytes when available.
+///
+/// On Linux, reads `VmRSS:` from `/proc/self/status` and converts from `KiB`
+/// to bytes. Unlike `getrusage(RUSAGE_SELF)` `ru_maxrss` (which tracks the
+/// monotonic process-lifetime peak RSS), `VmRSS` reflects current resident
+/// memory after pages are freed or caches are evicted. Returns `None` on
+/// non-Linux targets or if `/proc/self/status` cannot be read so callers can
+/// fall back to `ResourceGuard`.
+#[must_use]
+pub fn live_rss_bytes() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        parse_vm_rss_bytes(&status)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_vm_rss_bytes(status: &str) -> Option<u64> {
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            let kb = rest.split_whitespace().next()?.parse::<u64>().ok()?;
+            return kb.checked_mul(1024);
+        }
+    }
+    None
+}
+
 impl AdaptiveCachePolicy {
     /// Creates a new policy with the given ceiling fraction of system memory.
     ///
@@ -159,10 +222,10 @@ impl AdaptiveCachePolicy {
 
     /// Returns a [`CacheDirective`] reflecting the current memory pressure.
     ///
-    /// **⚠ BLOCKING:** This call internally invokes `ResourceGuard::pressure()`
-    /// which reads `/proc/stat` twice with a 100 ms sleep between reads on Linux
-    /// (via `raw_entropy()` / `delta_iowait_ratio()`). Do **not** call this in
-    /// an async context without `spawn_blocking`.
+    /// Internally invokes `ResourceGuard::pressure()`, which reads
+    /// `getrusage(RUSAGE_SELF)` (`ru_maxrss`, monotonic process high-water mark)
+    /// synchronously without sleeping (unlike `ResourceGuard::check()`, which
+    /// samples `/proc/stat` across a 100 ms interval).
     ///
     /// # Zone mapping
     ///
@@ -206,10 +269,18 @@ impl AdaptiveCachePolicy {
 
     /// Convenience wrapper for `ResourceGuard::pressure()`.
     ///
-    /// **⚠ BLOCKING:** See [`directive`](Self::directive) for blocking details.
+    /// Reads process peak RSS via `getrusage(RUSAGE_SELF)` synchronously without
+    /// sleeping; see [`directive`](Self::directive).
     #[must_use]
     pub fn pressure(&self) -> u8 {
         self.guard.pressure()
+    }
+
+    /// Return the current memory pressure percentage (0..=100), preferring live
+    /// process `VmRSS` over monotonic peak `ru_maxrss` when available.
+    #[must_use]
+    pub fn live_pressure(&self) -> u8 {
+        live_pressure_or_guard(&self.guard, self.ceiling)
     }
 
     /// Returns the current RSS in bytes.
@@ -265,7 +336,6 @@ impl PressureZone {
 }
 
 #[cfg(test)]
-#[allow(clippy::as_conversions, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 
@@ -512,6 +582,118 @@ mod tests {
                 directive.allow_mmap_pin, expected_pin,
                 "pressure {pressure}: allow_mmap_pin mismatch"
             );
+        }
+    }
+
+    #[test]
+    fn test_parse_vm_rss_bytes_and_live_rss() {
+        let sample = "Name:\tix\nVmPeak:\t   10240 kB\nVmRSS:\t    4096 kB\n";
+        assert_eq!(parse_vm_rss_bytes(sample), Some(4096 * 1024));
+        assert_eq!(parse_vm_rss_bytes("Name:\tix\n"), None);
+
+        #[cfg(target_os = "linux")]
+        assert!(live_rss_bytes().is_some_and(|rss| rss > 0));
+    }
+
+    #[test]
+    fn live_pressure_transitions_and_vm_rss_divergence_recovery() {
+        use llmosafe::llmosafe_integration::EscalationReason;
+        use llmosafe::{DesignAssuranceLevel, EscalationPolicy, PressureLevel, SafetyDecision};
+
+        let escalation_policy = EscalationPolicy::default().with_dal(DesignAssuranceLevel::A);
+
+        // Ceiling 0 fails closed to 100%.
+        let guard_zero = ResourceGuard::for_testing(1024 * 1024, 0, 0);
+        assert_eq!(live_pressure_or_guard(&guard_zero, 0), 100);
+        let policy_zero = AdaptiveCachePolicy::new_with_guard(guard_zero, 0);
+        assert_eq!(policy_zero.live_pressure(), 100);
+
+        // Divergence recovery: simulated ru_maxrss >= 100% (guard.pressure() == 100)
+        // must still recover to Green / Proceed when live VmRSS is tiny relative to ceiling.
+        #[cfg(target_os = "linux")]
+        {
+            let guard_stuck_peak = ResourceGuard::for_testing(usize::MAX, 0, 100);
+            assert_eq!(guard_stuck_peak.pressure(), 100);
+            let recovered_pct = live_pressure_or_guard(&guard_stuck_peak, usize::MAX);
+            assert!(
+                recovered_pct <= 5,
+                "live VmRSS against usize::MAX ceiling should recover to Green, got {recovered_pct}"
+            );
+            let recovered_policy =
+                AdaptiveCachePolicy::new_with_guard(guard_stuck_peak, usize::MAX);
+            assert_eq!(recovered_policy.live_pressure(), recovered_pct);
+            assert_eq!(
+                recovered_policy.directive_for_pressure(recovered_pct).zone,
+                PressureZone::Green
+            );
+            assert_eq!(
+                escalation_policy.decide_with_pressure(
+                    0,
+                    0,
+                    false,
+                    PressureLevel::from(recovered_pct)
+                ),
+                SafetyDecision::Proceed
+            );
+
+            // Live VmRSS exceeding tiny ceiling drives live_pressure to 100% Red / Escalate
+            // even when guard.pressure() is overridden to 0.
+            let guard_low = ResourceGuard::for_testing(1024, 0, 0);
+            let saturated_pct = live_pressure_or_guard(&guard_low, 1024);
+            assert_eq!(saturated_pct, 100);
+            let saturated_policy = AdaptiveCachePolicy::new_with_guard(guard_low, 1024);
+            assert_eq!(saturated_policy.live_pressure(), 100);
+            let red_dir = saturated_policy.directive_for_pressure(saturated_pct);
+            assert_eq!(red_dir.zone, PressureZone::Red);
+            assert!(!red_dir.allow_new_entries);
+            assert!(matches!(
+                escalation_policy.decide_with_pressure(
+                    0,
+                    0,
+                    false,
+                    PressureLevel::from(saturated_pct)
+                ),
+                SafetyDecision::Escalate {
+                    reason: EscalationReason::ResourcePressure,
+                    ..
+                }
+            ));
+        }
+
+        // Exact transition ladder via live_pressure_from_rss (including None fallback).
+        let guard_fallback = ResourceGuard::for_testing(1000, 0, 82);
+        assert_eq!(live_pressure_from_rss(&guard_fallback, 1000, None), 82);
+
+        let guard_high = ResourceGuard::for_testing(1000, 0, 100);
+        let policy = AdaptiveCachePolicy::new_with_guard(guard_high.clone(), 1000);
+        let ladder = [
+            (250u64, 25u8, PressureZone::Green, false),
+            (500u64, 50u8, PressureZone::Yellow, false),
+            (600u64, 60u8, PressureZone::Yellow, true),
+            (800u64, 80u8, PressureZone::Orange, true),
+            (1200u64, 100u8, PressureZone::Red, true),
+        ];
+        for (rss, expected_pct, expected_zone, expect_escalate) in ladder {
+            let pct = live_pressure_from_rss(&guard_high, 1000, Some(rss));
+            assert_eq!(pct, expected_pct);
+            let dir = policy.directive_for_pressure(pct);
+            assert_eq!(dir.zone, expected_zone);
+            let decision =
+                escalation_policy.decide_with_pressure(0, 0, false, PressureLevel::from(pct));
+            if expect_escalate {
+                assert!(
+                    matches!(
+                        decision,
+                        SafetyDecision::Escalate {
+                            reason: EscalationReason::ResourcePressure,
+                            ..
+                        }
+                    ),
+                    "pct={pct} should escalate, got {decision:?}"
+                );
+            } else {
+                assert_eq!(decision, SafetyDecision::Proceed);
+            }
         }
     }
 }

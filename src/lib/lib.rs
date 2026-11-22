@@ -64,14 +64,9 @@
 //! - **`archive`** — zip/tar archive support
 //! - **`full`** — All optional features
 
-// Lint configuration — Tier 1 security hardened, pedantic with pragmatic allow
+// Lint configuration — Tier 1 security hardened, strict pedantic mode
 #![warn(clippy::pedantic)]
-#![allow(clippy::cast_possible_truncation)] // 64-bit target; try_from guards runtime
-#![allow(clippy::cast_possible_wrap)] // controlled internal values
-#![allow(clippy::cast_sign_loss)] // controlled internal values
-#![allow(clippy::module_name_repetitions)] // module::Type is idiomatic
-#![allow(clippy::too_many_lines)] // scanner/executor are well-structured
-#![warn(missing_docs)] // enterprise: every public item documented
+#![warn(missing_docs)] // every public item documented
 #![cfg_attr(test, allow(missing_docs))] // tests: no doc needed for test fns
 #![warn(clippy::semicolon_if_nothing_returned)]
 #![warn(clippy::non_ascii_literal)]

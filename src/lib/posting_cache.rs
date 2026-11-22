@@ -11,9 +11,36 @@
 
 use std::collections::HashMap;
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::posting::{PostingEntry, PostingList};
 use crate::trigram::Trigram;
+
+fn fraction_count_ceil(total: usize, fraction: f64) -> usize {
+    if total == 0 || fraction <= 0.0_f64 || fraction.is_nan() {
+        return 0;
+    }
+    if fraction >= 1.0_f64 {
+        return total;
+    }
+    let bits = fraction.to_bits();
+    let exp_bits = u32::try_from((bits >> 52) & 0x7FF).unwrap_or(0);
+    if exp_bits == 0 {
+        return 1;
+    }
+    let shift = 1023u32.saturating_sub(exp_bits);
+    let denom_shift = 52u32.saturating_add(shift);
+    if denom_shift >= 128 {
+        return 1;
+    }
+    let mantissa = u128::from((bits & ((1u64 << 52) - 1)) | (1u64 << 52));
+    let total_u128 = u128::try_from(total).unwrap_or(u128::MAX);
+    let prod = total_u128.saturating_mul(mantissa);
+    let q = prod >> denom_shift;
+    let mask = (1u128 << denom_shift) - 1;
+    let ceil_val = if (prod & mask) != 0 { q + 1 } else { q };
+    usize::try_from(ceil_val).unwrap_or(total).min(total)
+}
 
 fn estimate_posting_size(list: &PostingList) -> usize {
     let mut size: usize = 16;
@@ -35,6 +62,80 @@ pub struct CacheStats {
     pub evictions: u64,
 }
 
+/// Deterministic test-only pause hook injected into cache-clear methods so
+/// concurrency tests can prove lock coverage across invalidation without sleep.
+#[cfg(all(test, feature = "notify", unix))]
+#[derive(Clone, Debug)]
+pub(crate) struct ClearPauseHook {
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+}
+
+/// RAII release guard for [`ClearPauseHook`]. Dropping the guard (including on
+/// test panic unwind) wakes any paused cache-clear call immediately.
+#[cfg(all(test, feature = "notify", unix))]
+pub(crate) struct ClearPauseRelease {
+    release: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+}
+
+#[cfg(all(test, feature = "notify", unix))]
+impl ClearPauseRelease {
+    pub(crate) fn release(self) {
+        drop(self);
+    }
+}
+
+#[cfg(all(test, feature = "notify", unix))]
+impl Drop for ClearPauseRelease {
+    fn drop(&mut self) {
+        let (lock, cvar) = &*self.release;
+        let mut released = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *released = true;
+        cvar.notify_all();
+    }
+}
+
+#[cfg(all(test, feature = "notify", unix))]
+impl ClearPauseHook {
+    pub(crate) fn channel() -> (Self, std::sync::mpsc::Receiver<()>, ClearPauseRelease) {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let release =
+            std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let guard = ClearPauseRelease {
+            release: std::sync::Arc::clone(&release),
+        };
+        let hook = Self {
+            entered: entered_tx,
+            release,
+        };
+        (hook, entered_rx, guard)
+    }
+
+    pub(crate) fn pause(&self) {
+        let _ = self.entered.send(());
+        let (lock, cvar) = &*self.release;
+        let mut released = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !*released {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let (guard, wait_res) = cvar
+                .wait_timeout(released, remaining)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            released = guard;
+            if wait_res.timed_out() && !*released {
+                break;
+            }
+        }
+    }
+}
+
 /// Thread-safe, memory-bounded LRU cache mapping [`Trigram`] → [`PostingList`].
 ///
 /// Uses FIFO eviction (oldest first) when the `memory_ceiling` is exceeded.
@@ -49,6 +150,9 @@ pub struct PostingCache {
     memory_ceiling: usize,
     admit: RwLock<bool>,
     stats: RwLock<CacheStats>,
+    shard_epoch: AtomicU64,
+    #[cfg(all(test, feature = "notify", unix))]
+    clear_pause_hook: RwLock<Option<ClearPauseHook>>,
 }
 
 impl PostingCache {
@@ -66,7 +170,57 @@ impl PostingCache {
                 misses: 0,
                 evictions: 0,
             }),
+            shard_epoch: AtomicU64::new(0),
+            #[cfg(all(test, feature = "notify", unix))]
+            clear_pause_hook: RwLock::new(None),
         }
+    }
+
+    /// Synchronize the cache to the given shard generation fingerprint.
+    ///
+    /// If the cache was previously bound to a different non-zero shard
+    /// fingerprint (or already holds entries from an unbound shard), all
+    /// cached posting lists are atomically evicted before updating the epoch.
+    /// Returns `true` when existing cached entries were cleared due to a shard
+    /// generation change.
+    pub fn ensure_shard(&self, fingerprint: u64) -> bool {
+        if self.shard_epoch.load(Ordering::Acquire) == fingerprint {
+            return false;
+        }
+        let mut map = self
+            .map
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut order = self
+            .order
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut mem = self
+            .memory_used
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prev = self.shard_epoch.swap(fingerprint, Ordering::AcqRel);
+        if prev == fingerprint {
+            return false;
+        }
+        let had_entries = !map.is_empty();
+        if prev != 0 || had_entries {
+            map.clear();
+            order.clear();
+            *mem = 0;
+        }
+        drop(mem);
+        drop(order);
+        drop(map);
+        prev != 0 || had_entries
+    }
+
+    #[cfg(all(test, feature = "notify", unix))]
+    pub(crate) fn set_clear_pause_hook(&self, hook: Option<ClearPauseHook>) {
+        *self
+            .clear_pause_hook
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
     }
 
     /// Create a cache with the given ceiling, synced to the cache-policy
@@ -138,94 +292,62 @@ impl PostingCache {
             return;
         }
 
-        let entry_size = estimate_posting_size(&list);
-
         if self.memory_ceiling == 0 {
             return;
         }
 
-        let existing_size = {
-            let map = self
-                .map
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            map.get(&trigram).map_or(0, estimate_posting_size)
-        };
-
-        if existing_size > 0 {
-            let mut map = self
-                .map
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut order = self
-                .order
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut mem = self
-                .memory_used
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            // Recompute removed size under the write lock to close the TOCTOU
-            // window: another thread may have removed this trigram between the
-            // read-lock check and write-lock acquisition.
-            let actual_removed_size = map
-                .remove(&trigram)
-                .map_or(0, |removed| estimate_posting_size(&removed));
-            order.retain(|t| *t != trigram);
-            *mem = mem.saturating_sub(actual_removed_size);
-            map.insert(trigram, list);
-            order.push(trigram);
-            *mem += entry_size;
-            drop(mem);
-            drop(order);
-            drop(map);
+        let entry_size = estimate_posting_size(&list);
+        if entry_size > self.memory_ceiling {
             return;
         }
 
-        {
-            let mut mem = self
-                .memory_used
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut map = self
-                .map
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut order = self
-                .order
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut stats = self
-                .stats
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Unified lock acquisition order: map -> order -> memory_used -> stats
+        // (matching invalidate, evict_fraction, and invalidate_all) to prevent
+        // AB-BA deadlocks (PC-1), and check/remove any existing key under the
+        // write lock to eliminate the concurrent-miss TOCTOU (PC-2).
+        let mut map = self
+            .map
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut order = self
+            .order
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut mem = self
+            .memory_used
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut stats = self
+            .stats
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-            while *mem + entry_size > self.memory_ceiling {
-                if let Some(evict) = order.first().copied() {
-                    if evict == trigram {
-                        break;
-                    }
-                    order.remove(0);
-                    if let Some(removed) = map.remove(&evict) {
-                        let removed_size = estimate_posting_size(&removed);
-                        *mem = mem.saturating_sub(removed_size);
-                    }
-                    stats.evictions += 1;
-                } else {
-                    break;
-                }
-            }
-
-            if entry_size <= self.memory_ceiling {
-                map.insert(trigram, list);
-                order.push(trigram);
-                *mem += entry_size;
-            }
-            drop(stats);
-            drop(mem);
-            drop(order);
-            drop(map);
+        if let Some(removed) = map.remove(&trigram) {
+            let removed_size = estimate_posting_size(&removed);
+            *mem = mem.saturating_sub(removed_size);
+            order.retain(|t| *t != trigram);
         }
+
+        while mem.saturating_add(entry_size) > self.memory_ceiling {
+            if let Some(evict) = order.first().copied() {
+                order.remove(0);
+                if let Some(removed) = map.remove(&evict) {
+                    let removed_size = estimate_posting_size(&removed);
+                    *mem = mem.saturating_sub(removed_size);
+                }
+                stats.evictions += 1;
+            } else {
+                break;
+            }
+        }
+
+        map.insert(trigram, list);
+        order.push(trigram);
+        *mem += entry_size;
+        drop(stats);
+        drop(mem);
+        drop(order);
+        drop(map);
     }
 
     /// # Panics
@@ -267,14 +389,8 @@ impl PostingCache {
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_sign_loss,
-        clippy::cast_possible_truncation,
-        clippy::as_conversions
-    )]
     pub fn evict_fraction(&self, fraction: f64) {
-        if fraction <= 0.0_f64 {
+        if fraction <= 0.0_f64 || fraction.is_nan() {
             return;
         }
         if fraction >= 1.0_f64 {
@@ -298,7 +414,7 @@ impl PostingCache {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let total = order.len();
-        let to_remove = (total as f64 * fraction).ceil() as usize;
+        let to_remove = fraction_count_ceil(total, fraction);
         for _ in 0..to_remove {
             if let Some(evict) = order.first().copied() {
                 order.remove(0);
@@ -321,6 +437,17 @@ impl PostingCache {
     ///
     /// Panics if the internal `RwLock` is poisoned.
     pub fn invalidate_all(&self) {
+        #[cfg(all(test, feature = "notify", unix))]
+        {
+            let hook = self
+                .clear_pause_hook
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            if let Some(h) = hook {
+                h.pause();
+            }
+        }
         let mut map = self
             .map
             .write()
@@ -390,7 +517,6 @@ impl Default for PostingCache {
 }
 
 #[cfg(test)]
-#[allow(clippy::as_conversions, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 
@@ -557,5 +683,75 @@ mod tests {
         assert!(cache.get(t2).is_none());
         assert!(cache.get(t3).is_some());
         assert!(cache.get(t4).is_some());
+    }
+
+    #[test]
+    fn concurrent_insert_evict_invalidate_no_deadlock_or_leak() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let sample = PostingList {
+            entries: vec![PostingEntry {
+                file_id: 1,
+                offsets: vec![1, 2, 3, 4],
+            }],
+        };
+        let entry_size = estimate_posting_size(&sample);
+        let ceiling = entry_size * 12;
+        let cache = Arc::new(PostingCache::new(ceiling));
+        let barrier = Arc::new(Barrier::new(8));
+
+        let mut handles = Vec::new();
+        for tid in 0..8u32 {
+            let c = Arc::clone(&cache);
+            let b = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                b.wait();
+                for iter in 0..200u32 {
+                    // Shared hot key + per-thread keys to stress PC-2 and PC-1 simultaneously
+                    let hot_tri = trigram(b'a', b'a', b'a');
+                    let key_tri = trigram(
+                        b'a' + u8::try_from((tid + iter) % 20).unwrap_or(0),
+                        b'b',
+                        b'c' + u8::try_from(iter % 10).unwrap_or(0),
+                    );
+                    let list = PostingList {
+                        entries: vec![PostingEntry {
+                            file_id: iter,
+                            offsets: vec![tid, iter],
+                        }],
+                    };
+                    c.insert(hot_tri, list.clone());
+                    c.insert(key_tri, list);
+                    let _ = c.get(hot_tri);
+                    if iter % 13 == 0 {
+                        c.evict_fraction(0.25);
+                    }
+                    if iter % 37 == 0 {
+                        c.invalidate(key_tri);
+                    }
+                    if iter % 71 == 0 {
+                        c.invalidate_all();
+                    }
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().expect("worker thread must not panic or deadlock");
+        }
+
+        assert!(
+            cache.memory_used() <= ceiling,
+            "memory_used {} exceeded ceiling {}",
+            cache.memory_used(),
+            ceiling
+        );
+        cache.invalidate_all();
+        assert!(cache.is_empty());
+        assert_eq!(cache.memory_used(), 0);
+
+        // Verify order vec has no leaked duplicates after concurrent same-key inserts
+        assert!(cache.order.read().unwrap().is_empty());
     }
 }

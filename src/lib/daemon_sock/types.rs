@@ -117,11 +117,8 @@ pub(super) const fn default_true() -> bool {
 /// For progressive queries, the daemon sends `SearchResults` messages,
 /// ending with `done` = `true`.
 ///
-/// NOTE: Progressive search currently operates in single-batch mode.
-/// Every search returns exactly one batch with `done: true`. The
-/// multi-batch progressive delivery path is not yet implemented.
 /// Clients MUST NOT wait for additional batches after receiving
-/// `done: true` — the channel is closed after the single batch.
+/// `done: true` — the stream ends after the final batch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResults {
     /// Query ID (matches the id from the request).
@@ -201,8 +198,9 @@ pub enum ServerMessage {
 
 /// Search query parameters sent from client to daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-// SearchQuery is a wire format struct with 9 boolean query flags
-// that cannot be decomposed without breaking the JSON protocol.
+// ARCHITECTURAL_ESCALATION: SearchQuery is a public wire-format struct with 9 boolean
+// fields constructed literally by external callers and tests; decomposing or hiding
+// fields breaks public API compatibility (`avoid-breaking-exported-api = true`).
 #[allow(clippy::struct_excessive_bools)]
 pub struct SearchQuery {
     /// Client-assigned query ID (echoed back in the response).

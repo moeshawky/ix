@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import ix
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_error_hierarchy() -> None:
@@ -16,10 +19,11 @@ def test_error_hierarchy() -> None:
     assert issubclass(ix.IxConfigError, ix.IxError)
     assert issubclass(ix.IxWatcherError, ix.IxError)
     assert issubclass(ix.IxArchiveError, ix.IxError)
+    assert issubclass(ix.LLMOSafeError, ix.IxError)
 
 
 def test_all_errors_exported() -> None:
-    """All 7 exception classes are in __all__."""
+    """All 9 exception classes are in __all__."""
     for name in [
         "IxError",
         "IxIndexError",
@@ -29,6 +33,7 @@ def test_all_errors_exported() -> None:
         "IxConfigError",
         "IxWatcherError",
         "IxArchiveError",
+        "LLMOSafeError",
     ]:
         assert name in ix.__all__
 

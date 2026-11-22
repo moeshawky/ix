@@ -21,7 +21,7 @@ pub fn encode(mut value: u64, buf: &mut Vec<u8>) {
 /// # Errors
 ///
 /// Returns `TruncatedVarint` if the data is too short, or `OverflowVarint` if
-/// the varint is too large (>=70 bits).
+/// the varint overflows `u64` (> 64 bits or > 10 bytes).
 #[inline]
 pub fn decode(data: &[u8], pos: &mut usize) -> Result<u64> {
     let mut result: u64 = 0;
@@ -34,6 +34,9 @@ pub fn decode(data: &[u8], pos: &mut usize) -> Result<u64> {
             return Err(Error::OverflowVarint);
         }
         let byte = *data.get(*pos).ok_or(Error::TruncatedVarint(*pos))?;
+        if shift == 63 && byte > 1 {
+            return Err(Error::OverflowVarint);
+        }
         *pos += 1;
         result |= u64::from(byte & 0x7F) << shift;
         if byte & 0x80 == 0 {
@@ -44,7 +47,6 @@ pub fn decode(data: &[u8], pos: &mut usize) -> Result<u64> {
 }
 
 #[cfg(test)]
-#[allow(clippy::as_conversions, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 
@@ -186,5 +188,30 @@ mod tests {
             assert_eq!(decoded, v, "boundary roundtrip failed for {v}");
             assert_eq!(pos, buf.len());
         }
+    }
+
+    #[test]
+    fn test_decode_10th_byte_overflow_error() {
+        // 10th byte (shift == 63) with value 2 overflows 2^64 - 1
+        let overflow_two = [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02];
+        let mut pos = 0;
+        assert!(matches!(
+            decode(&overflow_two, &mut pos),
+            Err(Error::OverflowVarint)
+        ));
+
+        // 10th byte with continuation bit set (0x80) exceeds 10 bytes
+        let overflow_cont = [0x80u8; 10];
+        let mut pos2 = 0;
+        assert!(matches!(
+            decode(&overflow_cont, &mut pos2),
+            Err(Error::OverflowVarint)
+        ));
+
+        // 10th byte == 0x01 with all lower bits set == u64::MAX (valid)
+        let max_u64 = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01];
+        let mut pos3 = 0;
+        assert_eq!(decode(&max_u64, &mut pos3).unwrap(), u64::MAX);
+        assert_eq!(pos3, 10);
     }
 }

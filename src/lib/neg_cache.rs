@@ -40,6 +40,8 @@ pub struct NegCache {
     max_entries: usize,
     admit: RwLock<bool>,
     stats: RwLock<NegCacheStats>,
+    #[cfg(all(test, feature = "notify", unix))]
+    clear_pause_hook: RwLock<Option<crate::posting_cache::ClearPauseHook>>,
 }
 
 impl NegCache {
@@ -51,7 +53,17 @@ impl NegCache {
             max_entries,
             admit: RwLock::new(true),
             stats: RwLock::new(NegCacheStats::default()),
+            #[cfg(all(test, feature = "notify", unix))]
+            clear_pause_hook: RwLock::new(None),
         }
+    }
+
+    #[cfg(all(test, feature = "notify", unix))]
+    pub(crate) fn set_clear_pause_hook(&self, hook: Option<crate::posting_cache::ClearPauseHook>) {
+        *self
+            .clear_pause_hook
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
     }
 
     /// Set whether new entries are admitted.
@@ -96,6 +108,9 @@ impl NegCache {
     ///
     /// Panics if the internal `RwLock` is poisoned.
     pub fn record_negative(&self, query_fingerprint: u64, content_hash: u64) {
+        if self.max_entries == 0 {
+            return;
+        }
         if !*self
             .admit
             .read()
@@ -159,6 +174,17 @@ impl NegCache {
     ///
     /// Panics if the internal `RwLock` is poisoned.
     pub fn clear(&self) {
+        #[cfg(all(test, feature = "notify", unix))]
+        {
+            let hook = self
+                .clear_pause_hook
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            if let Some(h) = hook {
+                h.pause();
+            }
+        }
         let mut set = self
             .set
             .write()
@@ -172,14 +198,8 @@ impl NegCache {
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_sign_loss,
-        clippy::cast_possible_truncation,
-        clippy::as_conversions
-    )]
     pub fn evict_fraction(&self, fraction: f64) {
-        if fraction <= 0.0_f64 {
+        if fraction <= 0.0_f64 || fraction.is_nan() {
             return;
         }
         if fraction >= 1.0_f64 {
@@ -191,7 +211,7 @@ impl NegCache {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let len = set.len();
-        let to_remove = (len as f64 * fraction) as usize;
+        let to_remove = fraction_count_floor(len, fraction);
         let mut remaining = to_remove;
         set.retain(|_| {
             if remaining > 0 {
@@ -248,8 +268,52 @@ pub fn query_fingerprint(pattern: &str) -> u64 {
     xxh64(pattern.as_bytes(), 0)
 }
 
+/// Compute a stable XXH64 fingerprint combining the query pattern with the
+/// execution flags (`binary`, `decompress`, `multiline`, `word_boundary`) that
+/// alter verification outcomes.
+#[must_use]
+pub fn query_fingerprint_with_options(
+    pattern: &str,
+    binary: bool,
+    decompress: bool,
+    multiline: bool,
+    word_boundary: bool,
+) -> u64 {
+    let mut buf = Vec::with_capacity(pattern.len() + 5);
+    buf.extend_from_slice(pattern.as_bytes());
+    buf.push(0);
+    buf.push(u8::from(binary));
+    buf.push(u8::from(decompress));
+    buf.push(u8::from(multiline));
+    buf.push(u8::from(word_boundary));
+    xxh64(&buf, 0)
+}
+
+fn fraction_count_floor(total: usize, fraction: f64) -> usize {
+    if total == 0 || fraction <= 0.0_f64 || fraction.is_nan() {
+        return 0;
+    }
+    if fraction >= 1.0_f64 {
+        return total;
+    }
+    let bits = fraction.to_bits();
+    let exp_bits = u32::try_from((bits >> 52) & 0x7FF).unwrap_or(0);
+    if exp_bits == 0 {
+        return 0;
+    }
+    let shift = 1023u32.saturating_sub(exp_bits);
+    let denom_shift = 52u32.saturating_add(shift);
+    if denom_shift >= 128 {
+        return 0;
+    }
+    let mantissa = u128::from((bits & ((1u64 << 52) - 1)) | (1u64 << 52));
+    let total_u128 = u128::try_from(total).unwrap_or(u128::MAX);
+    let prod = total_u128.saturating_mul(mantissa);
+    let q = prod >> denom_shift;
+    usize::try_from(q).unwrap_or(total).min(total)
+}
+
 #[cfg(test)]
-#[allow(clippy::as_conversions, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 
@@ -341,5 +405,16 @@ mod tests {
         assert!(!cache.is_empty());
         cache.invalidate_file(2);
         assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_neg_cache_zero_max_entries_is_noop() {
+        let cache = NegCache::new(0);
+        cache.record_negative(1, 2);
+        cache.record_negative(3, 4);
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.stats().evictions, 0);
+        assert!(!cache.is_known_negative(1, 2));
     }
 }

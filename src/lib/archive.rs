@@ -5,96 +5,314 @@ use crate::error::Result;
 #[cfg(feature = "archive")]
 use crate::executor::{Match, QueryOptions};
 #[cfg(feature = "archive")]
-use crate::format::is_binary;
+use crate::streaming::{StreamLimits, StreamStats, stream_file_bounded};
 #[cfg(feature = "archive")]
 use regex::Regex;
 #[cfg(feature = "archive")]
 use std::fs::File;
 #[cfg(feature = "archive")]
-use std::io::{BufRead, BufReader, Read};
+use std::io::Read;
 #[cfg(feature = "archive")]
 use std::path::{Path, PathBuf};
+#[cfg(feature = "archive")]
+use std::sync::Arc;
+#[cfg(feature = "archive")]
+use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Strip path-traversal components from an archive entry name.
+/// Maximum decompressed bytes per individual archive entry (`100 MiB`).
+#[cfg(feature = "archive")]
+const MAX_ENTRY_BYTES: usize = 100 * 1024 * 1024;
+/// Maximum line length within an archive entry (`1 MiB`).
+#[cfg(feature = "archive")]
+const MAX_LINE_BYTES: usize = 1024 * 1024;
+/// Maximum total decompressed bytes across an entire archive (`512 MiB`).
+#[cfg(feature = "archive")]
+const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
+/// Maximum number of entries inspected per archive.
+#[cfg(feature = "archive")]
+const MAX_ARCHIVE_ENTRIES: usize = 100_000;
+
+/// Reader wrapper that enforces a shared decompressed byte ceiling across an archive.
+#[cfg(feature = "archive")]
+struct BoundedArchiveReader<R> {
+    inner: R,
+    bytes_read: Arc<AtomicU64>,
+    limit: u64,
+}
+
+#[cfg(feature = "archive")]
+impl<R> BoundedArchiveReader<R> {
+    const fn new(inner: R, bytes_read: Arc<AtomicU64>, limit: u64) -> Self {
+        Self {
+            inner,
+            bytes_read,
+            limit,
+        }
+    }
+}
+
+#[cfg(feature = "archive")]
+impl<R: Read> Read for BoundedArchiveReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        let prev = self
+            .bytes_read
+            .fetch_add(u64::try_from(n).unwrap_or(u64::MAX), Ordering::Relaxed);
+        let total = prev.saturating_add(u64::try_from(n).unwrap_or(u64::MAX));
+        if total > self.limit {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "archive decompressed data exceeds {} byte limit",
+                    self.limit
+                ),
+            ));
+        }
+        Ok(n)
+    }
+}
+
+/// Strip path-traversal components, leading separators, NUL bytes, and drive
+/// prefixes from an archive entry name.
 ///
-/// Removes leading `/` and `\` prefixes, then drops any `..` component.
-/// This prevents path traversal if downstream code ever uses `Match.file_path`
+/// Prevents path traversal if downstream code ever uses `Match.file_path`
 /// for file operations (currently display-only but load-bearing invariant).
 #[cfg(feature = "archive")]
 fn sanitize_archive_path(name: &str) -> String {
-    let trimmed = name.trim_start_matches('/').trim_start_matches('\\');
+    let cleaned: String = name.chars().filter(|&c| c != '\0').collect();
+    let without_drive = match cleaned.as_bytes() {
+        [first, b':', ..] if first.is_ascii_alphabetic() => cleaned.get(2..).unwrap_or(""),
+        _ => cleaned.as_str(),
+    };
+    let trimmed = without_drive.trim_start_matches(['/', '\\']);
     trimmed
         .split(['/', '\\'])
-        .filter(|c| *c != "..")
+        .filter(|c| !c.is_empty() && *c != "." && *c != "..")
         .collect::<Vec<_>>()
         .join("/")
 }
 
-/// Scan a .zip archive for matches.
+#[cfg(feature = "archive")]
+fn entry_matches_type_filter(entry_name: &str, type_filter: &[String]) -> bool {
+    if type_filter.is_empty() {
+        return true;
+    }
+    let ext = Path::new(entry_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    type_filter.iter().any(|allowed| allowed == ext)
+}
+
+/// Scan a `.zip` archive for matches.
+///
+/// Enforces per-entry and archive-wide decompression caps and skips malformed
+/// or oversized individual entries with a warning instead of aborting prior
+/// matches.
 ///
 /// # Errors
 ///
-/// Returns an error if the archive cannot be read or entries are malformed.
+/// Returns an error if the archive file cannot be opened or its central
+/// directory cannot be parsed.
 #[cfg(feature = "archive")]
 pub fn scan_zip(path: &Path, regex: &Regex, options: &QueryOptions) -> Result<Vec<Match>> {
+    scan_zip_with_stats(path, regex, options).map(|(matches, _)| matches)
+}
+/// Scan a `.zip` archive for matches, returning both matches and the number of
+/// skipped/malformed/capped entries.
+///
+/// # Errors
+///
+/// Returns an error if the archive file cannot be opened or its central
+/// directory cannot be parsed.
+#[cfg(feature = "archive")]
+pub fn scan_zip_with_stats(
+    path: &Path,
+    regex: &Regex,
+    options: &QueryOptions,
+) -> Result<(Vec<Match>, u64)> {
     let file = File::open(path)?;
     let mut archive = zip::ZipArchive::new(file)?;
     let mut matches = Vec::new();
+    let mut skipped_entries = 0u64;
+    let archive_bytes = Arc::new(AtomicU64::new(0));
+    let total_entries = archive.len();
+    if total_entries > MAX_ARCHIVE_ENTRIES {
+        skipped_entries = skipped_entries.saturating_add(
+            u64::try_from(total_entries.saturating_sub(MAX_ARCHIVE_ENTRIES)).unwrap_or(u64::MAX),
+        );
+        tracing::warn!(
+            "archive {} has {} entries; capping inspection at {}",
+            path.display(),
+            total_entries,
+            MAX_ARCHIVE_ENTRIES
+        );
+    }
 
-    for i in 0..archive.len() {
-        let entry = archive.by_index(i)?;
+    for i in 0..total_entries.min(MAX_ARCHIVE_ENTRIES) {
+        if archive_bytes.load(Ordering::Relaxed) >= MAX_ARCHIVE_BYTES {
+            let remaining = total_entries.min(MAX_ARCHIVE_ENTRIES).saturating_sub(i);
+            skipped_entries =
+                skipped_entries.saturating_add(u64::try_from(remaining).unwrap_or(u64::MAX));
+            tracing::warn!(
+                "archive {} exceeded {} byte decompressed limit; stopping",
+                path.display(),
+                MAX_ARCHIVE_BYTES
+            );
+            break;
+        }
+
+        let entry = match archive.by_index(i) {
+            Ok(e) => e,
+            Err(e) => {
+                skipped_entries = skipped_entries.saturating_add(1);
+                tracing::warn!("archive: skipping entry #{i} in {}: {e}", path.display());
+                continue;
+            }
+        };
         if !entry.is_file() {
             continue;
         }
 
         let entry_name = sanitize_archive_path(entry.name());
+        if !entry_matches_type_filter(&entry_name, &options.type_filter) {
+            continue;
+        }
         let display_path = format!("{}:{}", path.display(), entry_name);
+        let bounded =
+            BoundedArchiveReader::new(entry, Arc::clone(&archive_bytes), MAX_ARCHIVE_BYTES);
         let entry_matches =
-            match_content_stream(entry, &PathBuf::from(display_path), regex, options)?;
+            match match_content_stream(bounded, &PathBuf::from(display_path), regex, options) {
+                Ok(m) => m,
+                Err(e) => {
+                    skipped_entries = skipped_entries.saturating_add(1);
+                    tracing::warn!(
+                        "archive: skipping entry {} in {}: {e}",
+                        entry_name,
+                        path.display()
+                    );
+                    continue;
+                }
+            };
 
         for m in entry_matches {
             matches.push(m);
             if options.max_results > 0 && matches.len() >= options.max_results {
-                return Ok(matches);
+                return Ok((matches, skipped_entries));
             }
         }
     }
 
-    Ok(matches)
+    Ok((matches, skipped_entries))
 }
 
-/// Scan a .tar.gz archive for matches.
+/// Scan a `.tar.gz` archive for matches.
+///
+/// Wraps the gzip stream in an archive-wide byte limit, caps inspected entries,
+/// and warns and skips malformed or oversized individual entries.
 ///
 /// # Errors
 ///
-/// Returns an error if the archive cannot be read or entries are malformed.
+/// Returns an error if the archive file cannot be opened or the tar stream
+/// headers cannot be read.
 #[cfg(feature = "archive")]
 pub fn scan_tar_gz(path: &Path, regex: &Regex, options: &QueryOptions) -> Result<Vec<Match>> {
+    scan_tar_gz_with_stats(path, regex, options).map(|(matches, _)| matches)
+}
+
+/// Scan a `.tar.gz` archive for matches, returning both matches and the number
+/// of skipped/malformed/capped entries.
+///
+/// # Errors
+///
+/// Returns an error if the archive file cannot be opened or the tar stream
+/// headers cannot be read.
+#[cfg(feature = "archive")]
+pub fn scan_tar_gz_with_stats(
+    path: &Path,
+    regex: &Regex,
+    options: &QueryOptions,
+) -> Result<(Vec<Match>, u64)> {
     let file = File::open(path)?;
-    let tar_gz = flate2::read::GzDecoder::new(file);
+    let archive_bytes = Arc::new(AtomicU64::new(0));
+    let tar_gz = BoundedArchiveReader::new(
+        flate2::read::GzDecoder::new(file),
+        Arc::clone(&archive_bytes),
+        MAX_ARCHIVE_BYTES,
+    );
     let mut archive = tar::Archive::new(tar_gz);
     let mut matches = Vec::new();
+    let mut skipped_entries = 0u64;
+    let mut entries_seen = 0usize;
 
-    for entry in archive.entries()? {
-        let entry = entry?;
+    for entry_res in archive.entries()? {
+        entries_seen = entries_seen.saturating_add(1);
+        if entries_seen > MAX_ARCHIVE_ENTRIES {
+            skipped_entries = skipped_entries.saturating_add(1);
+            tracing::warn!(
+                "archive {} exceeded {} entry limit; stopping",
+                path.display(),
+                MAX_ARCHIVE_ENTRIES
+            );
+            break;
+        }
+        let entry = match entry_res {
+            Ok(e) => e,
+            Err(e) => {
+                skipped_entries = skipped_entries.saturating_add(1);
+                tracing::warn!(
+                    "archive: error reading tar entry in {}: {e}",
+                    path.display()
+                );
+                if archive_bytes.load(Ordering::Relaxed) >= MAX_ARCHIVE_BYTES {
+                    break;
+                }
+                continue;
+            }
+        };
         if entry.header().entry_type() != tar::EntryType::Regular {
             continue;
         }
-        let path_in_tar = sanitize_archive_path(&entry.path()?.to_string_lossy());
+        let raw_entry_path = match entry.path() {
+            Ok(p) => p.to_string_lossy().into_owned(),
+            Err(e) => {
+                skipped_entries = skipped_entries.saturating_add(1);
+                tracing::warn!("archive: invalid tar path in {}: {e}", path.display());
+                continue;
+            }
+        };
+        let path_in_tar = sanitize_archive_path(&raw_entry_path);
+        if !entry_matches_type_filter(&path_in_tar, &options.type_filter) {
+            continue;
+        }
         let display_path = format!("{}:{}", path.display(), path_in_tar);
 
         let entry_matches =
-            match_content_stream(entry, &PathBuf::from(display_path), regex, options)?;
+            match match_content_stream(entry, &PathBuf::from(display_path), regex, options) {
+                Ok(m) => m,
+                Err(e) => {
+                    skipped_entries = skipped_entries.saturating_add(1);
+                    tracing::warn!(
+                        "archive: skipping entry {} in {}: {e}",
+                        path_in_tar,
+                        path.display()
+                    );
+                    if archive_bytes.load(Ordering::Relaxed) >= MAX_ARCHIVE_BYTES {
+                        break;
+                    }
+                    continue;
+                }
+            };
 
         for m in entry_matches {
             matches.push(m);
             if options.max_results > 0 && matches.len() >= options.max_results {
-                return Ok(matches);
+                return Ok((matches, skipped_entries));
             }
         }
     }
 
-    Ok(matches)
+    Ok((matches, skipped_entries))
 }
 
 #[cfg(feature = "archive")]
@@ -104,118 +322,24 @@ fn match_content_stream<R: Read>(
     regex: &Regex,
     options: &QueryOptions,
 ) -> Result<Vec<Match>> {
-    // Bound decompressed output to defend against zip/tar bombs (parity
-    // with decompress.rs CountingReader). Per-entry and per-line caps.
-    const MAX_ENTRY_BYTES: usize = 100 * 1024 * 1024; // 100 MiB per entry
-    const MAX_LINE_BYTES: usize = 1024 * 1024; // 1 MiB per line
-
-    let mut buf_reader = BufReader::new(reader);
-    let mut matches = Vec::new();
-    let mut line_number = 0u32;
-    let mut byte_offset = 0u64;
-
-    // Binary check on first 8KB
-    {
-        let buffer = buf_reader.fill_buf()?;
-        if buffer.is_empty() {
-            return Ok(vec![]);
-        }
-        if is_binary(buffer) {
-            return Ok(vec![]);
-        }
-    }
-
-    let mut total_bytes: usize = 0;
-    let mut line = String::new();
-    let mut context_before = std::collections::VecDeque::new();
-    let mut pending_matches: Vec<Match> = Vec::new();
-
-    while {
-        // Bound each line read so a newline-free giant line cannot
-        // allocate unbounded memory before the per-line cap fires (D-2).
-        let n = (&mut buf_reader)
-            .take((MAX_LINE_BYTES as u64) + 1)
-            .read_line(&mut line)?;
-        if n == 0 {
-            false
-        } else {
-            total_bytes = total_bytes.saturating_add(n);
-            if n > MAX_LINE_BYTES || total_bytes > MAX_ENTRY_BYTES {
-                return Err(crate::error::Error::Config(format!(
-                    "archive entry exceeds size limit ({MAX_ENTRY_BYTES} bytes)"
-                )));
-            }
-            true
-        }
-    } {
-        line_number += 1;
-        let line_len = u64::try_from(line.len()).unwrap_or(0);
-        let trimmed_line_str = line.trim_end();
-
-        // Fill context_after for pending matches
-        for m in &mut pending_matches {
-            if m.context_after.len() < options.context_lines {
-                m.context_after.push(trimmed_line_str.to_string());
-            }
-        }
-
-        // Move completed matches to final list
-        let (completed, still_pending): (Vec<_>, Vec<_>) = pending_matches
-            .into_iter()
-            .partition(|m| m.context_after.len() >= options.context_lines);
-        matches.extend(completed);
-        pending_matches = still_pending;
-
-        if let Some(m) = regex.find(&line) {
-            let context_before_vec: Vec<String> = context_before.iter().cloned().collect();
-
-            let new_match = Match {
-                file_path: path.to_owned(),
-                line_number,
-                col: u32::try_from(m.start() + 1).unwrap_or(0),
-                line_content: if options.count_only {
-                    String::new()
-                } else {
-                    trimmed_line_str.to_string()
-                },
-                byte_offset: byte_offset + u64::try_from(m.start()).unwrap_or(0),
-                context_before: context_before_vec,
-                context_after: vec![],
-                is_binary: false,
-            };
-
-            if options.context_lines > 0 {
-                pending_matches.push(new_match);
-            } else {
-                matches.push(new_match);
-            }
-
-            if options.max_results > 0
-                && (matches.len() + pending_matches.len()) >= options.max_results
-                && (pending_matches.is_empty() || matches.len() >= options.max_results)
-            {
-                break;
-            }
-        }
-
-        if options.context_lines > 0 {
-            if context_before.len() == options.context_lines {
-                if let Some(mut old_line) = context_before.pop_front() {
-                    old_line.clear();
-                    old_line.push_str(trimmed_line_str);
-                    context_before.push_back(old_line);
-                }
-            } else {
-                context_before.push_back(trimmed_line_str.to_string());
-            }
-        }
-
-        byte_offset += line_len;
-        line.clear();
-    }
-
-    matches.extend(pending_matches);
-    Ok(matches)
+    let limits = StreamLimits {
+        max_line_bytes: Some(MAX_LINE_BYTES),
+        max_total_bytes: Some(MAX_ENTRY_BYTES),
+        line_limit_label: Some("archive entry line exceeds size limit"),
+        total_limit_label: Some("archive entry exceeds size limit"),
+    };
+    let effective_opts;
+    let opts = if options.files_only {
+        effective_opts = QueryOptions {
+            max_results: 1,
+            ..options.clone()
+        };
+        &effective_opts
+    } else {
+        options
+    };
+    let mut stats = StreamStats::default();
+    stream_file_bounded(reader, path, regex, opts, limits, &mut stats)
 }
 
 // ---------------------------------------------------------------------------
@@ -223,12 +347,6 @@ fn match_content_stream<R: Read>(
 // ---------------------------------------------------------------------------
 
 #[cfg(all(test, feature = "archive"))]
-#[allow(
-    clippy::as_conversions,
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    clippy::expect_used
-)]
 mod tests {
     use super::*;
     use regex::Regex;
@@ -546,5 +664,84 @@ mod tests {
         let m = &results[0];
         assert_eq!(m.context_before.len(), 1); // only 1 line before target
         assert_eq!(m.context_after.len(), 1); // only 1 line after target
+    }
+
+    #[test]
+    fn sanitize_archive_path_strips_traversal_separators_nul_and_drives() {
+        assert_eq!(sanitize_archive_path(r"\../etc/passwd"), "etc/passwd");
+        assert_eq!(sanitize_archive_path("/./a/../b\\c"), "a/b/c");
+        assert_eq!(
+            sanitize_archive_path(r"C:\Windows\System32\cmd.exe"),
+            "Windows/System32/cmd.exe"
+        );
+        assert_eq!(sanitize_archive_path("foo\0bar/./baz"), "foobar/baz");
+    }
+
+    #[test]
+    fn scan_zip_handles_non_utf8_multiline_and_type_filter() {
+        use zip::ZipWriter;
+        use zip::write::SimpleFileOptions;
+
+        let dir = tempdir().unwrap();
+        let zip_path = dir.path().join("mixed.zip");
+        {
+            let file = std::fs::File::create(&zip_path).expect("create zip");
+            let mut zip = ZipWriter::new(file);
+            zip.start_file("skip.txt", SimpleFileOptions::default())
+                .expect("start skip");
+            zip.write_all(b"alpha\nomega\n").expect("write skip");
+
+            zip.start_file("code.rs", SimpleFileOptions::default())
+                .expect("start rs");
+            zip.write_all(b"// \xFF\nfn alpha() {\n    omega();\n}\n")
+                .expect("write rs");
+            zip.finish().expect("finish");
+        }
+
+        let re = Regex::new(r"(?s)alpha.*omega").unwrap();
+        let opts = QueryOptions {
+            multiline: true,
+            type_filter: vec!["rs".to_string()],
+            ..Default::default()
+        };
+        let results = scan_zip(&zip_path, &re, &opts).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].file_path.to_string_lossy().ends_with("code.rs"));
+    }
+
+    #[test]
+    fn scan_tar_gz_skips_oversized_line_entry_and_keeps_valid_entries() {
+        use flate2::{Compression, write::GzEncoder};
+        use tar::{Builder, Header};
+
+        let dir = tempdir().unwrap();
+        let tgz_path = dir.path().join("partial.tar.gz");
+        {
+            let file = std::fs::File::create(&tgz_path).expect("create");
+            let enc = GzEncoder::new(file, Compression::default());
+            let mut tar = Builder::new(enc);
+
+            let huge_line = vec![b'x'; MAX_LINE_BYTES + 128];
+            let mut h1 = Header::new_gnu();
+            h1.set_size(u64::try_from(huge_line.len()).expect("len"));
+            h1.set_path("huge_line.txt").expect("path");
+            h1.set_cksum();
+            tar.append(&h1, huge_line.as_slice()).expect("append huge");
+
+            let good = b"valid needle here\n";
+            let mut h2 = Header::new_gnu();
+            h2.set_size(u64::try_from(good.len()).expect("len"));
+            h2.set_path("good.txt").expect("path");
+            h2.set_cksum();
+            tar.append(&h2, &good[..]).expect("append good");
+
+            let enc = tar.into_inner().expect("into_inner");
+            enc.finish().expect("finish");
+        }
+
+        let re = Regex::new("needle").unwrap();
+        let results = scan_tar_gz(&tgz_path, &re, &QueryOptions::default()).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].file_path.to_string_lossy().contains("good.txt"));
     }
 }

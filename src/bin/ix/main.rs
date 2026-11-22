@@ -6,135 +6,62 @@
 //! ix --regex "pattern" [path]
 
 #![warn(clippy::pedantic)]
-#![allow(clippy::struct_excessive_bools)] // CLI and SearchParams have many toggles by nature
-#![allow(clippy::cast_possible_truncation)] // line numbers fit in u32; file sizes bounded
-#![allow(clippy::too_many_lines)] // output formatting is inherently verbose
 
 mod args;
 mod commands;
 mod output;
 mod service;
 
-use args::{Cli, Command, SearchFlags, SearchParams};
+use args::{Cli, Command, IndexFlags, MatchFlags, OutputFlags, SearchFlags, SearchParams};
 use clap::Parser;
 use std::path::PathBuf;
 
 fn main() {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_writer(std::io::stderr)
+        .try_init();
+
     let cli = Cli::parse();
 
-    if cli.threads > 0 {
-        if let Err(e) = rayon::ThreadPoolBuilder::new()
+    if cli.threads > 0
+        && let Err(e) = rayon::ThreadPoolBuilder::new()
             .num_threads(cli.threads)
             .build_global()
-        {
-            eprintln!("ix: warning: failed to initialize global thread pool: {e}");
-        }
+    {
+        eprintln!("ix: warning: failed to initialize global thread pool: {e}");
     }
 
-    if let Some(cmd) = cli.command {
-        match cmd {
-            Command::Service { action } => {
-                if let Err(e) = service::handle_service(&action) {
-                    eprintln!("Error: {e}");
-                    std::process::exit(1);
-                }
-            }
-            Command::Stats { path, json } => {
-                if let Err(e) = commands::do_stats(&path, json) {
-                    eprintln!("Error: {e}");
-                    std::process::exit(1);
-                }
-            }
-        }
+    if let Some(ref cmd) = cli.command {
+        handle_subcommand(cmd);
         return;
     }
 
-    #[cfg(all(feature = "notify", unix))]
-    {
-        if cli.daemon {
-            let paths: Vec<PathBuf> = if cli.path.is_empty() {
-                vec![PathBuf::from(".")]
-            } else {
-                #[allow(clippy::redundant_clone)]
-                cli.path.clone()
-            };
-            if let Err(e) = ix::daemon::run_many(&paths) {
-                eprintln!("Error watching roots: {e}");
-                std::process::exit(1);
-            }
-            return;
-        }
+    if cli.daemon {
+        handle_daemon(&cli.path);
+        return;
     }
 
-    #[cfg(not(feature = "notify"))]
-    {
-        if cli.daemon {
-            eprintln!(
-                "Error: daemon mode requires the 'notify' feature. Install with: cargo install ix --features notify"
-            );
-            std::process::exit(1);
-        }
-    }
+    validate_feature_flags(&cli);
 
-    #[cfg(all(feature = "notify", not(unix)))]
-    {
-        if cli.daemon {
-            eprintln!("Error: daemon mode is not supported on this platform");
-            std::process::exit(1);
-        }
-    }
-
-    #[cfg(not(feature = "archive"))]
-    {
-        if cli.archive {
-            eprintln!(
-                "ix: error: --archive requires installing with `cargo install ix --features archive`"
-            );
-            std::process::exit(1);
-        }
-    }
-
-    #[cfg(not(feature = "decompress"))]
-    {
-        if cli.decompress {
-            eprintln!(
-                "ix: error: --decompress requires installing with `cargo install ix --features decompress`"
-            );
-            std::process::exit(1);
-        }
+    if let Some(ref build_path) = cli.build {
+        handle_build(&cli, build_path);
+        return;
     }
 
     // Multiple PATH arguments are accepted by the parser but only a single
     // search root is supported (the index is per-root). Fail loudly instead of
     // silently searching only the first (audit F1).
-    if cli.build.is_none() && cli.path.len() > 1 {
+    if cli.path.len() > 1 {
         eprintln!(
             "ix: multiple PATH arguments are not supported; pass a single root (or search from their common parent)"
         );
         std::process::exit(2);
     }
 
-    // Determine path and handle build action
-    let search_path = if let Some(ref build_path) = cli.build {
-        // Build mode: path comes from --build flag, or CWD if not specified
-        build_path.clone()
-    } else if let Some(p) = cli.path.first() {
-        p.clone()
-    } else {
-        PathBuf::from(".")
-    };
-
-    if cli.build.is_some() {
-        if let Err(e) =
-            commands::do_build(&search_path, cli.decompress, cli.force, cli.max_file_size)
-        {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
-        }
-        return;
-    }
-
-    if cli.multiline && !cli.regex {
+    if cli.mode.multiline && !cli.mode.regex {
         eprintln!("ix: --multiline requires --regex (-r)");
         std::process::exit(1);
     }
@@ -145,7 +72,7 @@ fn main() {
     };
 
     // Stdin mode: --stdin flag or "-" path
-    let is_stdin = cli.stdin || cli.path.iter().any(|p| p == std::path::Path::new("-"));
+    let is_stdin = cli.mode.stdin || cli.path.iter().any(|p| p == std::path::Path::new("-"));
 
     if is_stdin {
         if let Err(e) = commands::do_stdin_stream_search(pattern, &cli) {
@@ -155,24 +82,36 @@ fn main() {
         return;
     }
 
+    let search_path = cli
+        .path
+        .first()
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from("."));
+
     let params = SearchParams {
         pattern,
         path: &search_path,
         flags: SearchFlags {
-            is_regex: cli.regex,
-            ignore_case: cli.ignore_case,
-            word_boundary: cli.word,
-            no_index: cli.no_index,
-            fresh: cli.fresh,
-            force: cli.force,
-            json: cli.json,
-            stats: cli.stats,
-            count: cli.count,
-            files_only: cli.files_only,
-            decompress: cli.decompress,
-            multiline: cli.multiline,
-            archive: cli.archive,
-            binary: cli.binary,
+            matching: MatchFlags {
+                is_regex: cli.mode.regex,
+                ignore_case: cli.mode.ignore_case,
+                word_boundary: cli.mode.word,
+                multiline: cli.mode.multiline,
+            },
+            index: IndexFlags {
+                no_index: cli.scan.no_index,
+                fresh: cli.scan.fresh,
+                force: cli.force,
+                decompress: cli.scan.decompress,
+                archive: cli.scan.archive,
+            },
+            output: OutputFlags {
+                json: cli.output.json,
+                stats: cli.output.stats,
+                count: cli.output.count,
+                files_only: cli.output.files_only,
+                binary: cli.output.binary,
+            },
         },
         context: cli.context,
         max_results: cli.max_results,
@@ -183,6 +122,102 @@ fn main() {
     };
 
     if let Err(e) = commands::do_search(&params) {
+        eprintln!("Error: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn handle_subcommand(cmd: &Command) {
+    match cmd {
+        Command::Service { action } => {
+            if let Err(e) = service::handle_service(action) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::Stats { path, json } => {
+            if let Err(e) = commands::do_stats(path, *json) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+fn handle_daemon(paths: &[PathBuf]) {
+    #[cfg(all(feature = "notify", unix))]
+    {
+        let res = if paths.is_empty() {
+            ix::daemon::run_many(&[PathBuf::from(".")])
+        } else {
+            ix::daemon::run_many(paths)
+        };
+        if let Err(e) = res {
+            eprintln!("Error watching roots: {e}");
+            std::process::exit(1);
+        }
+    }
+
+    #[cfg(not(feature = "notify"))]
+    {
+        let _ = paths;
+        eprintln!(
+            "Error: daemon mode requires the 'notify' feature. Install with: cargo install ix --features notify"
+        );
+        std::process::exit(1);
+    }
+
+    #[cfg(all(feature = "notify", not(unix)))]
+    {
+        let _ = paths;
+        eprintln!("Error: daemon mode is not supported on this platform");
+        std::process::exit(1);
+    }
+}
+
+#[cfg(not(all(feature = "archive", feature = "decompress")))]
+fn validate_feature_flags(cli: &Cli) {
+    #[cfg(not(feature = "archive"))]
+    {
+        if cli.scan.archive {
+            eprintln!(
+                "ix: error: --archive requires installing with `cargo install ix --features archive`"
+            );
+            std::process::exit(1);
+        }
+    }
+
+    #[cfg(not(feature = "decompress"))]
+    {
+        if cli.scan.decompress {
+            eprintln!(
+                "ix: error: --decompress requires installing with `cargo install ix --features decompress`"
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(all(feature = "archive", feature = "decompress"))]
+const fn validate_feature_flags(_cli: &Cli) {}
+
+fn handle_build(cli: &Cli, build_path: &std::path::Path) {
+    if let Some(ref extra) = cli.pattern {
+        eprintln!(
+            "ix: unexpected positional argument '{extra}' with --build; pass at most one path directly after --build (e.g. `ix --build <PATH> --force`)"
+        );
+        std::process::exit(2);
+    }
+    if !cli.path.is_empty() {
+        eprintln!("ix: --build accepts at most one PATH argument");
+        std::process::exit(2);
+    }
+    if let Err(e) = commands::do_build(
+        build_path,
+        cli.scan.decompress,
+        cli.force,
+        cli.max_file_size,
+    ) {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }

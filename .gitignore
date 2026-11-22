@@ -127,3 +127,9 @@ build/
 
 # Local diagnostic tools (not committed)
 actionlint
+.annotations/
+.codegraph/
+.codegraphinclude
+.githooks/
+.ixd.toml
+ix-py/.venv/

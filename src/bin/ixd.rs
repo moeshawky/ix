@@ -32,9 +32,6 @@
 //! - TOCTOU guards in `process_file` — skips vanished/permission-denied files
 
 #![warn(clippy::pedantic)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::too_many_lines)]
-#![allow(clippy::struct_field_names)]
 
 use clap::Parser;
 use std::path::PathBuf;
@@ -70,6 +67,79 @@ struct Cli {
     /// Stop the running ixd daemon for the specified directories.
     #[arg(long)]
     stop: bool,
+
+    /// Write daemon logs to this file path (defaults to an XDG state/runtime
+    /// log file when `--daemon` is active so logs survive stdio redirection).
+    #[arg(long, value_name = "PATH")]
+    log_file: Option<PathBuf>,
+}
+
+#[cfg(unix)]
+fn default_log_path(roots: &[PathBuf]) -> PathBuf {
+    let primary = roots.first().map_or_else(
+        || PathBuf::from("."),
+        |p| p.canonicalize().unwrap_or_else(|_| p.clone()),
+    );
+    let hash = xxhash_rust::xxh64::xxh64(primary.to_string_lossy().as_bytes(), 0);
+    if let Ok(state_home) = std::env::var("XDG_STATE_HOME")
+        && !state_home.is_empty()
+    {
+        return PathBuf::from(state_home)
+            .join("ixd")
+            .join(format!("{hash:016x}.log"));
+    }
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR")
+        && !runtime_dir.is_empty()
+    {
+        return PathBuf::from(runtime_dir)
+            .join("ixd")
+            .join(format!("{hash:016x}.log"));
+    }
+    // SAFETY: libc::getuid() is a thread-safe POSIX syscall with no preconditions.
+    let uid = unsafe { libc::getuid() };
+    std::env::temp_dir().join(format!("ixd-{uid}-{hash:016x}.log"))
+}
+
+#[cfg(unix)]
+fn open_log_file(path: &std::path::Path) -> ix::error::Result<std::fs::File> {
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)?;
+    }
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(path)?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn init_tracing_file(file: std::fs::File) {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_ansi(false)
+        .with_writer(std::sync::Mutex::new(file))
+        .try_init();
+}
+
+#[cfg(unix)]
+fn init_tracing_stderr() {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 #[cfg(unix)]
@@ -83,12 +153,20 @@ fn main() -> ix::error::Result<()> {
     let roots = resolve_roots(&cli.paths)?;
 
     if cli.stop {
-        stop_daemons(&roots);
-        return Ok(());
+        init_tracing_stderr();
+        return stop_daemons(&roots);
     }
 
     if cli.daemon {
-        daemonize()?;
+        let log_path = cli.log_file.unwrap_or_else(|| default_log_path(&roots));
+        return run_daemonized(&roots, &log_path);
+    }
+
+    if let Some(ref log_path) = cli.log_file {
+        let log_file = open_log_file(log_path)?;
+        init_tracing_file(log_file);
+    } else {
+        init_tracing_stderr();
     }
     ix::daemon::run_many(&roots)
 }
@@ -125,51 +203,159 @@ fn resolve_roots(paths: &[PathBuf]) -> ix::error::Result<Vec<PathBuf>> {
         .collect()
 }
 
+/// Daemonize and run [`ix::daemon::run_many`], synchronizing startup readiness
+/// back to the launching parent process over a Unix socket pair.
+#[cfg(unix)]
+fn run_daemonized(roots: &[PathBuf], log_path: &std::path::Path) -> ix::error::Result<()> {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    // Open the persistent log file BEFORE daemonize() redirects fds 0..2 to /dev/null.
+    let log_file = open_log_file(log_path)?;
+    let child_sock = daemonize(log_path)?;
+    init_tracing_file(log_file);
+    tracing::info!("ixd: daemonized, logging to {}", log_path.display());
+    let shared_sock = Arc::new(Mutex::new(Some(child_sock)));
+    let watcher_sock = Arc::clone(&shared_sock);
+
+    let canonical_roots: Vec<PathBuf> = roots
+        .iter()
+        .map(|r| r.canonicalize().unwrap_or_else(|_| r.clone()))
+        .collect();
+    let my_pid = i32::try_from(std::process::id()).unwrap_or(0);
+
+    let _ = std::thread::Builder::new()
+        .name("ixd-startup-wait".into())
+        .spawn(move || {
+            notify_when_beacons_live(&canonical_roots, my_pid, &watcher_sock);
+        });
+
+    let res = ix::daemon::run_many(roots);
+
+    if let Ok(mut guard) = shared_sock.lock()
+        && let Some(mut sock) = guard.take()
+    {
+        let msg = match &res {
+            Ok(()) => "ixd: daemon exited before completing startup".to_string(),
+            Err(e) => format!("ixd: {e}"),
+        };
+        let _ = sock.write_all(&[1]);
+        let _ = sock.write_all(msg.as_bytes());
+    }
+
+    res
+}
+
+#[cfg(unix)]
+fn notify_when_beacons_live(
+    canonical_roots: &[PathBuf],
+    my_pid: i32,
+    watcher_sock: &std::sync::Arc<std::sync::Mutex<Option<std::os::unix::net::UnixStream>>>,
+) {
+    use std::io::Write;
+    use std::thread::sleep;
+    use std::time::Duration;
+
+    if my_pid <= 0 || canonical_roots.is_empty() {
+        return;
+    }
+
+    loop {
+        let already_closed = watcher_sock.lock().map_or(true, |g| g.is_none());
+        if already_closed {
+            return;
+        }
+
+        let all_ready = canonical_roots.iter().all(|root| {
+            let ix_dir = root.join(".ix");
+            ix::format::Beacon::read_from(&ix_dir).is_ok_and(|b| b.pid == my_pid && b.is_live())
+        });
+
+        if all_ready {
+            if let Ok(mut guard) = watcher_sock.lock()
+                && let Some(mut sock) = guard.take()
+            {
+                let _ = sock.write_all(&[0]);
+            }
+            return;
+        }
+
+        sleep(Duration::from_millis(50));
+    }
+}
+
 /// Detach ixd from the controlling terminal and run it in the background.
 ///
-/// Uses the classic Unix daemonization sequence (double-fork + `setsid`):
-///
-/// 1. **First fork** — the parent exits immediately (exit 0) so the caller's
-///    shell returns; the child is no longer a process-group leader's relative.
-/// 2. **`setsid`** — the child becomes the leader of a new session and a new
-///    process group, with no controlling terminal.
-/// 3. **Second fork** — guarantees the final daemon can never reacquire a
-///    controlling terminal (a session leader can; a non-leader cannot).
-/// 4. **Stdio redirect** — stdin/stdout/stderr are pointed at `/dev/null`,
-///    and the working directory moves to `/` so the daemon never holds a
-///    mounted filesystem busy.
-///
-/// This must run *before* [`ix::daemon::run_many`] installs its signal
-/// handlers and spawns watcher threads, so the daemon owns its signals and
-/// threads cleanly.
+/// Uses the classic Unix daemonization sequence (double-fork + `setsid`) paired
+/// with a status socket so the launching parent waits until startup is
+/// confirmed before exiting.
 ///
 /// # Errors
 ///
-/// Returns an error if any of the fork, session, or `/dev/null` steps fail.
+/// Returns an error if any of the fork, session, socket, or `/dev/null` steps fail.
 #[cfg(unix)]
-fn daemonize() -> ix::error::Result<()> {
+fn daemonize(log_path: &std::path::Path) -> ix::error::Result<std::os::unix::net::UnixStream> {
     use nix::unistd::{ForkResult, fork, setsid};
     use std::fs::OpenOptions;
+    use std::io::Read;
     use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
 
     let cfg = |ctx: &str, e: nix::errno::Errno| {
         ix::error::Error::Config(format!("daemonize: {ctx}: {e}"))
     };
 
-    // 1. First fork: the parent returns control to the caller's shell.
-    // SAFETY: fork() is the standard Unix process-creation syscall. The only
-    // soundness obligation is no async-signal-unsafe work between fork and
-    // the following exec/exit; we do none.
+    let (mut parent_sock, child_sock) = UnixStream::pair()?;
+
+    // 1. First fork: the parent waits on `parent_sock` for startup readiness.
+    // SAFETY: No background threads have been spawned yet (the process is
+    // single-threaded prior to `run_many`), and the parent immediately drops
+    // the child socket end and blocks on `parent_sock` before exiting.
     match unsafe { fork() }.map_err(|e| cfg("fork", e))? {
-        ForkResult::Parent { .. } => std::process::exit(0),
-        ForkResult::Child => {}
+        ForkResult::Parent { .. } => {
+            drop(child_sock);
+            let _ = parent_sock.set_read_timeout(Some(Duration::from_secs(60)));
+            let mut buf = Vec::new();
+            match parent_sock.read_to_end(&mut buf) {
+                Ok(_) if buf.first() == Some(&0) => std::process::exit(0),
+                Ok(_) if buf.first() == Some(&1) => {
+                    let msg = String::from_utf8_lossy(buf.get(1..).unwrap_or(&[]));
+                    if msg.is_empty() {
+                        eprintln!(
+                            "ixd: daemon failed during startup (see log: {})",
+                            log_path.display()
+                        );
+                    } else {
+                        eprintln!("{msg} (see log: {})", log_path.display());
+                    }
+                    std::process::exit(1);
+                }
+                Ok(_) => {
+                    eprintln!(
+                        "ixd: daemon exited unexpectedly during startup (see log: {})",
+                        log_path.display()
+                    );
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "ixd: timed out or failed waiting for daemon startup: {e} (see log: {})",
+                        log_path.display()
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+        ForkResult::Child => drop(parent_sock),
     }
 
     // 2. New session + process group, no controlling terminal.
     setsid().map_err(|e| cfg("setsid", e))?;
 
     // 3. Second fork: the daemon can never reacquire a terminal.
-    // SAFETY: same as the first fork — no async-signal-unsafe work follows it.
+    // SAFETY: Still single-threaded prior to `run_many`; the intermediate
+    // parent exits immediately without accessing shared state.
     match unsafe { fork() }.map_err(|e| cfg("fork", e))? {
         ForkResult::Parent { .. } => std::process::exit(0),
         ForkResult::Child => {}
@@ -196,47 +382,32 @@ fn daemonize() -> ix::error::Result<()> {
             )));
         }
     }
-    // Keep /dev/null open for the lifetime of the daemon (the duplicated fds
-    // hold it); dropping the original handle is safe once dup2 has run.
-    std::mem::forget(devnull);
+    if raw > 2 {
+        drop(devnull);
+    } else {
+        std::mem::forget(devnull);
+    }
 
-    Ok(())
+    Ok(child_sock)
 }
 
 /// Stop running ixd daemons managing the specified roots.
 #[cfg(unix)]
-fn stop_daemons(roots: &[PathBuf]) {
-    use nix::sys::signal::{Signal, kill};
+fn stop_daemons(roots: &[PathBuf]) -> ix::error::Result<()> {
     use nix::unistd::Pid;
     use std::collections::HashSet;
-    use std::thread::sleep;
-    use std::time::Duration;
 
     let mut stopped_pids = HashSet::new();
+    let mut stopped_any = false;
+    let mut errors = Vec::new();
 
     for root in roots {
-        let ix_dir = root.join(".ix");
-        let beacon = if let Ok(b) = ix::format::Beacon::read_from(&ix_dir) {
-            b
-        } else {
-            let mut current = root.clone();
-            let mut found = None;
-            while current.pop() {
-                let candidate = current.join(".ix");
-                if let Ok(b) = ix::format::Beacon::read_from(&candidate) {
-                    found = Some(b);
-                    break;
-                }
-            }
-            if let Some(b) = found {
-                b
-            } else {
-                println!("ixd: no running daemon found for {}", root.display());
-                continue;
-            }
+        let Some(beacon) = find_beacon_for_root(root) else {
+            println!("ixd: no running daemon found for {}", root.display());
+            continue;
         };
 
-        if !beacon.is_live() {
+        if beacon.pid <= 0 || !beacon.is_live() {
             println!(
                 "ixd: no running daemon found for {} (stale beacon from PID {})",
                 root.display(),
@@ -248,30 +419,71 @@ fn stop_daemons(roots: &[PathBuf]) {
         let pid = beacon.pid;
         if stopped_pids.insert(pid) {
             println!("ixd: stopping daemon (PID {pid}) for {}...", root.display());
-            let nix_pid = Pid::from_raw(pid);
-            if let Err(e) = kill(nix_pid, Some(Signal::SIGTERM)) {
-                eprintln!("ixd: failed to signal PID {pid}: {e}");
-                continue;
+            match stop_single_pid(Pid::from_raw(pid), pid) {
+                Ok(()) => stopped_any = true,
+                Err(msg) => errors.push(msg),
             }
-
-            let mut exited = false;
-            for _ in 0..50 {
-                sleep(Duration::from_millis(100));
-                if kill(nix_pid, None).is_err() {
-                    exited = true;
-                    break;
-                }
-            }
-
-            if exited {
-                println!("ixd: daemon (PID {pid}) stopped.");
-            } else {
-                eprintln!(
-                    "ixd: warning: daemon (PID {pid}) did not exit within 5s; sending SIGKILL..."
-                );
-                let _ = kill(nix_pid, Some(Signal::SIGKILL));
-                println!("ixd: daemon (PID {pid}) killed.");
-            }
+        } else {
+            stopped_any = true;
         }
+    }
+
+    if !errors.is_empty() {
+        return Err(ix::error::Error::Config(errors.join("; ")));
+    }
+    if !stopped_any {
+        return Err(ix::error::Error::Config(
+            "no running ixd daemon found".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn find_beacon_for_root(root: &std::path::Path) -> Option<ix::format::Beacon> {
+    let ix_dir = root.join(".ix");
+    if let Ok(b) = ix::format::Beacon::read_from(&ix_dir) {
+        return Some(b);
+    }
+    let mut current = root.to_path_buf();
+    while current.pop() {
+        let candidate = current.join(".ix");
+        if let Ok(b) = ix::format::Beacon::read_from(&candidate) {
+            return Some(b);
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn stop_single_pid(nix_pid: nix::unistd::Pid, pid: i32) -> Result<(), String> {
+    use nix::errno::Errno;
+    use nix::sys::signal::{Signal, kill};
+    use std::thread::sleep;
+    use std::time::Duration;
+
+    if let Err(e) = kill(nix_pid, Some(Signal::SIGTERM)) {
+        return Err(format!("failed to signal PID {pid}: {e}"));
+    }
+
+    for _ in 0..50 {
+        sleep(Duration::from_millis(100));
+        if kill(nix_pid, None).is_err() {
+            println!("ixd: daemon (PID {pid}) stopped.");
+            return Ok(());
+        }
+    }
+
+    eprintln!("ixd: warning: daemon (PID {pid}) did not exit within 5s; sending SIGKILL...");
+    match kill(nix_pid, Some(Signal::SIGKILL)) {
+        Ok(()) => {
+            println!("ixd: daemon (PID {pid}) killed.");
+            Ok(())
+        }
+        Err(Errno::ESRCH) => {
+            println!("ixd: daemon (PID {pid}) stopped.");
+            Ok(())
+        }
+        Err(e) => Err(format!("failed to SIGKILL PID {pid}: {e}")),
     }
 }

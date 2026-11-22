@@ -87,6 +87,19 @@ impl RegexPool {
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
 
+            // Double-check BEFORE evicting: another thread may have compiled
+            // and inserted the same pattern between our read-lock miss and
+            // write-lock acquisition. Checking first prevents both duplicate
+            // entries in `order` and redundant double-evictions for one key.
+            if let Some(existing) = pool.get(pattern) {
+                let cloned = existing.clone();
+                stats.hits += 1;
+                drop(stats);
+                drop(order);
+                drop(pool);
+                return Ok(cloned);
+            }
+
             if self.max_entries > 0 {
                 while pool.len() >= self.max_entries {
                     if let Some(evict_key) = order.first().cloned() {
@@ -98,13 +111,7 @@ impl RegexPool {
                 }
             }
 
-            // Double-check: another thread may have compiled and inserted
-            // the same pattern between our read-lock miss and write-lock
-            // acquisition. Without this check, `order` accumulates duplicate
-            // entries for the same pattern, corrupting FIFO eviction.
-            if !pool.contains_key(pattern) {
-                order.push(pattern.to_owned());
-            }
+            order.push(pattern.to_owned());
             pool.insert(pattern.to_owned(), re.clone());
             stats.misses += 1;
             drop(stats);
@@ -173,7 +180,6 @@ impl RegexPool {
 }
 
 #[cfg(test)]
-#[allow(clippy::as_conversions, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::RegexPool;
 

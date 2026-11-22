@@ -9,6 +9,7 @@ allow = [
     "ISC",
     "Zlib",
     "MPL-2.0",
+    "BSD-2-Clause",
     "BSD-3-Clause",
     "CC0-1.0",
 ]
@@ -20,6 +21,7 @@ yanked = "deny"
 ignore = [
     "RUSTSEC-2024-0384",
     "RUSTSEC-2024-0375",
+    "RUSTSEC-2026-0543",
 ]
 
 [bans]

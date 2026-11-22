@@ -49,13 +49,23 @@ impl PyMatch {
         )
     }
 
-    /// Equality comparison for testing.
-    fn __eq__(&self, other: &PyMatch) -> bool {
-        self.file_path == other.file_path
+    /// Equality comparison across all 8 fields, returning `NotImplemented` for non-`Match`.
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyObject {
+        let Ok(other) = other.extract::<PyRef<'_, Self>>() else {
+            return py.NotImplemented();
+        };
+        let eq = self.file_path == other.file_path
             && self.line_number == other.line_number
             && self.col == other.col
             && self.line_content == other.line_content
             && self.byte_offset == other.byte_offset
+            && self.context_before == other.context_before
+            && self.context_after == other.context_after
+            && self.is_binary == other.is_binary;
+        pyo3::types::PyBool::new(py, eq)
+            .to_owned()
+            .into_any()
+            .unbind()
     }
 }
 
@@ -78,7 +88,7 @@ impl From<ix::executor::Match> for PyMatch {
 ///
 /// Fields:
 /// - `matches`: List of [`PyMatch`] objects found.
-/// - `stats`: Dictionary of 11 [`ix::executor::QueryStats`] fields.
+/// - `stats`: Dictionary of 14 [`ix::executor::QueryStats`] fields.
 #[pyclass(name = "SearchResult")]
 pub struct PySearchResult {
     /// All matches found during the search.
@@ -119,8 +129,17 @@ impl PySearchResult {
             u64::from(stats.files_verified),
         );
         stats_map.insert("files_failed_verify".to_string(), stats.files_failed_verify);
+        stats_map.insert(
+            "files_skipped_pressure".to_string(),
+            stats.files_skipped_pressure,
+        );
         stats_map.insert("bytes_verified".to_string(), stats.bytes_verified);
+        stats_map.insert("lines_read".to_string(), u64::from(stats.lines_read));
         stats_map.insert("total_matches".to_string(), u64::from(stats.total_matches));
+        stats_map.insert(
+            "total_available".to_string(),
+            u64::from(stats.total_available),
+        );
         stats_map.insert("posting_cache_hits".to_string(), stats.posting_cache_hits);
         stats_map.insert(
             "posting_cache_misses".to_string(),

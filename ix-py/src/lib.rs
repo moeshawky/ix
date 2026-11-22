@@ -1,9 +1,9 @@
-//! Python bindings for ix — sub-millisecond code search via sparse trigram indexing.
+//! Python native extension (`_ix`) for ix — sub-millisecond code search via sparse trigram indexing.
 //!
-//! Exposes `PyIndex` (the Python `Index` class) for opening and querying ix shard files, along with
-//! error types that map directly to Python exception classes. Module-level
-//! convenience functions provide single-call search, build, stats, and
-//! service status without managing an `Index` handle.
+//! Exposes `PyIndex` (the Python `Index` class), `PyMatch`, `PySearchResult`,
+//! `PyPipeline`, and the `IxError` exception hierarchy. Module-level
+//! convenience functions (`search`, `build`, `stats`, `service_status`) are
+//! provided by the `ix` Python wrapper package (`python/ix/__init__.py`).
 //!
 //! # Error Mapping
 //!
@@ -13,14 +13,10 @@
 //!
 //! # Feature Flags
 //!
-//! - **`notify`** (default) — Enables the `build` and `service_status` methods.
+//! - **`notify`** (default) — Provides `build`, `rebuild`, and `service_status` methods.
 
 // Lint configuration
 #![warn(clippy::pedantic)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::module_name_repetitions)]
 #![warn(missing_docs)]
 #![warn(clippy::unimplemented)]
 
@@ -30,6 +26,9 @@ mod safety;
 mod types;
 
 use pyo3::prelude::*;
+use std::sync::Once;
+
+static TRACING_INIT: Once = Once::new();
 
 /// Register all Python classes, exceptions, and module-level functions.
 ///
@@ -42,6 +41,14 @@ use pyo3::prelude::*;
 #[pymodule]
 #[pyo3(name = "_ix")]
 pub fn _ix(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    TRACING_INIT.call_once(|| {
+        let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_writer(std::io::stderr)
+            .try_init();
+    });
     error::register_exceptions(m)?;
     m.add_class::<types::PyMatch>()?;
     m.add_class::<types::PySearchResult>()?;

@@ -4,7 +4,7 @@
 //! behaviour. Each config file specifies which subdirectories to watch
 //! and which patterns to exclude.
 
-use crate::Builder;
+use crate::builder::Builder;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -43,7 +43,15 @@ pub struct Config {
     /// Root directories to watch for indexing.
     #[serde(default)]
     pub watch_roots: Vec<PathBuf>,
-    /// Glob patterns for paths to exclude from indexing.
+    /// Directory component exclusion patterns passed to
+    /// [`crate::builder::Builder::with_exclude_patterns`] and
+    /// [`crate::watcher::Watcher`].
+    ///
+    /// Matched against path directory components by `builder::is_path_admitted`
+    /// (plus built-in `.git`, `.ix`, `.codegraph`, and `lost+found` exclusions).
+    /// When omitted in `.ixd.toml`, `#[serde(default)]` yields an empty `Vec`,
+    /// whereas [`Config::default`] populates `[".codegraph", ".git",
+    /// "node_modules", "target"]`.
     #[serde(default)]
     pub exclude_patterns: Vec<String>,
     /// Debounce interval in milliseconds for file-watch events.
@@ -104,6 +112,12 @@ impl Config {
         let mut cfg: Self = toml::from_str(&content).map_err(|e| {
             crate::error::Error::Config(format!("cannot parse config file {}: {e}", path.display()))
         })?;
+        for key in unknown_toml_keys(&content) {
+            tracing::warn!(
+                "unknown key `{key}` in config file {} (ignored)",
+                path.display()
+            );
+        }
         cfg.normalize_and_warn(path);
         Ok(cfg)
     }
@@ -155,8 +169,9 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// Returns an error only if a discovered file cannot be parsed.
-    /// Missing or absent config files are silently skipped.
+    /// Returns an error if the root-level `.ixd.toml` exists but cannot be read
+    /// or parsed. Missing config files are skipped, and malformed subdirectory
+    /// `.ixd.toml` files emit a warning via `tracing::warn!` and are skipped.
     pub fn discover_under(root: &Path) -> crate::error::Result<Self> {
         let root_config_path = root.join(".ixd.toml");
         let mut merged = if root_config_path.exists() {
@@ -244,8 +259,49 @@ impl Config {
     }
 }
 
+/// Collect unknown keys in a `.ixd.toml` document so typos such as
+/// `watch_root` or `exclude` can be surfaced via `tracing::warn!`.
+fn unknown_toml_keys(content: &str) -> Vec<String> {
+    const ROOT_KEYS: &[&str] = &[
+        "watch_roots",
+        "exclude_patterns",
+        "debounce_ms",
+        "watch",
+        "build",
+    ];
+    const WATCH_KEYS: &[&str] = &["paths", "debounce_ms", "ignore", "exclude_patterns"];
+    const BUILD_KEYS: &[&str] = &["exclude_patterns", "ignore"];
+
+    let Ok(toml::Value::Table(root)) = toml::from_str::<toml::Value>(content) else {
+        return Vec::new();
+    };
+
+    let mut unknown = Vec::new();
+    for (key, val) in &root {
+        if !ROOT_KEYS.contains(&key.as_str()) {
+            unknown.push(key.clone());
+        } else if key == "watch"
+            && let Some(sub) = val.as_table()
+        {
+            for sub_key in sub.keys() {
+                if !WATCH_KEYS.contains(&sub_key.as_str()) {
+                    unknown.push(format!("watch.{sub_key}"));
+                }
+            }
+        } else if key == "build"
+            && let Some(sub) = val.as_table()
+        {
+            for sub_key in sub.keys() {
+                if !BUILD_KEYS.contains(&sub_key.as_str()) {
+                    unknown.push(format!("build.{sub_key}"));
+                }
+            }
+        }
+    }
+    unknown
+}
+
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -328,5 +384,76 @@ exclude_patterns = ["build/", "dist/"]
                 "dist/".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn test_unknown_toml_keys_detected() {
+        let valid = r#"
+watch_roots = ["src"]
+exclude_patterns = ["target"]
+debounce_ms = 200
+
+[watch]
+paths = ["lib"]
+debounce_ms = 50
+ignore = ["tmp"]
+exclude_patterns = ["out"]
+
+[build]
+exclude_patterns = ["dist"]
+ignore = ["cache"]
+"#;
+        assert!(unknown_toml_keys(valid).is_empty());
+
+        let with_typos = r#"
+watch_root = ["src"]
+
+[watch]
+unknown_watch = 1
+
+[build]
+exclude = ["dist"]
+"#;
+        let unknown = unknown_toml_keys(with_typos);
+        assert_eq!(
+            unknown,
+            vec![
+                "build.exclude".to_string(),
+                "watch.unknown_watch".to_string(),
+                "watch_root".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_load_unknown_keys_does_not_fail_and_preserves_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_path = dir.path().join(".ixd.toml");
+        std::fs::write(
+            &cfg_path,
+            "watch_roots = [\"src\"]\nwatch_root = [\"bad\"]\n",
+        )
+        .unwrap();
+
+        let cfg = Config::load(&cfg_path).unwrap();
+        assert_eq!(cfg.watch_roots, vec![PathBuf::from("src")]);
+        assert!(cfg.exclude_patterns.is_empty());
+    }
+
+    #[test]
+    fn test_discover_under_root_error_and_subdir_warn_skip() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub_bad = dir.path().join("bad_sub");
+        let sub_good = dir.path().join("good_sub");
+        std::fs::create_dir_all(&sub_bad).unwrap();
+        std::fs::create_dir_all(&sub_good).unwrap();
+        std::fs::write(sub_bad.join(".ixd.toml"), "invalid = [unclosed").unwrap();
+        std::fs::write(sub_good.join(".ixd.toml"), "watch_roots = [\"inner\"]\n").unwrap();
+
+        let cfg = Config::discover_under(dir.path()).unwrap();
+        assert_eq!(cfg.watch_roots, vec![sub_good.join("inner")]);
+
+        std::fs::write(dir.path().join(".ixd.toml"), "broken = [unclosed").unwrap();
+        assert!(Config::discover_under(dir.path()).is_err());
     }
 }

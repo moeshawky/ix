@@ -90,7 +90,6 @@ pub fn maybe_decompress<'a>(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::path::Path;
@@ -260,6 +259,44 @@ mod tests {
             let mut out = Vec::new();
             reader.read_to_end(&mut out).unwrap();
             assert_eq!(out, original);
+        }
+
+        #[test]
+        fn test_counting_reader_rejects_over_limit() {
+            let exact = vec![b'a'; 64];
+            let mut ok_reader = CountingReader {
+                inner: std::io::Cursor::new(&exact),
+                bytes_read: 0,
+                limit: 64,
+            };
+            let mut out = Vec::new();
+            ok_reader.read_to_end(&mut out).unwrap();
+            assert_eq!(out.len(), 64);
+
+            let over = vec![b'a'; 65];
+            let mut over_reader = CountingReader {
+                inner: std::io::Cursor::new(&over),
+                bytes_read: 0,
+                limit: 64,
+            };
+            let err = over_reader.read_to_end(&mut Vec::new()).unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        }
+
+        #[test]
+        fn maybe_decompress_rejects_over_100mib_bomb() {
+            let compressed =
+                zstd::encode_all(std::io::repeat(0u8).take(MAX_DECOMPRESSED_BYTES + 1), 1)
+                    .expect("zstd encode_all bomb");
+            let mut reader = maybe_decompress(Path::new("bomb.zst"), &compressed)
+                .unwrap()
+                .expect("zst reader");
+            let err = std::io::copy(&mut reader, &mut std::io::sink()).unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+            assert!(
+                err.to_string().contains("exceeds 100 MB limit"),
+                "unexpected error message: {err}"
+            );
         }
     }
 }

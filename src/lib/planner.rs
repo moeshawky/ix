@@ -63,7 +63,6 @@ impl QueryPlan {
 
 /// Query planning options.
 #[derive(Debug, Default, Clone, Copy)]
-#[allow(clippy::struct_excessive_bools)]
 pub struct QueryOptions {
     /// Treat pattern as a regex rather than a literal string.
     pub is_regex: bool,
@@ -144,50 +143,39 @@ impl Planner {
         options: QueryOptions,
         pool: Option<&RegexPool>,
     ) -> crate::error::Result<QueryPlan> {
-        let mut final_pattern = pattern.to_string();
-        let mut use_regex = options.is_regex;
-        if options.multiline && use_regex {
-            final_pattern = format!("(?s){final_pattern}");
-        }
+        // Word-boundary mode: wrap literal in `\b...\b` or regex in `\b(?:...)\b`.
+        // When `word_boundary=true` on a literal, we switch to regex mode internally
+        // while keeping whole-word semantics.
+        if !options.is_regex && !options.word_boundary {
+            if !options.ignore_case {
+                let bytes = pattern.as_bytes().to_vec();
+                let trigrams = Extractor::extract_set(&bytes);
 
-        // Word-boundary mode: wrap literal in \b word boundaries.
-        // When word_boundary=true, we use regex mode internally but the semantics
-        // are "whole word match" rather than arbitrary regex.
-        if options.word_boundary && !options.is_regex {
-            if options.ignore_case {
-                final_pattern = format!("(?i)\\b{}\\b", regex::escape(&final_pattern));
-            } else {
-                final_pattern = format!("\\b{}\\b", regex::escape(&final_pattern));
+                let escaped = regex::escape(pattern);
+                let regex = Self::compile_regex(&escaped, pool)?;
+
+                if trigrams.is_empty() {
+                    return Ok(QueryPlan::FullScan { regex });
+                }
+
+                return Ok(QueryPlan::Literal {
+                    pattern: bytes,
+                    trigrams,
+                    regex,
+                });
             }
-            use_regex = true;
-        }
 
-        if !use_regex && !options.ignore_case {
-            let bytes = final_pattern.as_bytes().to_vec();
-            let trigrams = Extractor::extract_set(&bytes);
+            // Case-insensitive literal: per-position trigram groups for ASCII.
+            // Non-ASCII patterns cannot rely on ASCII-only trigram case folding
+            // without missing Unicode case equivalents, so fall back to FullScan.
+            let regex_pat = format!("(?i){}", regex::escape(pattern));
+            let regex = Self::compile_regex(&regex_pat, pool)?;
 
-            let escaped = regex::escape(&final_pattern);
-            let regex = Self::compile_regex(&escaped, pool)?;
-
-            if trigrams.is_empty() {
+            if !pattern.is_ascii() {
                 return Ok(QueryPlan::FullScan { regex });
             }
 
-            return Ok(QueryPlan::Literal {
-                pattern: bytes,
-                trigrams,
-                regex,
-            });
-        }
-
-        // Case-insensitive literal: per-position trigram groups.
-        // Executor UNIONs within each group, INTERSECTs across groups.
-        if !use_regex && options.ignore_case {
-            let bytes = final_pattern.as_bytes();
-            let groups = Extractor::extract_groups_case_insensitive(bytes);
-            let regex_pat = format!("(?i){}", regex::escape(&final_pattern));
-            let regex = Self::compile_regex(&regex_pat, pool)?;
-
+            let groups = Extractor::extract_groups_case_insensitive(pattern.as_bytes());
             if groups.is_empty() {
                 return Ok(QueryPlan::FullScan { regex });
             }
@@ -198,20 +186,8 @@ impl Planner {
             });
         }
 
-        let regex_pat = if options.ignore_case && !final_pattern.starts_with("(?i)") {
-            format!("(?i){final_pattern}")
-        } else {
-            final_pattern.clone()
-        };
-
+        let (hir_source, regex_pat) = build_regex_patterns(pattern, options);
         let regex = Self::compile_regex(&regex_pat, pool)?;
-
-        let Ok(hir) = regex_syntax::parse(&final_pattern) else {
-            return Ok(QueryPlan::FullScan { regex });
-        };
-
-        let mut literals = Vec::new();
-        Self::walk_hir(&hir, &mut literals);
 
         // For case-insensitive regex, fall back to FullScan — the (?i) regex
         // handles matching, and extracting trigram groups from regex literals
@@ -219,6 +195,13 @@ impl Planner {
         if options.ignore_case {
             return Ok(QueryPlan::FullScan { regex });
         }
+
+        let Ok(hir) = regex_syntax::parse(&hir_source) else {
+            return Ok(QueryPlan::FullScan { regex });
+        };
+
+        let mut literals = Vec::new();
+        Self::walk_hir(&hir, &mut literals);
 
         let required_trigram_sets: Vec<Vec<Trigram>> = literals
             .iter()
@@ -264,5 +247,171 @@ impl Planner {
             // Simplified: we don't extract from Alternation for now as per DESIGN.md
             _ => {}
         }
+    }
+}
+
+/// Split leading inline regex flag directives (such as `(?i)` or `(?ms)`)
+/// from the pattern body so wrappers like `\b(?:...)\b` keep flags outside.
+pub(crate) fn split_leading_flags(pat: &str) -> (&str, &str) {
+    let mut split_at = 0;
+    while let Some(rest) = pat.get(split_at..) {
+        let Some(after_open) = rest.strip_prefix("(?") else {
+            break;
+        };
+        let Some(close_idx) = after_open.find(')') else {
+            break;
+        };
+        let Some(flags) = after_open.get(..close_idx) else {
+            break;
+        };
+        if flags.is_empty()
+            || !flags
+                .bytes()
+                .all(|b| matches!(b, b'i' | b'm' | b's' | b'U' | b'x' | b'R' | b'-'))
+        {
+            break;
+        }
+        split_at += 2 + close_idx + 1;
+    }
+    (
+        pat.get(..split_at).unwrap_or(""),
+        pat.get(split_at..).unwrap_or(pat),
+    )
+}
+
+/// Build `(hir_source, compiled_regex_pattern)` for regex and word-boundary plans.
+///
+/// `hir_source` preserves inline flags without `\b(?:...)\b` wrapping so literal
+/// extraction inspects the inner pattern cleanly, while `compiled_regex_pattern`
+/// applies `(?i)`, `(?s)`, and leading inline flags outside `\b(?:...)\b`.
+fn build_regex_patterns(pattern: &str, options: QueryOptions) -> (String, String) {
+    let i_prefix = if options.ignore_case { "(?i)" } else { "" };
+    let s_prefix = if options.multiline && options.is_regex {
+        "(?s)"
+    } else {
+        ""
+    };
+
+    if !options.is_regex {
+        let escaped = regex::escape(pattern);
+        let wrapped = if options.word_boundary {
+            format!("\\b{escaped}\\b")
+        } else {
+            escaped
+        };
+        let compiled = format!("{i_prefix}{wrapped}");
+        return (wrapped, compiled);
+    }
+
+    let (leading_flags, body) = split_leading_flags(pattern);
+    let hir_source = format!("{s_prefix}{leading_flags}{body}");
+    let body_or_wrapped = if options.word_boundary {
+        format!("\\b(?:{body})\\b")
+    } else {
+        body.to_string()
+    };
+    let effective_i = if options.ignore_case && !leading_flags.starts_with("(?i)") {
+        "(?i)"
+    } else {
+        ""
+    };
+    let compiled = format!("{effective_i}{s_prefix}{leading_flags}{body_or_wrapped}");
+    (hir_source, compiled)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn word_boundary_with_regex_wraps_in_non_capturing_group() {
+        let plan = Planner::plan_with_options(
+            "foo|bar",
+            QueryOptions {
+                is_regex: true,
+                word_boundary: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        match plan {
+            QueryPlan::FullScan { regex } => {
+                assert_eq!(regex.as_str(), r"\b(?:foo|bar)\b");
+                assert!(regex.is_match("foo"));
+                assert!(regex.is_match("bar"));
+                assert!(!regex.is_match("foobar"));
+            }
+            other => panic!("expected FullScan for alternation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn word_boundary_with_regex_hoists_inline_flags_and_extracts_literals() {
+        let plan = Planner::plan_with_options(
+            "(?s)alpha.*omega",
+            QueryOptions {
+                is_regex: true,
+                word_boundary: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        match plan {
+            QueryPlan::RegexWithLiterals {
+                regex,
+                required_trigram_sets,
+            } => {
+                assert_eq!(regex.as_str(), r"(?s)\b(?:alpha.*omega)\b");
+                assert_eq!(required_trigram_sets.len(), 2);
+                assert!(regex.is_match("alpha\nomega"));
+                assert!(!regex.is_match("xalpha\nomegax"));
+            }
+            other => panic!("expected RegexWithLiterals, got {other:?}"),
+        }
+
+        let ic_plan = Planner::plan_with_options(
+            "(?i)foo|bar",
+            QueryOptions {
+                is_regex: true,
+                word_boundary: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(ic_plan.pattern_str(), r"(?i)\b(?:foo|bar)\b");
+    }
+
+    #[test]
+    fn non_ascii_ignore_case_literal_falls_back_to_full_scan() {
+        // Non-ASCII literal ("caf\u{e9}") must emit FullScan so "CAF\u{c9}" is never missed.
+        let plan = Planner::plan_with_options(
+            "caf\u{e9}",
+            QueryOptions {
+                ignore_case: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        match plan {
+            QueryPlan::FullScan { regex } => {
+                assert!(regex.is_match("CAF\u{c9}"));
+                assert!(regex.is_match("caf\u{e9}"));
+            }
+            other => panic!("expected FullScan for non-ASCII ignore_case, got {other:?}"),
+        }
+
+        // ASCII ignore_case literal continues to use indexed CaseInsensitive plan.
+        let ascii_plan = Planner::plan_with_options(
+            "hello",
+            QueryOptions {
+                ignore_case: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(matches!(ascii_plan, QueryPlan::CaseInsensitive { .. }));
     }
 }

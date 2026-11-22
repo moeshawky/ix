@@ -28,6 +28,7 @@ use crate::error::LLMOSafeError;
 #[pyclass(name = "Pipeline")]
 pub struct PyPipeline {
     handle: usize,
+    last_was_empty: bool,
 }
 
 /// Helper: call a getter that returns via out-parameter, translate rc to `PyResult`.
@@ -59,13 +60,21 @@ impl PyPipeline {
     /// target.  Returns an error if all 16 arena slots are occupied.
     #[new]
     fn new(objective: &str) -> PyResult<Self> {
+        if objective.is_empty() || objective.len() > 1024 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "objective must be between 1 and 1024 bytes",
+            ));
+        }
         let handle = llmosafe::c_abi::llmosafe_create(objective.as_ptr(), objective.len());
         if handle == usize::MAX {
             return Err(pyo3::exceptions::PyRuntimeError::new_err(
                 "llmosafe arena full — no free pipeline slots",
             ));
         }
-        Ok(Self { handle })
+        Ok(Self {
+            handle,
+            last_was_empty: false,
+        })
     }
 
     /// Process a text observation through the safety pipeline.
@@ -79,9 +88,34 @@ impl PyPipeline {
     /// * `oov_ratio` — out-of-vocabulary ratio (0–255)
     /// * `stages_executed` — bitmask of stages that ran
     /// * `step_count` — reasoning step count after invocation
-    fn process(&mut self, text: &str) -> PyResult<PyObject> {
+    fn process(&mut self, py: Python<'_>, text: &str) -> PyResult<PyObject> {
+        const MAX_TEXT_BYTES: usize = 10 * 1024 * 1024;
+        if text.is_empty() {
+            self.last_was_empty = true;
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("decision", 0_i32)?;
+            dict.set_item("entropy", 0_u16)?;
+            dict.set_item("surprise", 0_u16)?;
+            dict.set_item("detection_flags", 0_u8)?;
+            dict.set_item("oov_ratio", 0_u8)?;
+            dict.set_item("stages_executed", 0_u8)?;
+            dict.set_item("step_count", 0_u32)?;
+            return Ok(dict.into());
+        }
+        if text.len() > MAX_TEXT_BYTES {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "text exceeds 10 MiB limit",
+            ));
+        }
+
         let code =
             llmosafe::c_abi::llmosafe_sift_and_process(self.handle, text.as_ptr(), text.len());
+        if code == -9 {
+            return Err(LLMOSafeError::new_err(format!(
+                "llmosafe_sift_and_process rejected input for instance {}",
+                self.handle
+            )));
+        }
         // `self.handle` is already `PyPipeline::handle: usize`, the exact type
         // every llmosafe 0.7.7 c_abi getter takes as its first parameter. Pass
         // it through directly — no narrowing conversion is needed (and a `u32`
@@ -129,10 +163,6 @@ impl PyPipeline {
             return Err(getter_error("llmosafe_get_step_count", id, rc));
         }
 
-        // SAFETY: The GIL is guaranteed held because this method is called
-        // from a #[pymethods] context, where pyo3 ensures the GIL is acquired
-        // before invoking any bound method.
-        let py = unsafe { Python::assume_gil_acquired() };
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("decision", code)?;
         dict.set_item("entropy", entropy)?;
@@ -141,12 +171,17 @@ impl PyPipeline {
         dict.set_item("oov_ratio", oov_ratio)?;
         dict.set_item("stages_executed", stages_executed)?;
         dict.set_item("step_count", step_count)?;
+        self.last_was_empty = false;
         Ok(dict.into())
     }
 
     /// Returns the safety decision from the last processed observation.
     fn get_decision(&self) -> i32 {
-        llmosafe::c_abi::llmosafe_get_decision(self.handle)
+        if self.last_was_empty {
+            0
+        } else {
+            llmosafe::c_abi::llmosafe_get_decision(self.handle)
+        }
     }
 }
 

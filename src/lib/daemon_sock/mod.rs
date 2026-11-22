@@ -59,10 +59,50 @@ pub use types::{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    /// Serializes all tests in this module that read or mutate process
+    /// environment variables (`XDG_RUNTIME_DIR`), eliminating parallel-test UB.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        prev: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let prev = std::env::var_os(key);
+            // SAFETY: Callers hold `ENV_LOCK`, serializing env reads/writes in this module.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, prev }
+        }
+
+        fn remove(&self) {
+            // SAFETY: Callers hold `ENV_LOCK`, serializing env reads/writes in this module.
+            unsafe { std::env::remove_var(self.key) };
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(ref val) = self.prev {
+                // SAFETY: Callers hold `ENV_LOCK`, serializing env reads/writes in this module.
+                unsafe { std::env::set_var(self.key, val) };
+            } else {
+                // SAFETY: Callers hold `ENV_LOCK`, serializing env reads/writes in this module.
+                unsafe { std::env::remove_var(self.key) };
+            }
+        }
+    }
 
     #[test]
     fn socket_path_deterministic() {
+        let _env_guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = PathBuf::from("/tmp/test-project");
         let p1 = socket_path(&root);
         let p2 = socket_path(&root);
@@ -71,6 +111,9 @@ mod tests {
 
     #[test]
     fn socket_path_different_roots() {
+        let _env_guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let r1 = PathBuf::from("/tmp/project-a");
         let r2 = PathBuf::from("/tmp/project-b");
         assert_ne!(socket_path(&r1), socket_path(&r2));
@@ -78,20 +121,25 @@ mod tests {
 
     #[test]
     fn socket_path_uses_xdg() {
-        unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/tmp/xdg-test-runtime") };
+        let _env_guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", "/tmp/xdg-test-runtime");
         let p = socket_path(std::path::Path::new("/tmp/some-project"));
         assert!(p.starts_with("/tmp/xdg-test-runtime/ixd/"));
         assert!(p.extension().is_some_and(|e| e == "sock"));
-        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
     }
 
     #[test]
     fn client_connect_prefers_beacon_socket_path() {
+        let _env_guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = tmp.path().to_path_buf();
 
         // Pin the daemon's socket to a known env-derived location.
-        unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/tmp/ix-pref-sock-test") };
+        let xdg_guard = EnvVarGuard::set("XDG_RUNTIME_DIR", "/tmp/ix-pref-sock-test");
         let mut server = DaemonServer::new(&root).expect("create server");
         let authoritative = server.path().to_path_buf();
         let _ = server.start();
@@ -104,7 +152,7 @@ mod tests {
         // Drop XDG_RUNTIME_DIR so the env-derived path now resolves to a
         // DIFFERENT socket (one the daemon never bound). The authoritative
         // beacon socket path must still connect — this is the fix.
-        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+        xdg_guard.remove();
         let mut c2 = DaemonClient::connect_with_socket(&root, Some(&authoritative))
             .expect("connect via authoritative beacon socket path");
         c2.send(&ClientMessage::StatusQuery { id: 2 })
@@ -209,6 +257,9 @@ mod tests {
         use std::io::BufReader;
         use std::os::unix::net::UnixStream;
 
+        let _env_guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = tmp.path().to_path_buf();
 
@@ -220,6 +271,7 @@ mod tests {
         let stream = UnixStream::connect(&sp).expect("connect");
         let mut client = DaemonClient {
             stream: BufReader::new(stream),
+            poisoned: false,
         };
 
         // Give the accept thread time to register the client
@@ -265,6 +317,9 @@ mod tests {
         use std::io::BufReader;
         use std::os::unix::net::UnixStream;
 
+        let _env_guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = tmp.path().to_path_buf();
 
@@ -276,6 +331,7 @@ mod tests {
         let stream = UnixStream::connect(&sp).expect("connect");
         let mut client = DaemonClient {
             stream: BufReader::new(stream),
+            poisoned: false,
         };
 
         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -382,6 +438,9 @@ mod tests {
 
     #[test]
     fn test_shutdown_protocol() {
+        let _env_guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = tmp.path().to_path_buf();
         let mut server = DaemonServer::new(&root).expect("create server");
@@ -402,6 +461,9 @@ mod tests {
         use std::io::BufReader;
         use std::os::unix::net::UnixStream;
 
+        let _env_guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = tmp.path().to_path_buf();
         let mut server = DaemonServer::new(&root).expect("create server");
@@ -411,6 +473,7 @@ mod tests {
         let stream = UnixStream::connect(&sp).expect("connect");
         let mut client = DaemonClient {
             stream: BufReader::new(stream),
+            poisoned: false,
         };
 
         // Client sends shutdown acknowledgment
@@ -423,5 +486,83 @@ mod tests {
 
         // Server should still be functional (shutdown ack is fire-and-forget)
         server.set_status(&DaemonStatus::Idle, 0);
+    }
+
+    #[test]
+    fn live_socket_is_not_clobbered_and_mode_is_0600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _env_guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().to_path_buf();
+        let mut first = DaemonServer::new(&root).expect("bind first");
+        let _ = first.start();
+        let meta = std::fs::metadata(first.path()).expect("socket metadata");
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+
+        let Err(err) = DaemonServer::new(&root) else {
+            panic!("second bind on live socket must fail");
+        };
+        assert!(matches!(
+            err,
+            DaemonSockError::Io(ref io_err) if io_err.kind() == std::io::ErrorKind::AddrInUse
+        ));
+    }
+
+    #[test]
+    fn notify_changes_updates_last_rebuild_at_when_warned() {
+        use std::io::BufReader;
+        use std::os::unix::net::UnixStream;
+
+        let _env_guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut server = DaemonServer::new(tmp.path()).expect("create server");
+        let sp = server.path().to_path_buf();
+        server.start().expect("start server");
+
+        server.set_status(
+            &DaemonStatus::Warned {
+                reason: "pressure".into(),
+            },
+            12,
+        );
+        server.notify_changes(
+            vec![FileChange {
+                path: PathBuf::from("src/lib.rs"),
+                mtime: 42,
+                op: FileOp::Modify,
+            }],
+            13,
+        );
+
+        let stream = UnixStream::connect(&sp).expect("connect");
+        let mut client = DaemonClient {
+            stream: BufReader::new(stream),
+            poisoned: false,
+        };
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        client
+            .send(&ClientMessage::StatusQuery { id: 77 })
+            .expect("send status query");
+
+        match client.recv().expect("recv query result") {
+            ServerMessage::QueryResult {
+                id,
+                files,
+                daemon_status,
+                last_rebuild_at,
+                ..
+            } => {
+                assert_eq!(id, 77);
+                assert_eq!(files, 13);
+                assert!(last_rebuild_at.is_some());
+                assert!(matches!(daemon_status, Some(DaemonStatus::Warned { .. })));
+            }
+            other => panic!("expected QueryResult, got {other:?}"),
+        }
     }
 }

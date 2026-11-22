@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import ix
+import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_stats(sample_project: Path) -> None:
@@ -101,56 +105,154 @@ def test_close_idempotent(sample_project: Path) -> None:
 
 def test_not_found_error(empty_project: str) -> None:
     """Non-existent path raises IxIndexError."""
-    try:
+    with pytest.raises(ix.IxIndexError):
         ix.Index(str(empty_project))
-        assert False, "expected IxIndexError"
-    except ix.IxIndexError:
-        pass
 
 
 def test_wrong_path_type_error() -> None:
     """Non-string or nonexistent path raises error."""
-    try:
+    with pytest.raises((ix.IxIndexError, ix.IxIoError)):
         ix.Index("/nonexistent/path/12345")
-        assert False, "expected error"
-    except (ix.IxIndexError, ix.IxIoError):
-        pass
 
 
-def test_build_no_notify_stub() -> None:
-    """rebuild() on index with notify may succeed or raise NotImplementedError."""
-    import tempfile
-    from pathlib import Path
+def test_build_no_notify_stub(tmp_path: Path) -> None:
+    """rebuild(), build(), and service_status() work with notify or raise NotImplementedError."""
+    import os
+    import pathlib
+    import subprocess
 
-    tmp = tempfile.mkdtemp()
-    root = Path(tmp)
-    (root / ".ix").mkdir()
+    expect_no_notify = os.environ.get("IX_EXPECT_NO_NOTIFY") == "1"
+    (tmp_path / ".ix").mkdir()
+    (tmp_path / "hello.py").write_text("print('hello')\n")
 
-    # Build using the CLI binary if available
-    cargo_target = Path(__file__).parent.parent.parent / "target" / "debug" / "ix"
+    repo_root = pathlib.Path(__file__).parent.parent.parent
+    cargo_target = repo_root / "target" / "debug" / "ix"
+    if not cargo_target.exists():
+        cargo_target = repo_root / "target" / "release" / "ix"
+
+    built = False
     if cargo_target.exists():
-        import subprocess
-
-        (root / "hello.py").write_text("print('hello')\n")
         subprocess.run(
-            [str(cargo_target), "--build", str(root)],
+            [str(cargo_target), "--build", str(tmp_path)],
             capture_output=True,
             timeout=30,
+            check=True,
         )
-        idx = ix.Index(str(root))
+        built = True
+    elif not expect_no_notify:
+        ix.build(str(tmp_path))
+        built = True
+
+    assert built, (
+        "ix CLI binary required to pre-build index under not(feature = 'notify')"
+    )
+
+    with ix.Index(str(tmp_path)) as idx:
+        if expect_no_notify:
+            with pytest.raises(NotImplementedError):
+                idx.rebuild()
+            with pytest.raises(NotImplementedError):
+                ix.Index.build(str(tmp_path))
+            with pytest.raises(NotImplementedError):
+                ix.build(str(tmp_path))
+            with pytest.raises(NotImplementedError):
+                idx.service_status()
+            return
+
         try:
             result = idx.rebuild()
-            # If rebuild succeeds, verify dict format
             assert "files_scanned" in result
         except NotImplementedError:
-            pass  # ok if notify feature absent
+            with pytest.raises(NotImplementedError):
+                ix.Index.build(str(tmp_path))
+            with pytest.raises(NotImplementedError):
+                idx.service_status()
 
 
 def test_context_manager_protocol(sample_project: Path) -> None:
     """Index supports the context manager protocol (__enter__/__exit__)."""
+    import pytest
+
     with ix.Index(str(sample_project)) as idx:
         result = idx.search("hello")
         assert hasattr(result, "matches")
         assert len(result.matches) > 0
-    # After __exit__, the index should be closed (no assertion needed —
-    # just verifying __exit__ doesn't panic).
+    with pytest.raises(RuntimeError):
+        idx.search("hello")
+
+
+def test_close_blocks_all_methods_and_properties(sample_project: Path) -> None:
+    """close() prevents subsequent stats, rebuild, service_status, and property reads."""
+    import pytest
+
+    idx = ix.Index(str(sample_project))
+    idx.close()
+    for call in (
+        lambda: idx.search("hello"),
+        idx.stats,
+        idx.rebuild,
+        idx.service_status,
+        lambda: idx.file_count,
+        lambda: idx.trigram_count,
+        lambda: idx.created_at,
+        lambda: idx.is_stale,
+    ):
+        with pytest.raises(RuntimeError, match="closed"):
+            call()
+
+
+def test_match_equality_and_stats_fields(sample_project: Path) -> None:
+    """Match == non-Match returns False and QueryStats includes all 14 fields."""
+    with ix.Index(str(sample_project)) as idx:
+        result = idx.search("hello", context_lines=1)
+        assert len(result.matches) > 0
+        m = result.matches[0]
+        assert (m == None) is False  # noqa: E711
+        assert (m == "x") is False
+        assert m == result.matches[0]
+
+        for key in (
+            "trigrams_queried",
+            "posting_lists_decoded",
+            "candidate_files",
+            "files_verified",
+            "files_failed_verify",
+            "files_skipped_pressure",
+            "bytes_verified",
+            "lines_read",
+            "total_matches",
+            "total_available",
+            "posting_cache_hits",
+            "posting_cache_misses",
+            "neg_cache_hits",
+            "neg_cache_misses",
+        ):
+            assert key in result.stats
+
+
+def test_capacity_overflow_raises_value_error(sample_project: Path) -> None:
+    """Overflowing cache_mb or max_file_size_mb raises ValueError instead of wrapping."""
+    import pytest
+
+    huge_mb = 1 << 60
+    with pytest.raises(ValueError, match="overflow"):
+        ix.Index(str(sample_project), cache_mb=huge_mb)
+    with pytest.raises(ValueError, match="overflow"):
+        ix.Index.build(str(sample_project), max_file_size_mb=huge_mb)
+
+
+def test_type_filter_expands_aliases_and_reload_on_rebuild(tmp_path: Path) -> None:
+    """type_filter=['cpp'] expands aliases and stale mmaps reload automatically."""
+    (tmp_path / "widget.cc").write_text("int cpp_anchor_alpha() { return 1; }\n")
+    ix.build(str(tmp_path))
+
+    with ix.Index(str(tmp_path)) as idx:
+        res = idx.search("cpp_anchor_alpha", type_filter=["cpp"])
+        assert len(res.matches) == 1
+        assert res.matches[0].file_path.endswith(".cc")
+
+        (tmp_path / "extra.cxx").write_text("int cpp_anchor_beta() { return 2; }\n")
+        ix.build(str(tmp_path))
+        res_after = idx.search("cpp_anchor_beta", type_filter=["cpp"])
+        assert len(res_after.matches) == 1
+        assert res_after.matches[0].file_path.endswith(".cxx")

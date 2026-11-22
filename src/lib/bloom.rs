@@ -24,23 +24,47 @@ pub struct BloomFilter {
 
 impl BloomFilter {
     /// Create a new bloom filter with the given size and number of hash functions.
+    ///
+    /// Sizes larger than `u16::MAX` are clamped to `u16::MAX` so `size` always
+    /// equals `bits.len()`. Use [`Self::try_new`] to reject oversized filters
+    /// with an error instead of clamping.
     #[must_use]
     pub fn new(size: usize, num_hashes: u8) -> Self {
+        let clamped = size.min(usize::from(u16::MAX));
+        let size_u16 = u16::try_from(clamped).unwrap_or(u16::MAX);
         Self {
-            size: u16::try_from(size).unwrap_or(0),
+            size: size_u16,
             num_hashes,
-            bits: vec![0u8; size],
+            bits: vec![0u8; clamped],
         }
+    }
+
+    /// Create a new bloom filter, returning an error if `size` exceeds `u16::MAX`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::Config`] when `size > u16::MAX as usize`.
+    pub fn try_new(size: usize, num_hashes: u8) -> crate::error::Result<Self> {
+        let size_u16 = u16::try_from(size).map_err(|_| {
+            crate::error::Error::Config(format!(
+                "bloom filter size {size} exceeds maximum {}",
+                u16::MAX
+            ))
+        })?;
+        Ok(Self {
+            size: size_u16,
+            num_hashes,
+            bits: vec![0u8; usize::from(size_u16)],
+        })
     }
 
     /// Insert a trigram into the bloom filter.
     ///
-    /// If the filter has zero size (no bits allocated), this is a no-op.
-    /// Inserting into an empty filter has no effect since no bits can be set.
+    /// If the filter has zero size or a truncated `bits` buffer, this is a no-op.
     pub fn insert(&mut self, trigram: Trigram) {
         // Guard: size=0 produces num_bits=0 which causes a division-by-zero
-        // panic in the modulo operation below. An empty filter stores nothing.
-        if self.size == 0 {
+        // panic in the modulo operation below. An empty or truncated filter stores nothing.
+        if self.size == 0 || self.bits.len() < usize::from(self.size) {
             return;
         }
         let tri_bytes = trigram.to_le_bytes();
@@ -65,13 +89,13 @@ impl BloomFilter {
     /// Returns `true` if the trigram might be present (could be a false positive).
     /// Returns `false` only if the trigram is definitely not present.
     ///
-    /// If the filter has zero size (no bits allocated), returns `true`
-    /// (conservative: an empty filter cannot disprove membership).
+    /// If the filter has zero size or `bits.len() < self.size as usize`, returns
+    /// `true` conservatively because membership cannot be disproved.
     #[must_use]
     pub fn contains(&self, trigram: Trigram) -> bool {
         // Guard: size=0 produces num_bits=0 which causes a division-by-zero
-        // panic in the modulo operation below. Conservative: return true.
-        if self.size == 0 {
+        // panic in the modulo operation below; truncated bits cannot disprove membership.
+        if self.size == 0 || self.bits.len() < usize::from(self.size) {
             return true;
         }
         let tri_bytes = trigram.to_le_bytes();
@@ -106,8 +130,19 @@ impl BloomFilter {
     ///
     /// # Errors
     ///
-    /// Returns an I/O error if the writer fails.
+    /// Returns an `InvalidInput` error if `self.bits.len() != self.size as usize`,
+    /// or an I/O error if the writer fails.
     pub fn serialize<W: Write>(&self, mut w: W) -> std::io::Result<()> {
+        if self.bits.len() != usize::from(self.size) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "bloom filter length mismatch: size={} != bits.len()={}",
+                    self.size,
+                    self.bits.len()
+                ),
+            ));
+        }
         w.write_all(&self.size.to_le_bytes())?;
         w.write_all(&[self.num_hashes, 0x00])?;
         w.write_all(&self.bits)?;
@@ -155,7 +190,6 @@ impl BloomFilter {
 }
 
 #[cfg(test)]
-#[allow(clippy::as_conversions, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 
@@ -172,15 +206,48 @@ mod tests {
     #[test]
     fn false_positives() {
         let mut bloom = BloomFilter::new(256, 5);
-        for i in 0..200 {
-            bloom.insert(i as u32);
+        for i in 0..200u32 {
+            bloom.insert(i);
         }
         let mut fp = 0;
-        for i in 200..1200 {
-            if bloom.contains(i as u32) {
+        for i in 200u32..1200u32 {
+            if bloom.contains(i) {
                 fp += 1;
             }
         }
         assert!(fp < 20, "FPR too high: {fp}/1000");
+    }
+
+    #[test]
+    fn test_bloom_new_clamps_oversized_size() {
+        let mut bloom = BloomFilter::new(65_536, 5);
+        assert_eq!(bloom.size, u16::MAX);
+        assert_eq!(bloom.bits.len(), usize::from(u16::MAX));
+        let t = 0x0001_0203;
+        bloom.insert(t);
+        assert!(bloom.contains(t));
+        let mut out = Vec::new();
+        bloom.serialize(&mut out).expect("serialize clamped bloom");
+        assert_eq!(out.len(), 4 + usize::from(u16::MAX));
+    }
+
+    #[test]
+    fn test_bloom_try_new_rejects_oversized() {
+        assert!(BloomFilter::try_new(65_536, 5).is_err());
+        let ok = BloomFilter::try_new(256, 5).expect("256 fits in u16");
+        assert_eq!(ok.size, 256);
+        assert_eq!(ok.bits.len(), 256);
+    }
+
+    #[test]
+    fn test_bloom_mismatched_bits_conservative_and_serialize_err() {
+        let bloom = BloomFilter {
+            size: 256,
+            num_hashes: 5,
+            bits: vec![0u8; 8],
+        };
+        assert!(bloom.contains(0x0001_0203));
+        let mut out = Vec::new();
+        assert!(bloom.serialize(&mut out).is_err());
     }
 }

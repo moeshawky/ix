@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::args::{Cli, CwdGuard, SearchParams};
-use crate::output::{format_bytes, looks_like_regex, print_results};
+use crate::output::{format_bytes, looks_like_regex, print_results, u64_to_f64};
 use ix::builder::Builder;
 use ix::config::Config;
 use ix::executor::{QueryOptions, QueryStats};
@@ -17,40 +17,67 @@ pub(crate) fn execute_local_search(
     options: &QueryOptions,
     search_path_abs: &Path,
 ) -> Result<(Vec<ix::executor::Match>, ix::executor::QueryStats), ix::error::Error> {
-    use ix::reader::Reader;
-
     let reader = Reader::open(index_path)?;
     check_stale(&reader, index_root)?;
+
+    let index_root_canon = index_root
+        .canonicalize()
+        .unwrap_or_else(|_| index_root.to_path_buf());
+    let is_scoped = search_path_abs != index_root_canon;
 
     // Change CWD to index_root so relative paths in the index resolve.
     // CwdGuard restores the original CWD on drop (including on error paths).
     let _cwd_guard = CwdGuard::new(index_root)?;
 
+    let exec_opts = if is_scoped && options.max_results > 0 {
+        QueryOptions {
+            max_results: 0,
+            ..options.clone()
+        }
+    } else {
+        options.clone()
+    };
+
     let delta_path = index_path.parent().map(|p| p.join("shard.ix.delta"));
-    let (m, s) = ix::api::execute(
+    let (m, mut s) = ix::api::execute(
         &reader,
         params.pattern,
         ix::planner::QueryOptions {
-            is_regex: params.flags.is_regex,
-            ignore_case: params.flags.ignore_case,
-            multiline: params.flags.multiline,
-            word_boundary: params.flags.word_boundary,
+            is_regex: params.flags.matching.is_regex,
+            ignore_case: params.flags.matching.ignore_case,
+            multiline: params.flags.matching.multiline,
+            word_boundary: params.flags.matching.word_boundary,
         },
-        options,
+        &exec_opts,
         delta_path.as_deref(),
     )?;
 
-    let filtered_matches: Vec<_> = m
+    let mut filtered_matches: Vec<_> = m
         .into_iter()
         .filter(|m| {
             let abs_path = if m.file_path.is_absolute() {
                 m.file_path.clone()
             } else {
-                index_root.join(&m.file_path)
+                index_root_canon.join(&m.file_path)
             };
             abs_path.starts_with(search_path_abs)
+                || abs_path
+                    .canonicalize()
+                    .is_ok_and(|c| c.starts_with(search_path_abs))
         })
         .collect();
+
+    if is_scoped {
+        if options.files_only {
+            let mut seen = std::collections::HashSet::new();
+            filtered_matches.retain(|m| seen.insert(m.file_path.clone()));
+        }
+        s.total_available = u32::try_from(filtered_matches.len()).unwrap_or(u32::MAX);
+        if options.max_results > 0 && filtered_matches.len() > options.max_results {
+            filtered_matches.truncate(options.max_results);
+        }
+        s.total_matches = u32::try_from(filtered_matches.len()).unwrap_or(u32::MAX);
+    }
 
     Ok((filtered_matches, s))
 }
@@ -76,18 +103,18 @@ pub(crate) fn try_ipc_search(
     let query = SearchQuery {
         id: 1,
         pattern: params.pattern.to_string(),
-        is_regex: params.flags.is_regex,
-        ignore_case: params.flags.ignore_case,
-        word_boundary: params.flags.word_boundary,
+        is_regex: params.flags.matching.is_regex,
+        ignore_case: params.flags.matching.ignore_case,
+        word_boundary: params.flags.matching.word_boundary,
         max_results: params.max_results,
         context_lines: params.context,
         file_types: params.file_types.to_vec(),
-        decompress: params.flags.decompress,
-        multiline: params.flags.multiline,
-        archive: params.flags.archive,
-        binary: params.flags.binary,
-        count_only: params.flags.count,
-        files_only: params.flags.files_only,
+        decompress: params.flags.index.decompress,
+        multiline: params.flags.matching.multiline,
+        archive: params.flags.index.archive,
+        binary: params.flags.output.binary,
+        count_only: params.flags.output.count,
+        files_only: params.flags.output.files_only,
         search_path: Some(search_path_abs.to_path_buf()),
         progressive: false,
         chunk_size_bytes: params.chunk_size,
@@ -115,28 +142,23 @@ pub(crate) fn build_regex(
     word: bool,
     multiline: bool,
 ) -> ix::error::Result<Regex> {
-    let flags = if multiline { "(?s)" } else { "" };
-    let regex_pat = if is_regex {
-        if ignore_case {
-            format!("{flags}(?i){pattern}")
-        } else {
-            format!("{flags}{pattern}")
-        }
+    let flags = match (multiline, ignore_case) {
+        (true, true) => "(?s)(?i)",
+        (true, false) => "(?s)",
+        (false, true) => "(?i)",
+        (false, false) => "",
+    };
+    let regex_pat = if is_regex && word {
+        format!("{flags}\\b(?:{pattern})\\b")
+    } else if is_regex {
+        format!("{flags}{pattern}")
     } else if word {
         // Word-boundary: wrap literal in \b word boundaries
         let escaped = regex::escape(pattern);
-        if ignore_case {
-            format!("{flags}(?i)\\b{escaped}\\b")
-        } else {
-            format!("{flags}\\b{escaped}\\b")
-        }
+        format!("{flags}\\b{escaped}\\b")
     } else {
         let escaped = regex::escape(pattern);
-        if ignore_case {
-            format!("{flags}(?i){escaped}")
-        } else {
-            format!("{flags}{escaped}")
-        }
+        format!("{flags}{escaped}")
     };
     Ok(Regex::new(&regex_pat)?)
 }
@@ -151,31 +173,37 @@ pub(crate) fn build_regex(
 ///
 /// Returns an error if reading from stdin fails.
 pub(crate) fn do_stdin_stream_search(pattern: &str, cli: &Cli) -> ix::error::Result<()> {
-    let re = build_regex(pattern, cli.regex, cli.ignore_case, cli.word, cli.multiline)?;
+    let re = build_regex(
+        pattern,
+        cli.mode.regex,
+        cli.mode.ignore_case,
+        cli.mode.word,
+        cli.mode.multiline,
+    )?;
 
     let options = ix::executor::QueryOptions {
-        count_only: cli.count,
-        files_only: cli.files_only,
+        count_only: cli.output.count,
+        files_only: cli.output.files_only,
         max_results: cli.max_results,
         context_lines: cli.context,
-        multiline: cli.multiline,
-        binary: cli.binary,
+        multiline: cli.mode.multiline,
+        binary: cli.output.binary,
         chunk_size_bytes: cli.chunk_size,
         chunk_overlap_bytes: cli.chunk_overlap,
         ..Default::default()
     };
 
     // Warn about flags that have no effect in stdin mode.
-    if cli.archive {
+    if cli.scan.archive {
         eprintln!("ix: warning: --archive has no effect in stdin mode");
     }
-    if cli.decompress {
+    if cli.scan.decompress {
         eprintln!("ix: warning: --decompress has no effect in stdin mode");
     }
     if !cli.file_types.is_empty() {
         eprintln!("ix: warning: --type has no effect in stdin mode");
     }
-    if cli.no_index {
+    if cli.scan.no_index {
         eprintln!("ix: warning: --no-index has no effect in stdin mode");
     }
 
@@ -201,14 +229,14 @@ pub(crate) fn do_stdin_stream_search(pattern: &str, cli: &Cli) -> ix::error::Res
         ..Default::default()
     };
 
-    print_results(&matches, &stats, &options, cli.json, start_time, cli.stats);
-
-    if cli.max_results > 0 && matches.len() >= cli.max_results {
-        eprintln!(
-            "ix: output capped at {} results (use -n 0 for all)",
-            cli.max_results
-        );
-    }
+    print_results(
+        &matches,
+        &stats,
+        &options,
+        cli.output.json,
+        start_time,
+        cli.output.stats,
+    );
 
     Ok(())
 }
@@ -222,53 +250,75 @@ pub(crate) fn do_build(
     // Beacon check
     if let Some((_, _, Some(beacon))) = find_index(path)
         && beacon.is_live()
-        && !force
     {
+        if !force {
+            eprintln!(
+                "Error: Search root is managed by ixd (PID {}). Updates are automatic. Use --force to override.",
+                beacon.pid
+            );
+            std::process::exit(1);
+        }
         eprintln!(
-            "Error: Search root is managed by ixd (PID {}). Updates are automatic. Use --force to override.",
+            "ix: warning: search root is managed by live ixd (PID {}); forcing out-of-band index rebuild",
             beacon.pid
         );
-        std::process::exit(1);
     }
     println!("Building index for {}...", path.display());
     let mut builder = Builder::new(path)?;
     builder.set_decompress(decompress);
-    builder.set_max_file_size(max_file_size_mb * 1024 * 1024);
+    builder.set_max_file_size(max_file_size_mb.saturating_mul(1024 * 1024));
 
     // Apply config (exclude_patterns + watch_roots) so `ix --build`
     // and the daemon scope identically (audit F2).
-    if let Ok(config) = Config::discover_under(path) {
-        builder = config.apply_to_builder(builder);
+    match Config::discover_under(path) {
+        Ok(config) => builder = config.apply_to_builder(builder),
+        Err(e) => {
+            eprintln!("ix: warning: failed to load .ixd.toml config: {e}");
+        }
     }
 
     let out = builder.build()?;
+    if builder.stats().files_skipped_error > 0 {
+        eprintln!(
+            "[WARNING] {} file(s) skipped due to permission or I/O errors during build",
+            builder.stats().files_skipped_error
+        );
+    }
     println!("Index built at {}", out.display());
     Ok(())
 }
 
-#[allow(clippy::cast_precision_loss)]
+struct StatsReport<'a> {
+    index_path: &'a Path,
+    header: &'a ix::format::Header,
+    shard_size: u64,
+    version: String,
+    build_time: String,
+    build_time_iso: String,
+    cdx_active: bool,
+    cdx_ratio: Option<f64>,
+    compression: f64,
+    delta_size: Option<u64>,
+    delta_entries: u64,
+}
+
 pub(crate) fn do_stats(path: &Path, json: bool) -> ix::error::Result<()> {
-    let (index_path, index_root, _beacon) = find_index(path).ok_or_else(|| {
-        ix::error::Error::Config(format!(
-            "no .ix/shard.ix found by walking up from {}",
-            path.display()
-        ))
-    })?;
+    let (index_path, index_root, _beacon) =
+        find_index(path).ok_or_else(|| ix::error::Error::MissingIndex(path.to_path_buf()))?;
 
     if !index_path.exists() {
         if json {
             println!(
-                "{{\"error\": \"No index found\", \"hint\": \"Run `ix build` to create one.\"}}"
+                "{{\"error\": \"No index found\", \"hint\": \"Run `ix --build` to create one.\"}}"
             );
         } else {
-            println!("No index found. Run `ix build` to create one.");
+            eprintln!("No index found. Run `ix --build` to create one.");
         }
-        return Ok(());
+        return Err(ix::error::Error::MissingIndex(index_path));
     }
 
     let reader = Reader::open(&index_path)?;
     let h = &reader.header;
-    #[allow(clippy::cast_precision_loss)]
     let shard_size = std::fs::metadata(&index_path)?.len();
 
     let version = format!("{}.{}", h.version_major, h.version_minor);
@@ -285,137 +335,195 @@ pub(crate) fn do_stats(path: &Path, json: bool) -> ix::error::Result<()> {
 
     let cdx_active = h.has_cdx() && h.cdx_block_index_size > 0;
     let cdx_ratio: Option<f64> = if cdx_active && h.trigram_table_size > 0 {
-        Some(h.cdx_block_index_size as f64 / h.trigram_table_size as f64)
+        Some(u64_to_f64(h.cdx_block_index_size) / u64_to_f64(h.trigram_table_size))
     } else {
         None
     };
-    #[allow(clippy::cast_precision_loss)]
     let compression: f64 = if h.source_bytes_total > 0 && shard_size > 0 {
-        h.source_bytes_total as f64 / shard_size as f64
+        u64_to_f64(h.source_bytes_total) / u64_to_f64(shard_size)
     } else {
         0.0
     };
 
-    let ix_dir = index_root.join(".ix");
-    let delta_path = ix_dir.join("shard.ix.delta");
-    let delta_size = std::fs::metadata(&delta_path).map(|m| m.len()).ok();
-    let delta_entries = delta_size
-        .and_then(|_| {
-            let dr = ix::reader::DeltaReader::open(&delta_path).ok()?;
-            Some(u64::from(dr.total_file_entries))
-        })
-        .unwrap_or(0);
+    let delta_path = index_root.join(".ix").join("shard.ix.delta");
+    let delta_size = match std::fs::metadata(&delta_path) {
+        Ok(m) => Some(m.len()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e.into()),
+    };
+    let delta_entries = if delta_size.is_some() {
+        let dr = ix::reader::DeltaReader::open(&delta_path)?;
+        u64::from(dr.total_file_entries)
+    } else {
+        0
+    };
+
+    let report = StatsReport {
+        index_path: &index_path,
+        header: h,
+        shard_size,
+        version,
+        build_time,
+        build_time_iso,
+        cdx_active,
+        cdx_ratio,
+        compression,
+        delta_size,
+        delta_entries,
+    };
 
     if json {
-        let mut obj = serde_json::Map::new();
-        obj.insert(
-            "index_path".into(),
-            serde_json::Value::String(index_path.display().to_string()),
-        );
-        obj.insert("index_version".into(), serde_json::Value::String(version));
-        obj.insert(
-            "build_time".into(),
-            serde_json::Value::String(build_time_iso),
-        );
-        obj.insert(
-            "build_timestamp_us".into(),
-            serde_json::Value::Number(h.created_at.into()),
-        );
-        obj.insert("file_count".into(), serde_json::json!(h.file_count));
-        obj.insert("trigram_count".into(), serde_json::json!(h.trigram_count));
-        obj.insert(
-            "source_bytes_total".into(),
-            serde_json::json!(h.source_bytes_total),
-        );
-        obj.insert("shard_size_bytes".into(), serde_json::json!(shard_size));
-        obj.insert("compression_ratio".into(), serde_json::json!(compression));
-        obj.insert("sections".into(), serde_json::json!({
+        print_stats_json(&report);
+    } else {
+        print_stats_human(&report);
+    }
+
+    Ok(())
+}
+
+fn print_stats_json(r: &StatsReport<'_>) {
+    let h = r.header;
+    let mut obj = serde_json::Map::new();
+    obj.insert(
+        "index_path".into(),
+        serde_json::Value::String(r.index_path.display().to_string()),
+    );
+    obj.insert(
+        "index_version".into(),
+        serde_json::Value::String(r.version.clone()),
+    );
+    obj.insert(
+        "build_time".into(),
+        serde_json::Value::String(r.build_time_iso.clone()),
+    );
+    obj.insert(
+        "build_timestamp_us".into(),
+        serde_json::Value::Number(h.created_at.into()),
+    );
+    obj.insert("file_count".into(), serde_json::json!(h.file_count));
+    obj.insert("trigram_count".into(), serde_json::json!(h.trigram_count));
+    obj.insert(
+        "source_bytes_total".into(),
+        serde_json::json!(h.source_bytes_total),
+    );
+    obj.insert("shard_size_bytes".into(), serde_json::json!(r.shard_size));
+    obj.insert("compression_ratio".into(), serde_json::json!(r.compression));
+    obj.insert(
+        "sections".into(),
+        serde_json::json!({
             "trigram_table": { "offset": h.trigram_table_offset, "size": h.trigram_table_size },
             "file_table": { "offset": h.file_table_offset, "size": h.file_table_size },
             "string_pool": { "offset": h.string_pool_offset, "size": h.string_pool_size },
             "posting_data": { "offset": h.posting_data_offset, "size": h.posting_data_size },
             "bloom_data": { "offset": h.bloom_offset, "size": h.bloom_size },
             "cdx_block_index": { "offset": h.cdx_block_index_offset, "size": h.cdx_block_index_size },
-        }));
-        obj.insert("cdx_active".into(), serde_json::json!(cdx_active));
-        if let Some(ratio) = cdx_ratio {
-            obj.insert("cdx_compression_ratio".into(), serde_json::json!(ratio));
-        }
-        obj.insert(
-            "delta_size_bytes".into(),
-            serde_json::json!(delta_size.unwrap_or(0)),
-        );
-        obj.insert("delta_entry_count".into(), serde_json::json!(delta_entries));
-        println!("{}", serde_json::Value::Object(obj));
-    } else {
-        println!("Index: {}", index_path.display());
-        println!("  Version: {version}");
-        println!("  Built at: {build_time}");
-        println!("  Files indexed: {}", h.file_count);
-        println!("  Unique trigrams: {}", h.trigram_count);
-        println!("  Source bytes: {}", format_bytes(h.source_bytes_total));
-        println!("  Shard size: {}", format_bytes(shard_size));
-        if compression > 0.0 {
-            println!("  Overall compression: {compression:.2}x");
-        }
-        if cdx_active {
-            println!("  CDX active: yes");
-            if let Some(ratio) = cdx_ratio {
-                println!("  CDX compression ratio: {ratio:.4}x");
-            }
-        }
-        println!("  Sections:");
-        println!(
-            "    trigram_table:  offset={}, size={} ({})",
-            h.trigram_table_offset,
-            h.trigram_table_size,
-            format_bytes(h.trigram_table_size)
-        );
-        println!(
-            "    file_table:     offset={}, size={} ({})",
-            h.file_table_offset,
-            h.file_table_size,
-            format_bytes(h.file_table_size)
-        );
-        println!(
-            "    string_pool:    offset={}, size={} ({})",
-            h.string_pool_offset,
-            h.string_pool_size,
-            format_bytes(h.string_pool_size)
-        );
-        println!(
-            "    posting_data:   offset={}, size={} ({})",
-            h.posting_data_offset,
-            h.posting_data_size,
-            format_bytes(h.posting_data_size)
-        );
-        println!(
-            "    bloom_data:     offset={}, size={} ({})",
-            h.bloom_offset,
-            h.bloom_size,
-            format_bytes(h.bloom_size)
-        );
-        println!(
-            "    cdx_block_index: offset={}, size={} ({})",
-            h.cdx_block_index_offset,
-            h.cdx_block_index_size,
-            format_bytes(h.cdx_block_index_size)
-        );
-        if let Some(ds) = delta_size {
-            println!("  Delta file: {}  ({})", format_bytes(ds), format_bytes(ds));
-            println!("  Delta entries: {delta_entries}");
+        }),
+    );
+    obj.insert("cdx_active".into(), serde_json::json!(r.cdx_active));
+    if let Some(ratio) = r.cdx_ratio {
+        obj.insert("cdx_compression_ratio".into(), serde_json::json!(ratio));
+    }
+    obj.insert(
+        "delta_size_bytes".into(),
+        serde_json::json!(r.delta_size.unwrap_or(0)),
+    );
+    obj.insert(
+        "delta_entry_count".into(),
+        serde_json::json!(r.delta_entries),
+    );
+    println!("{}", serde_json::Value::Object(obj));
+}
+
+fn print_stats_human(r: &StatsReport<'_>) {
+    let h = r.header;
+    println!("Index: {}", r.index_path.display());
+    println!("  Version: {}", r.version);
+    println!("  Built at: {}", r.build_time);
+    println!("  Files indexed: {}", h.file_count);
+    println!("  Unique trigrams: {}", h.trigram_count);
+    println!("  Source bytes: {}", format_bytes(h.source_bytes_total));
+    println!("  Shard size: {}", format_bytes(r.shard_size));
+    if r.compression > 0.0 {
+        println!("  Overall compression: {:.2}x", r.compression);
+    }
+    if r.cdx_active {
+        println!("  CDX active: yes");
+        if let Some(ratio) = r.cdx_ratio {
+            println!("  CDX compression ratio: {ratio:.4}x");
         }
     }
+    println!("  Sections:");
+    println!(
+        "    trigram_table:  offset={}, size={} ({})",
+        h.trigram_table_offset,
+        h.trigram_table_size,
+        format_bytes(h.trigram_table_size)
+    );
+    println!(
+        "    file_table:     offset={}, size={} ({})",
+        h.file_table_offset,
+        h.file_table_size,
+        format_bytes(h.file_table_size)
+    );
+    println!(
+        "    string_pool:    offset={}, size={} ({})",
+        h.string_pool_offset,
+        h.string_pool_size,
+        format_bytes(h.string_pool_size)
+    );
+    println!(
+        "    posting_data:   offset={}, size={} ({})",
+        h.posting_data_offset,
+        h.posting_data_size,
+        format_bytes(h.posting_data_size)
+    );
+    println!(
+        "    bloom_data:     offset={}, size={} ({})",
+        h.bloom_offset,
+        h.bloom_size,
+        format_bytes(h.bloom_size)
+    );
+    println!(
+        "    cdx_block_index: offset={}, size={} ({})",
+        h.cdx_block_index_offset,
+        h.cdx_block_index_size,
+        format_bytes(h.cdx_block_index_size)
+    );
+    if let Some(ds) = r.delta_size {
+        println!("  Delta file: {ds} bytes ({})", format_bytes(ds));
+        println!("  Delta entries: {}", r.delta_entries);
+    }
+}
 
-    Ok(())
+fn normalize_lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::Prefix(_) | Component::RootDir => out.push(comp.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                } else if !out.has_root() {
+                    out.push(comp.as_os_str());
+                }
+            }
+            Component::Normal(s) => out.push(s),
+        }
+    }
+    out
 }
 
 pub(crate) fn find_index(path: &Path) -> Option<(PathBuf, PathBuf, Option<ix::format::Beacon>)> {
-    let mut current = if path.is_absolute() {
+    let joined = if path.is_absolute() {
         path.to_path_buf()
     } else {
         std::env::current_dir().ok()?.join(path)
     };
+    let mut current = joined
+        .canonicalize()
+        .unwrap_or_else(|_| normalize_lexical(&joined));
 
     if current.is_file()
         && let Some(parent) = current.parent()
@@ -427,7 +535,19 @@ pub(crate) fn find_index(path: &Path) -> Option<(PathBuf, PathBuf, Option<ix::fo
         let index_dir = current.join(".ix");
         if index_dir.exists() {
             let index_file = index_dir.join("shard.ix");
-            let beacon = ix::format::Beacon::read_from(&index_dir).ok();
+            let beacon = match ix::format::Beacon::read_from(&index_dir) {
+                Ok(b) => Some(b),
+                Err(ix::error::Error::Io(ref e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                    None
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "ix: ignoring unreadable or corrupt beacon in {}: {e}",
+                        index_dir.display()
+                    );
+                    None
+                }
+            };
             if index_file.exists() || beacon.is_some() {
                 return Some((index_file, current, beacon));
             }
@@ -440,30 +560,35 @@ pub(crate) fn find_index(path: &Path) -> Option<(PathBuf, PathBuf, Option<ix::fo
 }
 
 pub(crate) fn do_search(params: &SearchParams) -> ix::error::Result<()> {
+    if params.flags.index.fresh && params.flags.index.no_index {
+        return Err(ix::error::Error::Config(
+            "--fresh cannot be combined with --no-index".into(),
+        ));
+    }
+
     let original_cwd = std::env::current_dir()?;
-    let search_path_abs = if params.path.is_absolute() {
+    let joined_path = if params.path.is_absolute() {
         params.path.to_path_buf()
     } else {
         original_cwd.join(params.path)
     };
+    let search_path_abs = joined_path
+        .canonicalize()
+        .unwrap_or_else(|_| normalize_lexical(&joined_path));
 
-    let index_info = if params.flags.no_index {
-        None
-    } else {
-        find_index(params.path)
-    };
-
-    if params.flags.fresh {
-        // Normalize file paths to their parent directory for index building
-        let build_path = if params.path.is_file() {
+    if params.flags.index.fresh {
+        let enclosing_root = find_index(params.path).map(|(_, root, _)| root);
+        let build_target = if let Some(ref root) = enclosing_root {
+            root.as_path()
+        } else if params.path.is_file() {
             params.path.parent().unwrap_or(params.path)
         } else {
             params.path
         };
         do_build(
-            build_path,
-            params.flags.decompress,
-            params.flags.force,
+            build_target,
+            params.flags.index.decompress,
+            params.flags.index.force,
             params.max_file_size,
         )?;
     }
@@ -474,87 +599,46 @@ pub(crate) fn do_search(params: &SearchParams) -> ix::error::Result<()> {
     // daemon applies, so `--type` resolves identically locally and over IPC.
     let extensions = ix::file_types::expand(params.file_types);
 
-    if params.flags.archive && !params.flags.no_index {
-        eprintln!("ix: --archive is only supported with --no-index (raw file scanner)");
+    if params.flags.index.archive && !params.flags.index.no_index {
+        eprintln!("ix: --archive is only supported with raw file scanner; bypassing index");
     }
 
-    if params.flags.no_index && params.max_file_size != 100 {
+    if params.flags.index.no_index && params.max_file_size != 100 {
         eprintln!(
             "ix: --max-file-size is for index building; scanner uses its own file-size limits"
         );
     }
 
+    let skip_index = params.flags.index.no_index || params.flags.index.archive;
+    let index_info = if skip_index {
+        None
+    } else {
+        find_index(params.path)
+    };
+
     let options = QueryOptions {
-        count_only: params.flags.count,
-        files_only: params.flags.files_only,
+        count_only: params.flags.output.count,
+        files_only: params.flags.output.files_only,
         max_results: params.max_results,
         type_filter: extensions,
         context_lines: params.context,
-        decompress: params.flags.decompress,
-        multiline: params.flags.multiline,
-        archive: params.flags.archive,
-        binary: params.flags.binary,
-        word_boundary: params.flags.word_boundary,
+        decompress: params.flags.index.decompress,
+        multiline: params.flags.matching.multiline,
+        archive: params.flags.index.archive,
+        binary: params.flags.output.binary,
+        word_boundary: params.flags.matching.word_boundary,
         chunk_size_bytes: params.chunk_size,
         chunk_overlap_bytes: params.chunk_overlap,
     };
 
-    #[allow(unused_variables)]
-    let (matches, stats) = if let Some((path, index_root, beacon_opt)) = &index_info {
-        // Check if daemon is live and try IPC search first (notify+Unix only)
-        #[cfg(unix)]
-        {
-            let daemon_managed = beacon_opt.as_ref().is_some_and(ix::format::Beacon::is_live);
+    let (mut matches, mut final_stats) =
+        execute_indexed_or_scan(params, index_info.as_ref(), &options, &search_path_abs)?;
 
-            if daemon_managed {
-                #[cfg(feature = "notify")]
-                {
-                    // Try IPC search with silent fallback
-                    match try_ipc_search(params, index_root, &search_path_abs, beacon_opt.as_ref())
-                    {
-                        Some((m, s)) => (m, s),
-                        None => execute_local_search(
-                            params,
-                            path,
-                            index_root,
-                            &options,
-                            &search_path_abs,
-                        )?,
-                    }
-                }
-                #[cfg(not(feature = "notify"))]
-                {
-                    execute_local_search(params, path, index_root, &options, &search_path_abs)?
-                }
-            } else {
-                execute_local_search(params, path, index_root, &options, &search_path_abs)?
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            execute_local_search(params, path, index_root, &options, &search_path_abs)?
-        }
-    } else {
-        let scanner = Scanner::new(params.path);
-        let matches = scanner.scan(
-            params.pattern,
-            params.flags.is_regex,
-            params.flags.ignore_case,
-            &options,
-        )?;
-        let stats = QueryStats {
-            total_matches: matches.len() as u32,
-            ..Default::default()
-        };
-        (matches, stats)
-    };
-
-    let mut final_stats = stats;
-    final_stats.total_matches = matches.len() as u32;
+    final_stats.total_matches = u32::try_from(matches.len()).unwrap_or(u32::MAX);
 
     if matches.is_empty()
-        && !params.flags.is_regex
-        && !params.flags.json
+        && !params.flags.matching.is_regex
+        && !params.flags.output.json
         && looks_like_regex(params.pattern)
     {
         eprintln!(
@@ -562,7 +646,6 @@ pub(crate) fn do_search(params: &SearchParams) -> ix::error::Result<()> {
         );
     }
 
-    let mut matches = matches;
     matches.sort_by(|a, b| {
         a.file_path
             .cmp(&b.file_path)
@@ -573,12 +656,62 @@ pub(crate) fn do_search(params: &SearchParams) -> ix::error::Result<()> {
         &matches,
         &final_stats,
         &options,
-        params.flags.json,
+        params.flags.output.json,
         start_time,
-        params.flags.stats,
+        params.flags.output.stats,
     );
 
     Ok(())
+}
+
+fn execute_indexed_or_scan(
+    params: &SearchParams,
+    index_info: Option<&(PathBuf, PathBuf, Option<ix::format::Beacon>)>,
+    options: &QueryOptions,
+    search_path_abs: &Path,
+) -> ix::error::Result<(Vec<ix::executor::Match>, QueryStats)> {
+    let Some((path, index_root, beacon_opt)) = index_info else {
+        let scanner = Scanner::new(params.path);
+        let (matches, scan_stats) = scanner.scan_with_stats(
+            params.pattern,
+            params.flags.matching.is_regex,
+            params.flags.matching.ignore_case,
+            options,
+        )?;
+        if scan_stats.files_skipped_io > 0 {
+            eprintln!(
+                "[WARNING] {} file(s) could not be read during scan (I/O error) — results may be incomplete",
+                scan_stats.files_skipped_io
+            );
+        }
+        if scan_stats.archive_entries_skipped > 0 {
+            eprintln!(
+                "[WARNING] {} archive entry(s) skipped due to error or safety limit — results may be incomplete",
+                scan_stats.archive_entries_skipped
+            );
+        }
+        let count = u32::try_from(matches.len()).unwrap_or(u32::MAX);
+        let stats = QueryStats {
+            total_matches: count,
+            total_available: count,
+            files_failed_verify: scan_stats.files_skipped_io,
+            ..Default::default()
+        };
+        return Ok((matches, stats));
+    };
+
+    #[cfg(all(feature = "notify", unix))]
+    if beacon_opt.as_ref().is_some_and(ix::format::Beacon::is_live) {
+        if let Some((m, s)) =
+            try_ipc_search(params, index_root, search_path_abs, beacon_opt.as_ref())
+        {
+            return Ok((m, s));
+        }
+    }
+    #[cfg(not(all(feature = "notify", unix)))]
+    let _ = beacon_opt;
+
+    execute_local_search(params, path, index_root, options, search_path_abs)
 }
 
 pub(crate) fn check_stale(reader: &Reader, index_root: &Path) -> ix::error::Result<()> {

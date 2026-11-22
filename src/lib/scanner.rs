@@ -5,15 +5,39 @@
 use crate::decompress::maybe_decompress;
 use crate::error::Result;
 use crate::executor::{Match, QueryOptions};
-use crate::format::is_binary;
 use ignore::WalkBuilder;
 use memmap2::Mmap;
 use rayon::prelude::*;
 use regex::Regex;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Cursor, Read};
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+/// Partiality and skip counters collected during a raw filesystem scan.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ScanStats {
+    /// Files skipped due to I/O, permission, or decompression errors.
+    pub files_skipped_io: u64,
+    /// Files skipped because they were detected as binary.
+    pub files_skipped_binary: u64,
+    /// Archive entries skipped due to corruption or archive safety limits.
+    pub archive_entries_skipped: u64,
+    /// Whether results were truncated due to `options.max_results`.
+    pub truncated: bool,
+}
+
+#[derive(Default)]
+struct ScanStatsAccum {
+    files_skipped_io: AtomicU64,
+    files_skipped_binary: AtomicU64,
+    archive_entries_skipped: AtomicU64,
+}
+
+/// Maximum uncompressed file size admitted during directory walk (`10 MiB`).
+const MAX_WALK_FILE_BYTES: u64 = 10 * 1024 * 1024;
+/// Maximum compressed/archive file size admitted for mmap or decompression (`100 MiB`).
+const MAX_COMPRESSED_FILE_BYTES: u64 = 100 * 1024 * 1024;
 
 /// Fallback scanner that reads files directly (no index).
 ///
@@ -40,7 +64,6 @@ impl Scanner {
     /// - The scanner root path does not exist
     /// - The regex is invalid
     /// - File I/O fails during the walk or content reading
-    #[allow(clippy::too_many_lines)]
     pub fn scan(
         &self,
         pattern: &str,
@@ -48,6 +71,26 @@ impl Scanner {
         ignore_case: bool,
         options: &QueryOptions,
     ) -> Result<Vec<Match>> {
+        self.scan_with_stats(pattern, is_regex, ignore_case, options)
+            .map(|(matches, _)| matches)
+    }
+
+    /// Scan files in the scanner's root directory for `pattern`, returning both
+    /// matches and partiality/skip statistics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The scanner root path does not exist
+    /// - The regex is invalid
+    /// - File I/O fails during the walk or content reading
+    pub fn scan_with_stats(
+        &self,
+        pattern: &str,
+        is_regex: bool,
+        ignore_case: bool,
+        options: &QueryOptions,
+    ) -> Result<(Vec<Match>, ScanStats)> {
         // Early-exit: surface a clear error when the root directory does not
         // exist, rather than silently returning an empty result set from
         // walk-iterator errors.
@@ -58,299 +101,297 @@ impl Scanner {
             )));
         }
 
-        let raw = if is_regex {
-            pattern.to_string()
-        } else {
-            regex::escape(pattern)
-        };
-
-        // Apply word boundary wrapping for literal patterns (same as planner.rs)
-        let with_word_boundaries = if options.word_boundary && !is_regex {
-            format!("\\b{raw}\\b")
-        } else {
-            raw
-        };
-
-        // Build regex pattern with flags
-        let mut regex_pat = String::new();
-        if ignore_case {
-            regex_pat.push_str("(?i)");
-        }
-        if options.multiline {
-            regex_pat.push_str("(?s)");
-        }
-        regex_pat.push_str(&with_word_boundaries);
-
-        let regex = Regex::new(&regex_pat)?;
-
-        let walker = WalkBuilder::new(&self.root)
-            .hidden(false)
-            .git_ignore(true)
-            .require_git(true) // within-repo .gitignore only; never ancestor ~/.gitignore (audit D4)
-            .add_custom_ignore_filename(".ixignore")
-            .filter_entry(move |entry| {
-                let path = entry.path();
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-                // Built-in directory defaults
-                if entry.file_type().is_some_and(|t| t.is_dir())
-                    && (name == "lost+found"
-                        || name == ".git"
-                        || name == "node_modules"
-                        || name == "target"
-                        || name == "__pycache__"
-                        || name == ".tox"
-                        || name == ".venv"
-                        || name == "venv"
-                        || name == ".ix")
-                {
-                    return false;
-                }
-
-                // Built-in file noise defaults
-                if entry.file_type().is_some_and(|t| t.is_file()) {
-                    if let Ok(metadata) = entry.metadata()
-                        && metadata.len() > 10 * 1024 * 1024
-                    {
-                        return false;
-                    }
-                    if name == "Cargo.lock"
-                        || name == "package-lock.json"
-                        || name == "pnpm-lock.yaml"
-                        || name == "shard.ix"
-                        || name == "shard.ix.tmp"
-                    {
-                        return false;
-                    }
-                }
-
-                // Built-in file extension defaults
-                if entry.file_type().is_some_and(|t| t.is_file()) {
-                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                    match ext {
-                        // Binary extensions
-                        "so" | "o" | "dylib" | "a" | "dll" | "exe" | "pyc" |
-                        // Media
-                        "jpg" | "png" | "gif" | "mp4" | "mp3" | "pdf" |
-                        // Archives
-                        "zip" | "7z" | "rar" |
-                        // Data
-                        "sqlite" | "db" | "bin" => return false,
-                        _ => {}
-                    }
-                    if name.ends_with(".tar.gz") {
-                        return false;
-                    }
-                }
-                true
-            })
-            .build();
-
-        let paths: Vec<PathBuf> = walker
-            .filter_map(|result| match result {
-                Ok(entry) => Some(entry),
-                Err(e) => {
-                    eprintln!("ix: warning: scanner skipping path: {e}");
-                    None
-                }
-            })
-            .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
-            .map(|entry| entry.path().to_owned())
-            .collect();
+        let regex = build_search_regex(pattern, is_regex, ignore_case, options)?;
+        let include_archives = options.archive && cfg!(feature = "archive");
+        let paths = collect_candidate_paths(&self.root, include_archives, options.decompress);
 
         let matches_found = AtomicU32::new(0);
+        let accum = ScanStatsAccum::default();
         let mut matches: Vec<Match> = paths
             .into_par_iter()
-            .filter_map(|path| {
-                if options.max_results > 0
-                    && matches_found.load(Ordering::Relaxed)
-                        >= u32::try_from(options.max_results).unwrap_or(u32::MAX)
-                {
-                    return None;
-                }
-
-                // Filter by extension
-                if !options.type_filter.is_empty() {
-                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                    if !options.type_filter.iter().any(|e: &String| e == ext) {
-                        return None;
-                    }
-                }
-
-                // Archive support
-                if options.archive {
-                    #[cfg(feature = "archive")]
-                    {
-                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                        let is_tar_gz = path.to_str().is_some_and(|s| s.ends_with(".tar.gz"));
-                        if ext == "zip"
-                            && let Ok(archive_matches) =
-                                crate::archive::scan_zip(&path, &regex, options)
-                        {
-                            matches_found.fetch_add(
-                                u32::try_from(archive_matches.len()).unwrap_or(0),
-                                Ordering::Relaxed,
-                            );
-                            return Some(archive_matches);
-                        }
-                        if is_tar_gz
-                            && let Ok(archive_matches) =
-                                crate::archive::scan_tar_gz(&path, &regex, options)
-                        {
-                            matches_found.fetch_add(
-                                u32::try_from(archive_matches.len()).unwrap_or(0),
-                                Ordering::Relaxed,
-                            );
-                            return Some(archive_matches);
-                        }
-                    }
-                }
-
-                let file_matches = match Self::scan_file(&path, &regex, options) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        tracing::warn!("scanner: cannot read {}: {e}", path.display());
-                        return None;
-                    }
-                };
-                matches_found.fetch_add(
-                    u32::try_from(file_matches.len()).unwrap_or(0),
-                    Ordering::Relaxed,
-                );
-                Some(file_matches)
-            })
+            .filter_map(|path| scan_single_path(&path, &regex, options, &matches_found, &accum))
             .flatten()
             .collect();
 
-        if options.max_results > 0 && matches.len() > options.max_results {
+        let truncated = options.max_results > 0 && matches.len() > options.max_results;
+        if truncated {
             matches.truncate(options.max_results);
         }
 
-        Ok(matches)
-    }
+        let stats = ScanStats {
+            files_skipped_io: accum.files_skipped_io.load(Ordering::Relaxed),
+            files_skipped_binary: accum.files_skipped_binary.load(Ordering::Relaxed),
+            archive_entries_skipped: accum.archive_entries_skipped.load(Ordering::Relaxed),
+            truncated,
+        };
 
-    #[allow(clippy::too_many_lines)]
-    fn scan_stream<R: Read>(
-        reader: R,
-        path: &Path,
-        regex: &Regex,
-        options: &QueryOptions,
-    ) -> Result<Vec<Match>> {
-        let mut buf_reader = BufReader::new(reader);
-        let mut matches = Vec::new();
-        let mut line_number = 0u32;
-        let mut byte_offset = 0u64;
-
-        // Binary check on first 8KB
-        {
-            let buffer = buf_reader.fill_buf()?;
-            if buffer.is_empty() {
-                return Ok(vec![]);
-            }
-            let is_bin = is_binary(buffer);
-            if is_bin && !options.binary {
-                return Ok(vec![]);
-            }
-        }
-
-        let mut line = String::new();
-        let mut context_before = std::collections::VecDeque::new();
-        let mut pending_matches: Vec<Match> = Vec::new();
-
-        while buf_reader.read_line(&mut line)? > 0 {
-            line_number += 1;
-            let line_len = u64::try_from(line.len()).unwrap_or(0);
-            let trimmed_line_str = line.trim_end();
-
-            // Fill context_after for pending matches
-            for m in &mut pending_matches {
-                if m.context_after.len() < options.context_lines {
-                    m.context_after.push(trimmed_line_str.to_string());
-                }
-            }
-
-            // Move completed matches to final list
-            let (completed, still_pending): (Vec<_>, Vec<_>) = pending_matches
-                .into_iter()
-                .partition(|m| m.context_after.len() >= options.context_lines);
-            matches.extend(completed);
-            pending_matches = still_pending;
-
-            if let Some(m) = regex.find(&line) {
-                let context_before_vec: Vec<String> = context_before.iter().cloned().collect();
-
-                let new_match = Match {
-                    file_path: path.to_owned(),
-                    line_number,
-                    col: u32::try_from(m.start() + 1).unwrap_or(0),
-                    line_content: if options.count_only {
-                        String::new()
-                    } else {
-                        trimmed_line_str.to_string()
-                    },
-                    byte_offset: byte_offset + u64::try_from(m.start()).unwrap_or(0),
-                    context_before: context_before_vec,
-                    context_after: vec![],
-                    is_binary: false,
-                };
-
-                if options.context_lines > 0 {
-                    pending_matches.push(new_match);
-                } else {
-                    matches.push(new_match);
-                }
-
-                if options.max_results > 0
-                    && (matches.len() + pending_matches.len()) >= options.max_results
-                    && (pending_matches.is_empty() || matches.len() >= options.max_results)
-                {
-                    break;
-                }
-            }
-
-            if options.context_lines > 0 {
-                if context_before.len() == options.context_lines {
-                    if let Some(mut old_line) = context_before.pop_front() {
-                        old_line.clear();
-                        old_line.push_str(trimmed_line_str);
-                        context_before.push_back(old_line);
-                    }
-                } else {
-                    context_before.push_back(trimmed_line_str.to_string());
-                }
-            }
-
-            byte_offset += line_len;
-            line.clear();
-        }
-
-        matches.extend(pending_matches);
-        Ok(matches)
+        Ok((matches, stats))
     }
 
     fn scan_file(path: &Path, regex: &Regex, options: &QueryOptions) -> Result<Vec<Match>> {
         let file = File::open(path)?;
         let metadata = file.metadata()?;
-        if metadata.len() > 100 * 1024 * 1024 && !options.decompress {
-            // Keep 100MB limit for raw files to avoid huge mmaps in parallel
+        if metadata.len() > MAX_COMPRESSED_FILE_BYTES {
+            // Bound mmap size even when decompress is enabled to avoid huge mappings in parallel.
             return Ok(vec![]);
         }
+
+        let owned_opts;
+        let effective_options = if options.files_only {
+            owned_opts = QueryOptions {
+                max_results: 1,
+                ..options.clone()
+            };
+            &owned_opts
+        } else {
+            options
+        };
 
         // SAFETY: The file is opened read-only and the mmap is used only
         // within this function via a Cursor, which treats the mapped memory
         // as an immutable byte slice. No concurrent modification to the
         // underlying file is expected during scanning.
         let mmap = unsafe { Mmap::map(&file)? };
+        let mut stats = crate::streaming::StreamStats::default();
 
-        if options.decompress
+        if effective_options.decompress
             && let Some(reader) = maybe_decompress(path, &mmap)?
         {
-            return Self::scan_stream(reader, path, regex, options);
+            return crate::streaming::stream_file(
+                reader,
+                path,
+                regex,
+                effective_options,
+                true,
+                &mut stats,
+            );
         }
 
-        // Default to streaming via Cursor for uncompressed files to ensure constant memory (R-02)
-        Self::scan_stream(Cursor::new(&mmap[..]), path, regex, options)
+        crate::streaming::stream_file(
+            Cursor::new(&*mmap),
+            path,
+            regex,
+            effective_options,
+            false,
+            &mut stats,
+        )
     }
+}
+
+fn build_search_regex(
+    pattern: &str,
+    is_regex: bool,
+    ignore_case: bool,
+    options: &QueryOptions,
+) -> Result<Regex> {
+    let i_prefix = if ignore_case { "(?i)" } else { "" };
+    let s_prefix = if options.multiline { "(?s)" } else { "" };
+
+    let regex_pat = if is_regex {
+        let (leading_flags, body) = crate::planner::split_leading_flags(pattern);
+        let effective_i = if ignore_case && !leading_flags.starts_with("(?i)") {
+            "(?i)"
+        } else {
+            ""
+        };
+        let wrapped = if options.word_boundary {
+            format!("\\b(?:{body})\\b")
+        } else {
+            body.to_string()
+        };
+        format!("{effective_i}{s_prefix}{leading_flags}{wrapped}")
+    } else {
+        let escaped = regex::escape(pattern);
+        let wrapped = if options.word_boundary {
+            format!("\\b{escaped}\\b")
+        } else {
+            escaped
+        };
+        format!("{i_prefix}{s_prefix}{wrapped}")
+    };
+
+    Ok(Regex::new(&regex_pat)?)
+}
+
+fn is_archive_path(path: &Path) -> bool {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let is_tar_gz = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|s| s.ends_with(".tar.gz"));
+    ext == "zip" || is_tar_gz
+}
+
+fn is_compressed_path(path: &Path) -> bool {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    matches!(ext, "gz" | "zst" | "bz2" | "xz")
+}
+
+fn collect_candidate_paths(root: &Path, include_archives: bool, decompress: bool) -> Vec<PathBuf> {
+    let walker = WalkBuilder::new(root)
+        .hidden(false)
+        .git_ignore(true)
+        .require_git(true) // within-repo .gitignore only; never ancestor ~/.gitignore (audit D4)
+        .add_custom_ignore_filename(".ixignore")
+        .filter_entry(move |entry| should_admit_entry(entry, include_archives, decompress))
+        .build();
+
+    walker
+        .filter_map(|result| match result {
+            Ok(entry) => Some(entry),
+            Err(e) => {
+                eprintln!("ix: warning: scanner skipping path: {e}");
+                None
+            }
+        })
+        .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
+        .map(|entry| entry.path().to_owned())
+        .collect()
+}
+
+fn should_admit_entry(entry: &ignore::DirEntry, include_archives: bool, decompress: bool) -> bool {
+    let path = entry.path();
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+    if entry.file_type().is_some_and(|t| t.is_dir()) {
+        return !matches!(
+            name,
+            "lost+found"
+                | ".git"
+                | "node_modules"
+                | "target"
+                | "__pycache__"
+                | ".tox"
+                | ".venv"
+                | "venv"
+                | ".ix"
+        );
+    }
+
+    if !entry.file_type().is_some_and(|t| t.is_file()) {
+        return true;
+    }
+
+    let is_archive = is_archive_path(path);
+    let size_limit = if (include_archives && is_archive) || (decompress && is_compressed_path(path))
+    {
+        MAX_COMPRESSED_FILE_BYTES
+    } else {
+        MAX_WALK_FILE_BYTES
+    };
+
+    if let Ok(metadata) = entry.metadata()
+        && metadata.len() > size_limit
+    {
+        return false;
+    }
+
+    if matches!(
+        name,
+        "Cargo.lock" | "package-lock.json" | "pnpm-lock.yaml" | "shard.ix" | "shard.ix.tmp"
+    ) {
+        return false;
+    }
+
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if matches!(
+        ext,
+        "so" | "o"
+            | "dylib"
+            | "a"
+            | "dll"
+            | "exe"
+            | "pyc"
+            | "jpg"
+            | "png"
+            | "gif"
+            | "mp4"
+            | "mp3"
+            | "pdf"
+            | "7z"
+            | "rar"
+            | "sqlite"
+            | "db"
+            | "bin"
+    ) {
+        return false;
+    }
+
+    if !include_archives && is_archive {
+        return false;
+    }
+
+    true
+}
+
+fn scan_single_path(
+    path: &Path,
+    regex: &Regex,
+    options: &QueryOptions,
+    matches_found: &AtomicU32,
+    accum: &ScanStatsAccum,
+) -> Option<Vec<Match>> {
+    if options.max_results > 0
+        && matches_found.load(Ordering::Relaxed)
+            >= u32::try_from(options.max_results).unwrap_or(u32::MAX)
+    {
+        return None;
+    }
+
+    let is_archive = options.archive && is_archive_path(path);
+
+    // Filter regular files by extension; archive entries filter inside archive.rs.
+    if !is_archive && !options.type_filter.is_empty() {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if !options.type_filter.iter().any(|e| e == ext) {
+            return None;
+        }
+    }
+
+    if is_archive {
+        #[cfg(feature = "archive")]
+        {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let archive_res = if ext == "zip" {
+                crate::archive::scan_zip_with_stats(path, regex, options)
+            } else {
+                crate::archive::scan_tar_gz_with_stats(path, regex, options)
+            };
+            return match archive_res {
+                Ok((archive_matches, skipped_entries)) => {
+                    if skipped_entries > 0 {
+                        accum
+                            .archive_entries_skipped
+                            .fetch_add(skipped_entries, Ordering::Relaxed);
+                    }
+                    matches_found.fetch_add(
+                        u32::try_from(archive_matches.len()).unwrap_or(u32::MAX),
+                        Ordering::Relaxed,
+                    );
+                    Some(archive_matches)
+                }
+                Err(e) => {
+                    accum.files_skipped_io.fetch_add(1, Ordering::Relaxed);
+                    tracing::warn!("scanner: cannot read archive {}: {e}", path.display());
+                    None
+                }
+            };
+        }
+    }
+
+    let file_matches = match Scanner::scan_file(path, regex, options) {
+        Ok(m) => m,
+        Err(e) => {
+            accum.files_skipped_io.fetch_add(1, Ordering::Relaxed);
+            tracing::warn!("scanner: cannot read {}: {e}", path.display());
+            return None;
+        }
+    };
+    matches_found.fetch_add(
+        u32::try_from(file_matches.len()).unwrap_or(u32::MAX),
+        Ordering::Relaxed,
+    );
+    Some(file_matches)
 }
 
 #[cfg(test)]
@@ -651,5 +692,119 @@ mod tests {
             matches[0].line_content.contains("needle_found"),
             "match line content should contain pattern"
         );
+    }
+
+    #[test]
+    fn scanner_multiline_and_non_utf8_and_word_regex() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("multi.txt"), "alpha\nbeta\n").unwrap();
+
+        let mut non_utf8 = vec![b'a'; 9000];
+        non_utf8.push(b'\n');
+        non_utf8.extend_from_slice(b"needle_\xFF_ok\n");
+        fs::write(dir.path().join("latin1.txt"), &non_utf8).unwrap();
+
+        let scanner = Scanner::new(dir.path());
+        let multi = scanner
+            .scan(
+                r"alpha.*beta",
+                true,
+                false,
+                &QueryOptions {
+                    multiline: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(multi.len(), 1);
+
+        let lossy = scanner
+            .scan("needle_", false, false, &QueryOptions::default())
+            .unwrap();
+        assert_eq!(lossy.len(), 1);
+
+        fs::write(dir.path().join("words.txt"), "foobar\nfoo\nbar\n").unwrap();
+        let word_re = scanner
+            .scan(
+                "foo|bar",
+                true,
+                false,
+                &QueryOptions {
+                    word_boundary: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(word_re.len(), 2);
+    }
+
+    #[test]
+    fn scanner_files_only_max_results_caps_distinct_files() {
+        let dir = setup_temp_dir(&[
+            ("a.txt", "needle 1\nneedle 2\nneedle 3\n"),
+            ("b.txt", "needle 4\nneedle 5\n"),
+            ("c.txt", "needle 6\n"),
+        ]);
+        let scanner = Scanner::new(dir.path());
+        let matches = scanner
+            .scan(
+                "needle",
+                false,
+                false,
+                &QueryOptions {
+                    files_only: true,
+                    max_results: 2,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let distinct: std::collections::HashSet<_> =
+            matches.iter().map(|m| m.file_path.clone()).collect();
+        assert_eq!(distinct.len(), 2);
+    }
+
+    #[cfg(feature = "archive")]
+    #[test]
+    fn scanner_admits_archives_and_does_not_fall_through_on_corrupt_archive() {
+        use std::io::Write;
+        use zip::ZipWriter;
+        use zip::write::SimpleFileOptions;
+
+        let dir = tempdir().unwrap();
+        let zip_path = dir.path().join("bundle.zip");
+        {
+            let f = std::fs::File::create(&zip_path).unwrap();
+            let mut zw = ZipWriter::new(f);
+            zw.start_file("src/lib.rs", SimpleFileOptions::default())
+                .unwrap();
+            zw.write_all(b"fn needle_in_zip() {}\n").unwrap();
+            zw.start_file("notes.txt", SimpleFileOptions::default())
+                .unwrap();
+            zw.write_all(b"needle_in_zip\n").unwrap();
+            zw.finish().unwrap();
+        }
+        // Corrupt .zip that literally contains "needle_in_zip" in raw bytes.
+        fs::write(
+            dir.path().join("corrupt.zip"),
+            b"not a valid zip but contains needle_in_zip",
+        )
+        .unwrap();
+
+        let scanner = Scanner::new(dir.path());
+        let matches = scanner
+            .scan(
+                "needle_in_zip",
+                false,
+                false,
+                &QueryOptions {
+                    archive: true,
+                    binary: true,
+                    type_filter: vec!["rs".to_string()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].file_path.to_string_lossy().contains("lib.rs"));
     }
 }

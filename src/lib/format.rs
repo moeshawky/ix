@@ -148,30 +148,27 @@ impl Header {
             data.get(off..off + 8)
                 .and_then(|s| s.try_into().ok())
                 .map(u64::from_le_bytes)
-                .ok_or_else(|| {
-                    crate::error::Error::Config(format!(
-                        "corrupted header: field at offset 0x{off:02X} unreadable"
-                    ))
+                .ok_or_else(|| crate::error::Error::HeaderCorrupted {
+                    expected: u32::try_from(HEADER_SIZE).unwrap_or(256),
+                    actual: u32::try_from(data.len()).unwrap_or(0),
                 })
         };
         let r16 = |off: usize| -> crate::error::Result<u16> {
             data.get(off..off + 2)
                 .and_then(|s| s.try_into().ok())
                 .map(u16::from_le_bytes)
-                .ok_or_else(|| {
-                    crate::error::Error::Config(format!(
-                        "corrupted header: field at offset 0x{off:02X} unreadable"
-                    ))
+                .ok_or_else(|| crate::error::Error::HeaderCorrupted {
+                    expected: u32::try_from(HEADER_SIZE).unwrap_or(256),
+                    actual: u32::try_from(data.len()).unwrap_or(0),
                 })
         };
         let r32 = |off: usize| -> crate::error::Result<u32> {
             data.get(off..off + 4)
                 .and_then(|s| s.try_into().ok())
                 .map(u32::from_le_bytes)
-                .ok_or_else(|| {
-                    crate::error::Error::Config(format!(
-                        "corrupted header: field at offset 0x{off:02X} unreadable"
-                    ))
+                .ok_or_else(|| crate::error::Error::HeaderCorrupted {
+                    expected: u32::try_from(HEADER_SIZE).unwrap_or(256),
+                    actual: u32::try_from(data.len()).unwrap_or(0),
                 })
         };
 
@@ -223,8 +220,11 @@ impl Header {
     ///
     /// # Errors
     ///
-    /// Returns an error if any section extends beyond the file length.
+    /// Returns an error if any section extends beyond the file length, starts
+    /// inside the fixed header, or has insufficient `file_table` capacity for
+    /// `file_count` entries.
     pub fn validate_bounds(&self, file_len: u64) -> crate::error::Result<()> {
+        let min_off = u64::try_from(HEADER_SIZE).unwrap_or(256);
         let check = |name: &'static str, off: u64, sz: u64| -> crate::error::Result<()> {
             // Use checked arithmetic so a corrupt header with overflowing
             // offset+size cannot wrap past this guard (defense-in-depth;
@@ -237,7 +237,7 @@ impl Header {
                     size: sz,
                     file_len,
                 })?;
-            if end > file_len {
+            if off < min_off || end > file_len {
                 Err(crate::error::Error::SectionOutOfBounds {
                     section: name,
                     offset: off,
@@ -248,6 +248,18 @@ impl Header {
                 Ok(())
             }
         };
+
+        let file_entry_size = u64::try_from(FILE_ENTRY_SIZE).unwrap_or(48);
+        let required_file_table = u64::from(self.file_count).checked_mul(file_entry_size);
+        if required_file_table.is_none_or(|req| req > self.file_table_size) {
+            return Err(crate::error::Error::SectionOutOfBounds {
+                section: "file_table",
+                offset: self.file_table_offset,
+                size: self.file_table_size,
+                file_len,
+            });
+        }
+
         check("file_table", self.file_table_offset, self.file_table_size)?;
         check(
             "trigram_table",
@@ -261,6 +273,13 @@ impl Header {
         )?;
         if self.bloom_size > 0 {
             check("bloom", self.bloom_offset, self.bloom_size)?;
+        } else if self.has_bloom() && self.bloom_offset > file_len {
+            return Err(crate::error::Error::SectionOutOfBounds {
+                section: "bloom",
+                offset: self.bloom_offset,
+                size: self.bloom_size,
+                file_len,
+            });
         }
         check(
             "string_pool",
@@ -354,14 +373,18 @@ impl Beacon {
 
     /// Check whether the daemon described by this beacon is still running.
     ///
-    /// Verifies the recorded PID still exists, belongs to an `ixd` binary,
-    /// and the watched root directory is still accessible.
+    /// Verifies the recorded PID is positive and still exists, belongs to an
+    /// `ixd` binary, and the watched root directory is still accessible.
     #[must_use]
     pub fn is_live(&self) -> bool {
         #[cfg(unix)]
         {
             use nix::sys::signal::kill;
             use nix::unistd::Pid;
+
+            if self.pid <= 0 {
+                return false;
+            }
 
             if kill(Pid::from_raw(self.pid), None).is_err() {
                 return false;
@@ -388,15 +411,57 @@ impl Beacon {
         }
     }
 
-    /// Write the beacon to `beacon.json` in the given folder.
+    /// Atomically write the beacon to `beacon.json` in the given folder.
+    ///
+    /// Writes to a temporary file inside `folder`, flushes and syncs it, then
+    /// renames it onto `beacon.json` so concurrent readers never see a
+    /// truncated file.
     ///
     /// # Errors
     ///
-    /// Returns an error if the file cannot be created or serialization fails.
+    /// Returns an error if the temporary file cannot be created, serialization
+    /// fails, or the atomic rename fails.
     pub fn write_to(&self, folder: &Path) -> crate::error::Result<()> {
+        use std::io::Write;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct TempFileGuard {
+            path: PathBuf,
+            armed: bool,
+        }
+
+        impl TempFileGuard {
+            const fn new(path: PathBuf) -> Self {
+                Self { path, armed: true }
+            }
+            const fn disarm(&mut self) {
+                self.armed = false;
+            }
+        }
+
+        impl Drop for TempFileGuard {
+            fn drop(&mut self) {
+                if self.armed {
+                    let _ = std::fs::remove_file(&self.path);
+                }
+            }
+        }
+
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+
         let path = folder.join("beacon.json");
-        let f = std::fs::File::create(path)?;
-        serde_json::to_writer_pretty(f, self).map_err(std::io::Error::other)?;
+        let pid = std::process::id();
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp_path = folder.join(format!("beacon.json.tmp.{pid}.{seq}"));
+        let mut tmp_guard = TempFileGuard::new(tmp_path.clone());
+
+        let mut f = std::fs::File::create(&tmp_path)?;
+        serde_json::to_writer_pretty(&mut f, self).map_err(std::io::Error::other)?;
+        f.flush()?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp_path, &path)?;
+        tmp_guard.disarm();
         Ok(())
     }
 
@@ -408,7 +473,8 @@ impl Beacon {
     pub fn read_from(folder: &Path) -> crate::error::Result<Self> {
         let path = folder.join("beacon.json");
         let f = std::fs::File::open(path)?;
-        let beacon = serde_json::from_reader(f).map_err(std::io::Error::other)?;
+        let beacon = serde_json::from_reader(f)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         Ok(beacon)
     }
 }
@@ -435,7 +501,6 @@ pub fn instance_id_now() -> u64 {
 /// Valid UTF-8 multi-byte sequences (2-4 bytes) are counted as text, not binary,
 /// so files containing emoji or CJK characters are not falsely flagged.
 #[must_use]
-#[allow(clippy::cast_precision_loss, clippy::as_conversions)]
 pub fn is_binary(data: &[u8]) -> bool {
     if data.is_empty() {
         return false;
@@ -446,7 +511,9 @@ pub fn is_binary(data: &[u8]) -> bool {
     let mut non_text = 0usize;
     let mut i = 0;
     while i < slice.len() {
-        let b = slice[i];
+        let Some(&b) = slice.get(i) else {
+            break;
+        };
         if matches!(b, 0x09 | 0x0A | 0x0D | 0x20..=0x7E) {
             // ASCII printable/control — text
         } else if b & 0xC0 == 0xC0 {
@@ -461,12 +528,13 @@ pub fn is_binary(data: &[u8]) -> bool {
                 0
             };
 
-            if seq_len > 0 && i + seq_len <= slice.len() {
-                let seq = &slice[i..i + seq_len];
-                if is_valid_utf8_sequence(seq) {
-                    i += seq_len;
-                    continue;
-                }
+            if seq_len > 0
+                && let Some(end) = i.checked_add(seq_len)
+                && let Some(seq) = slice.get(i..end)
+                && is_valid_utf8_sequence(seq)
+            {
+                i = end;
+                continue;
             }
             non_text += 1;
         } else if b & 0xC0 == 0x80 {
@@ -479,39 +547,39 @@ pub fn is_binary(data: &[u8]) -> bool {
         i += 1;
     }
 
-    (non_text as f32 / check_len as f32) > 0.3
+    let non_text_u32 = u32::try_from(non_text).unwrap_or(u32::MAX);
+    let check_len_u32 = u32::try_from(check_len).unwrap_or(512);
+    (f64::from(non_text_u32) / f64::from(check_len_u32)) > 0.3
 }
 
 #[inline]
-#[allow(clippy::indexing_slicing)]
 const fn is_valid_utf8_sequence(seq: &[u8]) -> bool {
-    match seq.len() {
-        2 => seq[0] >= 0xC2 && (seq[1] & 0xC0) == 0x80,
-        3 => {
-            let valid = (seq[1] & 0xC0) == 0x80 && (seq[2] & 0xC0) == 0x80;
+    match seq {
+        [a, b] => *a >= 0xC2 && (*b & 0xC0) == 0x80,
+        [a, b, c] => {
+            let valid = (*b & 0xC0) == 0x80 && (*c & 0xC0) == 0x80;
             if !valid {
                 return false;
             }
-            if seq[0] == 0xE0 {
-                seq[1] >= 0xA0
-            } else if seq[0] == 0xED {
-                seq[1] <= 0x9F
+            if *a == 0xE0 {
+                *b >= 0xA0
+            } else if *a == 0xED {
+                *b <= 0x9F
             } else {
-                seq[0] >= 0xE1 && seq[0] <= 0xEF || seq[0] >= 0xEE
+                *a >= 0xE1 && *a <= 0xEF
             }
         }
-        4 => {
-            let valid =
-                (seq[1] & 0xC0) == 0x80 && (seq[2] & 0xC0) == 0x80 && (seq[3] & 0xC0) == 0x80;
+        [a, b, c, d] => {
+            let valid = (*b & 0xC0) == 0x80 && (*c & 0xC0) == 0x80 && (*d & 0xC0) == 0x80;
             if !valid {
                 return false;
             }
-            if seq[0] == 0xF0 {
-                seq[1] >= 0x90
-            } else if seq[0] == 0xF4 {
-                seq[1] <= 0x8F
+            if *a == 0xF0 {
+                *b >= 0x90
+            } else if *a == 0xF4 {
+                *b <= 0x8F
             } else {
-                seq[0] >= 0xF1 && seq[0] <= 0xF3
+                *a >= 0xF1 && *a <= 0xF3
             }
         }
         _ => false,
@@ -571,7 +639,7 @@ mod tests {
     fn test_is_binary_truly_binary() {
         let mut binary_data = vec![0u8; 512];
         for (i, b) in binary_data.iter_mut().enumerate() {
-            *b = (i % 256) as u8;
+            *b = u8::try_from(i % 256).unwrap_or(0);
         }
         assert!(
             is_binary(&binary_data),
@@ -628,15 +696,13 @@ mod tests {
     #[test]
     fn test_is_binary_exactly_30_percent() {
         let mut data = Vec::new();
-        let total = 100;
-        #[allow(clippy::cast_precision_loss)]
-        let non_text_count = (total as f32 * 0.29) as usize;
+        let total = 100usize;
+        let non_text_count = 29usize;
         data.extend(std::iter::repeat_n(0x01, non_text_count));
         data.extend(std::iter::repeat_n(b'x', total - non_text_count));
         assert!(!is_binary(&data), "29% non-text should NOT be flagged");
         let mut data_over = Vec::new();
-        #[allow(clippy::cast_precision_loss)]
-        let non_text_over = (total as f32 * 0.31) as usize;
+        let non_text_over = 31usize;
         data_over.extend(std::iter::repeat_n(0x01, non_text_over));
         data_over.extend(std::iter::repeat_n(b'x', total - non_text_over));
         assert!(is_binary(&data_over), "31% non-text should be flagged");
@@ -757,5 +823,110 @@ mod tests {
                 "random 256-byte buffer should never parse as valid header"
             );
         }
+    }
+
+    fn valid_empty_header() -> Header {
+        let header_off = u64::try_from(HEADER_SIZE).unwrap_or(256);
+        Header {
+            version_major: VERSION_MAJOR,
+            version_minor: VERSION_MINOR,
+            flags: flags::HAS_BLOOM_FILTERS,
+            created_at: 0,
+            source_bytes_total: 0,
+            file_count: 0,
+            trigram_count: 0,
+            file_table_offset: header_off,
+            file_table_size: 0,
+            trigram_table_offset: header_off,
+            trigram_table_size: 0,
+            posting_data_offset: header_off,
+            posting_data_size: 0,
+            bloom_offset: header_off,
+            bloom_size: 0,
+            string_pool_offset: header_off,
+            string_pool_size: 10,
+            name_index_offset: header_off + 10,
+            name_index_size: 0,
+            cdx_block_index_offset: 0,
+            cdx_block_index_size: 0,
+        }
+    }
+
+    #[test]
+    fn test_beacon_is_live_rejects_non_positive_pid() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for pid in [0, -1, -42] {
+            let mut beacon = Beacon::new(dir.path());
+            beacon.pid = pid;
+            assert!(!beacon.is_live(), "pid={pid} must never be considered live");
+        }
+    }
+
+    #[test]
+    fn test_beacon_write_to_atomic_roundtrip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut beacon = Beacon::new(dir.path());
+        beacon.status = "indexing".to_string();
+        beacon.write_to(dir.path()).expect("write_to first");
+
+        beacon.status = "idle".to_string();
+        beacon.write_to(dir.path()).expect("write_to overwrite");
+
+        let loaded = Beacon::read_from(dir.path()).expect("read_from");
+        assert_eq!(loaded.status, "idle");
+        assert_eq!(loaded.pid, beacon.pid);
+        assert_eq!(loaded.instance_id, beacon.instance_id);
+
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read_dir")
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["beacon.json".to_string()]);
+    }
+
+    #[test]
+    fn test_header_validate_bounds_checks_capacity_and_offsets() {
+        let mut hdr = valid_empty_header();
+        assert!(hdr.validate_bounds(512).is_ok());
+
+        // file_count * 48 > file_table_size must be rejected
+        hdr.file_count = 10;
+        hdr.file_table_size = 48;
+        assert!(matches!(
+            hdr.validate_bounds(512),
+            Err(crate::error::Error::SectionOutOfBounds {
+                section: "file_table",
+                ..
+            })
+        ));
+
+        // Overflowing file_count * 48 is safe and rejected
+        hdr.file_count = u32::MAX;
+        hdr.file_table_size = 48;
+        assert!(hdr.validate_bounds(u64::MAX).is_err());
+
+        // Mandatory section offset inside fixed header (< HEADER_SIZE) rejected
+        let mut hdr_small_off = valid_empty_header();
+        hdr_small_off.posting_data_offset = 64;
+        assert!(matches!(
+            hdr_small_off.validate_bounds(512),
+            Err(crate::error::Error::SectionOutOfBounds {
+                section: "posting_data",
+                ..
+            })
+        ));
+
+        // HAS_BLOOM_FILTERS with bloom_size == 0 still validates bloom_offset <= file_len
+        let mut hdr_bad_bloom = valid_empty_header();
+        hdr_bad_bloom.bloom_offset = u64::MAX;
+        hdr_bad_bloom.bloom_size = 0;
+        assert!(matches!(
+            hdr_bad_bloom.validate_bounds(512),
+            Err(crate::error::Error::SectionOutOfBounds {
+                section: "bloom",
+                ..
+            })
+        ));
     }
 }

@@ -4,6 +4,7 @@
 //! single-call searches.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::error::Result;
 use crate::executor::{Executor, Match, QueryOptions, QueryStats};
@@ -39,7 +40,9 @@ pub fn execute(
     delta_path: Option<&Path>,
 ) -> Result<(Vec<Match>, QueryStats)> {
     let plan = Planner::plan_with_options(pattern, planner_opts)?;
-    let mut executor = Executor::new(reader);
+    let ceiling = crate::cache_policy::ceiling_bytes_for_fraction(0.6);
+    let guard = Arc::new(crate::cache_policy::resource_guard_auto(0.6));
+    let mut executor = Executor::new(reader).with_resource_guard_and_ceiling(guard, ceiling);
     if let Some(dp) = delta_path {
         executor.set_delta_path(dp.to_path_buf());
     }

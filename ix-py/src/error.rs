@@ -10,7 +10,8 @@
 //! ├── IxRegexError
 //! ├── IxConfigError
 //! ├── IxWatcherError      (notify feature only)
-//! └── IxArchiveError      (archive feature only)
+//! ├── IxArchiveError      (archive feature only)
+//! └── LLMOSafeError       (llmosafe C-ABI errors)
 //! ```
 //!
 //! Exception types are defined via [`pyo3::create_exception`] which manages
@@ -108,23 +109,24 @@ pub fn register_exceptions(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// Maps each variant to the appropriate `Ix*Error` subclass.
 ///
 /// # Arguments
-/// * `err` - Error from the ix crate to convert (taken by value for destructuring).
+/// * `err` - Error from the ix crate to convert.
 ///
 /// # Returns
 /// A `PyErr` with the appropriate Python exception class and message.
-#[allow(clippy::needless_pass_by_value)]
-pub fn to_pyerr(err: ix::error::Error) -> PyErr {
+pub(crate) fn to_pyerr(err: &ix::error::Error) -> PyErr {
     let message = err.to_string();
     match err {
         ix::error::Error::Io(_) => PyErr::new::<IxIoError, _>(message),
         ix::error::Error::IndexTooSmall
         | ix::error::Error::BadMagic
         | ix::error::Error::UnsupportedVersion { .. }
-        | ix::error::Error::HeaderCorrupted { .. } => PyErr::new::<IxIndexError, _>(message),
+        | ix::error::Error::HeaderCorrupted { .. }
+        | ix::error::Error::MissingIndex(_) => PyErr::new::<IxIndexError, _>(message),
         ix::error::Error::CdxBlockCorrupted(msg) => {
             PyErr::new::<IxCorruptionError, _>(format!("CDX block data is corrupted: {msg}"))
         }
         ix::error::Error::PostingCorrupted
+        | ix::error::Error::DeltaCorrupted(_)
         | ix::error::Error::TruncatedVarint(_)
         | ix::error::Error::OverflowVarint
         | ix::error::Error::PostingOutOfBounds
@@ -136,6 +138,7 @@ pub fn to_pyerr(err: ix::error::Error) -> PyErr {
         ix::error::Error::InvalidPath => PyErr::new::<IxIoError, _>(message),
         ix::error::Error::Regex(_) => PyErr::new::<IxRegexError, _>(message),
         ix::error::Error::Config(_) => PyErr::new::<IxConfigError, _>(message),
+        ix::error::Error::Subprocess(_) => PyErr::new::<IxWatcherError, _>(message),
         #[cfg(feature = "notify")]
         ix::error::Error::Watcher(_) => PyErr::new::<IxWatcherError, _>(message),
         #[cfg(feature = "archive")]

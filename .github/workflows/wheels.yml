@@ -102,17 +102,46 @@ jobs:
           path: ${{ env.PROJECT }}-py/dist/
 
   # ═══════════════════════════════════════════════════════════════════════════
+  # Python verification gate — lint, type-check, and pytest before PyPI publish
+  # ═══════════════════════════════════════════════════════════════════════════
+  verify-python:
+    name: verify python (ruff + mypy + pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python QA tools
+        run: python -m pip install --upgrade pip maturin ruff mypy pytest
+
+      - name: Lint and typecheck Python package
+        run: |
+          ruff check --config ${{ env.PROJECT }}-py/pyproject.toml ${{ env.PROJECT }}-py/
+          mypy --config-file ${{ env.PROJECT }}-py/pyproject.toml ${{ env.PROJECT }}-py/python/${{ env.PROJECT }}
+
+      - name: Build native extension and run pytest
+        run: |
+          maturin develop --manifest-path ${{ env.PROJECT }}-py/Cargo.toml --release
+          pytest ${{ env.PROJECT }}-py/tests/
+
+  # ═══════════════════════════════════════════════════════════════════════════
   # Publish to PyPI — on tag push only (not manual dispatch by default)
   # ═══════════════════════════════════════════════════════════════════════════
   publish-pypi:
     name: Publish → PyPI
-    needs: [build-linux, build-windows]
-    # Gate on OUR upstream build jobs only (not a run-wide !failure()), so an
-    # unrelated job failing does NOT skip the real PyPI publish on a tag push.
+    needs: [build-linux, build-windows, verify-python]
+    # Gate on OUR upstream build & verification jobs only (not a run-wide !failure()),
+    # so an unrelated job failing does NOT skip the real PyPI publish on a tag push.
     if: |
       !cancelled() &&
       needs.build-linux.result == 'success' &&
       needs.build-windows.result == 'success' &&
+      needs.verify-python.result == 'success' &&
       startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment:
